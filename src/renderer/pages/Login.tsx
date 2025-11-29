@@ -4,17 +4,21 @@ import { useNavigate } from 'react-router-dom';
 
 function Login({ onLogin }: { onLogin: () => void }) {
   const [pin, setPin] = useState('');
-  const [error, setError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const navigate = useNavigate();
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validation
-    if (!/^\d{4,6}$/.test(pin)) {
-      setError(true);
-      setPin('');
-      alert('PIN must be 4-6 digits'); // Basic feedback
+    // Empty check
+    if (!pin) {
+      setErrorMessage('Please enter your PIN');
+      return;
+    }
+    
+    // Length validation
+    if (pin.length < 4) {
+      setErrorMessage('PIN must be at least 4 digits');
       return;
     }
 
@@ -26,7 +30,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
       onLogin();
       navigate('/dashboard');
     } else {
-      setError(true);
+      setErrorMessage('Invalid PIN. Please try again.');
       setPin('');
     }
   };
@@ -36,7 +40,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
     // Allow only numbers
     if (val === '' || /^\d+$/.test(val)) {
       setPin(val);
-      setError(false);
+      setErrorMessage('');
     }
   };
 
@@ -65,7 +69,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                   onChange={handlePinChange}
                   maxLength={6}
                   className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors ${
-                    error
+                    errorMessage
                       ? 'border-red-300 focus:ring-red-200 bg-red-50'
                       : 'border-gray-200 focus:ring-blue-200 focus:border-blue-500'
                   }`}
@@ -73,9 +77,9 @@ function Login({ onLogin }: { onLogin: () => void }) {
                   autoFocus
                 />
               </div>
-              {error && (
+              {errorMessage && (
                 <p className="text-red-500 text-sm mt-2">
-                  Invalid PIN. Please try again.
+                  {errorMessage}
                 </p>
               )}
             </div>
