@@ -1,6 +1,6 @@
 {
   "name": "ireport-admin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "iReport Admin Dashboard - LGU Emergency Response Management",
   "main": "dist/main/index.js",
   "scripts": {
