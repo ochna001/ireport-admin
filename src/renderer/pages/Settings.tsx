@@ -1,5 +1,7 @@
 import {
+    AlertTriangle,
     Bell,
+    Bug,
     CheckCircle,
     Database,
     Download,
@@ -39,6 +41,9 @@ interface AppSettings {
     autoSync: boolean;
     syncInterval: number;
   };
+  security: {
+    debugMode: boolean;
+  };
 }
 
 function Settings() {
@@ -46,6 +51,7 @@ function Settings() {
     notifications: { enabled: true, sound: true, desktop: true },
     display: { theme: 'light', compactMode: false, autoRefresh: true, refreshInterval: 30 },
     sync: { autoSync: true, syncInterval: 30 },
+    security: { debugMode: false },
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -84,11 +90,41 @@ function Settings() {
       // First try localStorage
       const saved = localStorage.getItem(SETTINGS_KEY);
       if (saved) {
-        setSettings(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        // Merge with defaults to handle missing properties from old saved settings
+        setSettings({
+          notifications: { 
+            enabled: true, 
+            sound: true, 
+            desktop: true,
+            ...parsed.notifications 
+          },
+          display: { 
+            theme: 'light', 
+            compactMode: false, 
+            autoRefresh: true, 
+            refreshInterval: 30,
+            ...parsed.display 
+          },
+          sync: { 
+            autoSync: true, 
+            syncInterval: 30,
+            ...parsed.sync 
+          },
+          security: { 
+            debugMode: false,
+            ...parsed.security 
+          },
+        });
       } else {
         // Fallback to API defaults
         const data = await window.api.getSettings();
-        setSettings(data);
+        setSettings({
+          notifications: { enabled: true, sound: true, desktop: true, ...data?.notifications },
+          display: { theme: 'light', compactMode: false, autoRefresh: true, refreshInterval: 30, ...data?.display },
+          sync: { autoSync: true, syncInterval: 30, ...data?.sync },
+          security: { debugMode: false, ...data?.security },
+        });
       }
     } catch (error) {
       console.error('Failed to load settings:', error);
@@ -139,6 +175,7 @@ function Settings() {
       notifications: { enabled: true, sound: true, desktop: true },
       display: { theme: 'light', compactMode: false, autoRefresh: true, refreshInterval: 30 },
       sync: { autoSync: true, syncInterval: 30 },
+      security: { debugMode: false },
     });
   };
 
@@ -555,6 +592,55 @@ function Settings() {
                 </div>
               </div>
             )}
+
+            <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+              <div className="flex items-center justify-between py-2">
+                <div className="flex items-center gap-3">
+                  <Bug className="w-4 h-4 text-orange-500" />
+                  <div>
+                    <p className="font-medium text-gray-800 dark:text-white">Debug Mode</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Enable developer tools for troubleshooting</p>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    const newDebugMode = !settings.security.debugMode;
+                    setSettings({
+                      ...settings,
+                      security: { ...settings.security, debugMode: newDebugMode }
+                    });
+                    // Notify main process to toggle DevTools
+                    try {
+                      await window.api.setDebugMode(newDebugMode);
+                    } catch (err) {
+                      console.error('Failed to set debug mode:', err);
+                    }
+                  }}
+                  className={`relative w-12 h-6 rounded-full transition-colors ${
+                    settings.security.debugMode ? 'bg-orange-500' : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                      settings.security.debugMode ? 'left-7' : 'left-1'
+                    }`}
+                  />
+                </button>
+              </div>
+              {settings.security.debugMode && (
+                <div className="mt-2 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-orange-600 mt-0.5 flex-shrink-0" />
+                    <div className="text-sm">
+                      <p className="text-orange-800 dark:text-orange-300 font-medium">Debug mode is enabled</p>
+                      <p className="text-orange-600 dark:text-orange-400 text-xs mt-1">
+                        Press F12 or Ctrl+Shift+I to open Developer Tools. Disable this in production.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
               <div className="flex items-center justify-between py-2">

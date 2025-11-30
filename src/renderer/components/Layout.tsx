@@ -1,5 +1,6 @@
 import {
     BarChart3,
+    Building2,
     Clock,
     FileText,
     LayoutDashboard,
@@ -105,6 +106,21 @@ function Layout() {
               >
                 <FileText size={20} />
                 Incidents
+              </NavLink>
+            </li>
+            <li>
+              <NavLink
+                to="/agencies"
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                    isActive
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-300 hover:bg-gray-800'
+                  }`
+                }
+              >
+                <Building2 size={20} />
+                Agencies
               </NavLink>
             </li>
             <li>

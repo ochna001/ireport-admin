@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
+import Agencies from './pages/Agencies';
 import Dashboard from './pages/Dashboard';
 import IncidentDetail from './pages/IncidentDetail';
 import Incidents from './pages/Incidents';
@@ -43,6 +44,7 @@ function App() {
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="incidents" element={<Incidents />} />
         <Route path="incidents/:id" element={<IncidentDetail />} />
+        <Route path="agencies" element={<Agencies />} />
         <Route path="reports" element={<Reports />} />
         <Route path="users" element={<Users />} />
         <Route path="settings" element={<Settings />} />

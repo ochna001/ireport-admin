@@ -2,11 +2,16 @@ import {
     Building2,
     Calendar,
     Edit,
+    Key,
     Phone,
+    Plus,
     RefreshCw,
     Search,
     Shield,
-    UserCog
+    Trash2,
+    UserCog,
+    UserPlus,
+    X
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
@@ -31,7 +36,55 @@ interface Agency {
   short_name: string;
 }
 
-const ROLES = ['Resident', 'Field Officer', 'Chief'];
+const ROLES = ['Resident', 'Desk Officer', 'Field Officer', 'Chief'];
+const OFFICER_ROLES = ['Desk Officer', 'Field Officer', 'Chief'];
+
+// Validation helpers
+const isValidEmail = (email: string): boolean => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+const isValidPhoneNumber = (phone: string): boolean => {
+  if (!phone) return true; // Optional field
+  // Philippine phone format: +63 or 09 followed by 9-10 digits
+  const phoneRegex = /^(\+63|0)?[0-9]{9,10}$/;
+  return phoneRegex.test(phone.replace(/[\s-]/g, ''));
+};
+
+const isValidName = (name: string): boolean => {
+  // At least 2 characters, only letters, spaces, hyphens, and apostrophes
+  const nameRegex = /^[a-zA-Z\s'-]{2,50}$/;
+  return nameRegex.test(name.trim());
+};
+
+const isValidPassword = (password: string): boolean => {
+  // At least 8 characters, 1 uppercase, 1 lowercase, 1 number
+  return password.length >= 8 && 
+         /[A-Z]/.test(password) && 
+         /[a-z]/.test(password) && 
+         /[0-9]/.test(password);
+};
+
+interface NewUserData {
+  email: string;
+  password: string;
+  displayName: string;
+  role: string;
+  agencyId?: number;
+  phoneNumber?: string;
+  dateOfBirth?: string; // YYYY-MM-DD format
+}
+
+interface ValidationErrors {
+  displayName?: string;
+  email?: string;
+  password?: string;
+  role?: string;
+  agencyId?: string;
+  phoneNumber?: string;
+  dateOfBirth?: string;
+}
 
 function Users() {
   const [users, setUsers] = useState<User[]>([]);
@@ -42,6 +95,26 @@ function Users() {
   const [agencyFilter, setAgencyFilter] = useState('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  
+  // Create User Modal State
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newUserData, setNewUserData] = useState<NewUserData>({
+    email: '',
+    password: '',
+    displayName: '',
+    role: 'Field Officer',
+    agencyId: undefined,
+    phoneNumber: '',
+    dateOfBirth: '',
+  });
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
+  
+  // Password Reset Modal State
+  const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [resettingPassword, setResettingPassword] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -92,11 +165,158 @@ function Users() {
     
     try {
       await window.api.updateUser({ id: selectedUser.id, updates });
+      await window.api.logSecurityAction({
+        action: 'user_updated',
+        details: { user_id: selectedUser.id, updates }
+      });
       setShowEditModal(false);
       setSelectedUser(null);
       loadUsers();
     } catch (error) {
       console.error('Failed to update user:', error);
+    }
+  };
+
+  // Calculate age from date of birth
+  const calculateAge = (dob: string): number => {
+    const today = new Date();
+    const birthDate = new Date(dob);
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    return age;
+  };
+
+  const validateCreateForm = (): boolean => {
+    const errors: ValidationErrors = {};
+    
+    // Validate display name
+    if (!newUserData.displayName.trim()) {
+      errors.displayName = 'Full name is required';
+    } else if (!isValidName(newUserData.displayName)) {
+      errors.displayName = 'Please enter a valid name (letters, spaces, hyphens only)';
+    }
+    
+    // Validate date of birth
+    if (!newUserData.dateOfBirth) {
+      errors.dateOfBirth = 'Date of birth is required';
+    } else {
+      const age = calculateAge(newUserData.dateOfBirth);
+      if (age < 18) {
+        errors.dateOfBirth = 'Officer must be at least 18 years old';
+      } else if (age > 100) {
+        errors.dateOfBirth = 'Please enter a valid date of birth';
+      }
+    }
+    
+    // Validate email
+    if (!newUserData.email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!isValidEmail(newUserData.email)) {
+      errors.email = 'Please enter a valid email address';
+    }
+    
+    // Validate password
+    if (!newUserData.password) {
+      errors.password = 'Password is required';
+    } else if (!isValidPassword(newUserData.password)) {
+      errors.password = 'Password must be at least 8 characters with uppercase, lowercase, and number';
+    }
+    
+    // Validate agency for officers
+    if (OFFICER_ROLES.includes(newUserData.role) && !newUserData.agencyId) {
+      errors.agencyId = 'Agency is required for officers';
+    }
+    
+    // Validate phone number if provided
+    if (newUserData.phoneNumber && !isValidPhoneNumber(newUserData.phoneNumber)) {
+      errors.phoneNumber = 'Please enter a valid phone number';
+    }
+    
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleCreateUser = async () => {
+    // Clear previous errors
+    setCreateError(null);
+    
+    // Validate form
+    if (!validateCreateForm()) {
+      return;
+    }
+
+    setCreatingUser(true);
+    
+    try {
+      await window.api.createUser({
+        ...newUserData,
+        email: newUserData.email.trim().toLowerCase(),
+        displayName: newUserData.displayName.trim(),
+        phoneNumber: newUserData.phoneNumber?.trim() || undefined,
+      });
+      setShowCreateModal(false);
+      setNewUserData({
+        email: '',
+        password: '',
+        displayName: '',
+        role: 'Field Officer',
+        agencyId: undefined,
+        phoneNumber: '',
+        dateOfBirth: '',
+      });
+      setValidationErrors({});
+      loadUsers();
+    } catch (error: any) {
+      console.error('Failed to create user:', error);
+      // Parse error message for user-friendly display
+      const errorMsg = error.message || 'Failed to create user';
+      if (errorMsg.includes('email')) {
+        setValidationErrors(prev => ({ ...prev, email: 'This email is already registered' }));
+      } else {
+        setCreateError(errorMsg);
+      }
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      await window.api.deleteUser(userId);
+      loadUsers();
+    } catch (error: any) {
+      console.error('Failed to delete user:', error);
+      alert(error.message || 'Failed to delete user');
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!selectedUser || !newPassword) return;
+    
+    if (newPassword.length < 6) {
+      alert('Password must be at least 6 characters');
+      return;
+    }
+    
+    setResettingPassword(true);
+    try {
+      await window.api.resetUserPassword({ userId: selectedUser.id, newPassword });
+      setShowResetPasswordModal(false);
+      setNewPassword('');
+      setSelectedUser(null);
+      alert('Password reset successfully');
+    } catch (error: any) {
+      console.error('Failed to reset password:', error);
+      alert(error.message || 'Failed to reset password');
+    } finally {
+      setResettingPassword(false);
     }
   };
 
@@ -140,13 +360,22 @@ function Users() {
           <h1 className="text-2xl font-bold text-gray-800 dark:text-white">User Management</h1>
           <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Manage system users and their roles</p>
         </div>
-        <button
-          onClick={loadUsers}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors dark:text-white"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+          >
+            <UserPlus className="w-4 h-4" />
+            Add Officer
+          </button>
+          <button
+            onClick={loadUsers}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors dark:text-white"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -321,7 +550,7 @@ function Users() {
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => handleEditUser(user)}
                         className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
@@ -329,6 +558,25 @@ function Users() {
                       >
                         <Edit className="w-4 h-4 text-gray-600 dark:text-gray-400" />
                       </button>
+                      <button
+                        onClick={() => {
+                          setSelectedUser(user);
+                          setShowResetPasswordModal(true);
+                        }}
+                        className="p-2 hover:bg-orange-100 dark:hover:bg-orange-900/30 rounded-lg transition-colors"
+                        title="Reset Password"
+                      >
+                        <Key className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+                      </button>
+                      {user.role !== 'Resident' && (
+                        <button
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                          title="Delete User"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -349,6 +597,310 @@ function Users() {
           }}
           onSave={handleSaveUser}
         />
+      )}
+
+      {/* Create User Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between sticky top-0 bg-white dark:bg-gray-800">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                  <UserPlus className="w-5 h-5" />
+                  Add New Officer
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Create a new officer account</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setCreateError(null);
+                  setValidationErrors({});
+                }}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              {createError && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400 text-sm">
+                  {createError}
+                </div>
+              )}
+
+              {/* Organization Section */}
+              <div className="pb-3 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
+                  Organization
+                </h3>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Agency <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={newUserData.agencyId || ''}
+                      onChange={(e) => {
+                        setNewUserData({ ...newUserData, agencyId: e.target.value ? parseInt(e.target.value) : undefined });
+                        if (validationErrors.agencyId) {
+                          setValidationErrors(prev => ({ ...prev, agencyId: undefined }));
+                        }
+                      }}
+                      className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
+                        validationErrors.agencyId ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                      }`}
+                    >
+                      <option value="">Select Agency</option>
+                      {agencies.map(agency => (
+                        <option key={agency.id} value={agency.id}>{agency.short_name} - {agency.name}</option>
+                      ))}
+                    </select>
+                    {validationErrors.agencyId && (
+                      <p className="mt-1 text-sm text-red-500">{validationErrors.agencyId}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Role <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={newUserData.role}
+                      onChange={(e) => setNewUserData({ ...newUserData, role: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                    >
+                      <option value="Desk Officer">Desk Officer</option>
+                      <option value="Field Officer">Field Officer</option>
+                      <option value="Chief">Chief</option>
+                    </select>
+                    <p className="mt-1 text-xs text-gray-400">
+                      {newUserData.role === 'Desk Officer' && 'Handles incident dispatch and monitoring from station'}
+                      {newUserData.role === 'Field Officer' && 'Responds to incidents in the field'}
+                      {newUserData.role === 'Chief' && 'Agency head with full administrative access'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Personal Details Section */}
+              <div className="pt-1">
+                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
+                  Personal Details
+                </h3>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Full Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newUserData.displayName}
+                      onChange={(e) => {
+                        setNewUserData({ ...newUserData, displayName: e.target.value });
+                        if (validationErrors.displayName) {
+                          setValidationErrors(prev => ({ ...prev, displayName: undefined }));
+                        }
+                      }}
+                      className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
+                        validationErrors.displayName ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                      }`}
+                      placeholder="Juan Dela Cruz"
+                    />
+                    {validationErrors.displayName && (
+                      <p className="mt-1 text-sm text-red-500">{validationErrors.displayName}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Date of Birth <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={newUserData.dateOfBirth || ''}
+                      onChange={(e) => {
+                        setNewUserData({ ...newUserData, dateOfBirth: e.target.value });
+                        if (validationErrors.dateOfBirth) {
+                          setValidationErrors(prev => ({ ...prev, dateOfBirth: undefined }));
+                        }
+                      }}
+                      max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0]}
+                      className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
+                        validationErrors.dateOfBirth ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                      }`}
+                    />
+                    {validationErrors.dateOfBirth && (
+                      <p className="mt-1 text-sm text-red-500">{validationErrors.dateOfBirth}</p>
+                    )}
+                    {newUserData.dateOfBirth && !validationErrors.dateOfBirth && (
+                      <p className="mt-1 text-xs text-gray-400">
+                        Age: {calculateAge(newUserData.dateOfBirth)} years old
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Email <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={newUserData.email}
+                      onChange={(e) => {
+                        setNewUserData({ ...newUserData, email: e.target.value });
+                        if (validationErrors.email) {
+                          setValidationErrors(prev => ({ ...prev, email: undefined }));
+                        }
+                      }}
+                      className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
+                        validationErrors.email ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                      }`}
+                      placeholder="officer@agency.gov.ph"
+                    />
+                    {validationErrors.email && (
+                      <p className="mt-1 text-sm text-red-500">{validationErrors.email}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Phone Number <span className="text-gray-400 font-normal">(optional)</span>
+                    </label>
+                    <input
+                      type="tel"
+                      value={newUserData.phoneNumber || ''}
+                      onChange={(e) => {
+                        setNewUserData({ ...newUserData, phoneNumber: e.target.value });
+                        if (validationErrors.phoneNumber) {
+                          setValidationErrors(prev => ({ ...prev, phoneNumber: undefined }));
+                        }
+                      }}
+                      className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
+                        validationErrors.phoneNumber ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                      }`}
+                      placeholder="+63 9XX XXX XXXX or 09XX XXX XXXX"
+                    />
+                    {validationErrors.phoneNumber && (
+                      <p className="mt-1 text-sm text-red-500">{validationErrors.phoneNumber}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Password <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={newUserData.password}
+                      onChange={(e) => {
+                        setNewUserData({ ...newUserData, password: e.target.value });
+                        if (validationErrors.password) {
+                          setValidationErrors(prev => ({ ...prev, password: undefined }));
+                        }
+                      }}
+                      className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
+                        validationErrors.password ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                      }`}
+                      placeholder="Min 8 chars, uppercase, lowercase, number"
+                    />
+                    {validationErrors.password && (
+                      <p className="mt-1 text-sm text-red-500">{validationErrors.password}</p>
+                    )}
+                    <p className="mt-1 text-xs text-gray-400">
+                      Must contain at least 8 characters, one uppercase, one lowercase, and one number
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateModal(false);
+                    setCreateError(null);
+                    setValidationErrors({});
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateUser}
+                  disabled={creatingUser}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {creatingUser ? (
+                    <>
+                      <span className="animate-spin">⏳</span>
+                      Creating...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4" />
+                      Create Officer
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Modal */}
+      {showResetPasswordModal && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-sm mx-4">
+            <div className="p-6 border-b border-gray-100 dark:border-gray-700">
+              <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                <Key className="w-5 h-5" />
+                Reset Password
+              </h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{selectedUser.email}</p>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  New Password
+                </label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  placeholder="Minimum 6 characters"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowResetPasswordModal(false);
+                    setNewPassword('');
+                    setSelectedUser(null);
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleResetPassword}
+                  disabled={resettingPassword || !newPassword}
+                  className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50"
+                >
+                  {resettingPassword ? 'Resetting...' : 'Reset Password'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

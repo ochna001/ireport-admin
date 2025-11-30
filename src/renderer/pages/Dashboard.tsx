@@ -22,6 +22,8 @@ interface Stats {
     changed_by: string;
     changed_at: string;
   }>;
+  avgResponseTime?: number | null;
+  avgResolutionTime?: number | null;
 }
 
 function Dashboard() {
@@ -99,6 +101,18 @@ function Dashboard() {
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleString();
+  };
+
+  const getStatusBadgeColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'pending': return 'bg-yellow-500';
+      case 'assigned': return 'bg-blue-500';
+      case 'in_progress': return 'bg-orange-500';
+      case 'responding': return 'bg-orange-500';
+      case 'resolved': return 'bg-green-500';
+      case 'closed': return 'bg-gray-500';
+      default: return 'bg-gray-400';
+    }
   };
 
   if (loading) {
@@ -229,11 +243,11 @@ function Dashboard() {
                 onClick={() => navigate(`/incidents/${activity.incident_id}`)}
               >
                 <div className="flex items-center justify-between">
-                  <div>
-                    <span className={`inline-block px-2 py-1 rounded text-xs font-medium status-${activity.status}`}>
-                      {activity.status.toUpperCase()}
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-block px-2 py-1 rounded text-xs font-medium text-white ${getStatusBadgeColor(activity.status)}`}>
+                      {activity.status.toUpperCase().replace('_', ' ')}
                     </span>
-                    <span className="ml-2 text-sm text-gray-600 dark:text-gray-400">
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
                       by {activity.changed_by}
                     </span>
                   </div>

@@ -27,7 +27,10 @@ interface ReportStats {
   byAgency: { agency_type: string; count: number }[];
   byStatus: { status: string; count: number }[];
   byDay: { date: string; count: number }[];
+  dailyTrend: { date: string; count: number }[];
   mostActiveArea?: { area: string; count: number } | null;
+  avgResponseTime?: number | null;    // in minutes
+  avgResolutionTime?: number | null;  // in minutes
 }
 
 interface ReportConfig {
@@ -83,7 +86,7 @@ function Reports() {
     setLoading(true);
     try {
       const data = await window.api.getStats();
-      // Enhance with mock trend data for demo
+      // Use real data from API
       setStats({
         ...data,
         byStatus: [
@@ -91,27 +94,17 @@ function Reports() {
           { status: 'responding', count: data.responding },
           { status: 'resolved', count: data.resolved },
         ],
-        byDay: generateMockDayData(7),
+        byDay: data.dailyTrend || [],
+        dailyTrend: data.dailyTrend || [],
         mostActiveArea: data.mostActiveArea,
+        avgResponseTime: data.avgResponseTime,
+        avgResolutionTime: data.avgResolutionTime,
       });
     } catch (error) {
       console.error('Failed to load stats:', error);
     } finally {
       setLoading(false);
     }
-  };
-
-  const generateMockDayData = (days: number) => {
-    const data = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      data.push({
-        date: date.toISOString().split('T')[0],
-        count: Math.floor(Math.random() * 10) + 1,
-      });
-    }
-    return data;
   };
 
   const getAgencyColor = (agency: string) => {
@@ -129,6 +122,21 @@ function Reports() {
       case 'responding': return 'bg-orange-500';
       case 'resolved': return 'bg-green-500';
       default: return 'bg-gray-500';
+    }
+  };
+
+  // Format duration in minutes to human-readable string
+  const formatDuration = (minutes: number): string => {
+    if (minutes < 60) {
+      return `${minutes}m`;
+    } else if (minutes < 60 * 24) {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    } else {
+      const days = Math.floor(minutes / (60 * 24));
+      const hours = Math.floor((minutes % (60 * 24)) / 60);
+      return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
     }
   };
 
@@ -856,59 +864,112 @@ function Reports() {
         </div>
       </div>
 
-      {/* Trend Chart - Placeholder */}
+      {/* Trend Chart */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
         <h3 className="font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
           <TrendingUp className="w-5 h-5 text-gray-400" />
           Daily Incident Trend
-          <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full flex items-center gap-1">
-            <Info className="w-3 h-3" />
-            Coming Soon
-          </span>
+          <span className="text-sm font-normal text-gray-400 ml-2">(Last 7 days)</span>
         </h3>
-        <div className="h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-900 rounded-lg border-2 border-dashed border-gray-200 dark:border-gray-600">
-          <div className="text-center">
-            <BarChart3 className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-500 dark:text-gray-400 font-medium">Trend Analytics</p>
-            <p className="text-gray-400 dark:text-gray-500 text-sm">Historical trend data will be available once more incidents are recorded</p>
+        {stats?.dailyTrend && stats.dailyTrend.length > 0 ? (
+          <div className="h-64">
+            {/* Bar Chart */}
+            <div className="flex items-end justify-between h-48 gap-2 px-2">
+              {(() => {
+                const maxCount = Math.max(...stats.dailyTrend.map(d => d.count), 1);
+                return stats.dailyTrend.map((day, index) => {
+                  const heightPercent = maxCount > 0 ? (day.count / maxCount) * 100 : 0;
+                  const dayName = new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' });
+                  const dayNum = new Date(day.date).getDate();
+                  
+                  return (
+                    <div key={index} className="flex-1 flex flex-col items-center gap-1">
+                      <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                        {day.count}
+                      </span>
+                      <div className="w-full flex-1 flex items-end">
+                        <div 
+                          className={`w-full rounded-t-md transition-all duration-500 hover:bg-blue-600 cursor-pointer ${day.count > 0 ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                          style={{ height: day.count > 0 ? `${heightPercent}%` : '4px' }}
+                          title={`${day.date}: ${day.count} incidents`}
+                        />
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs font-medium text-gray-600 dark:text-gray-300">{dayName}</p>
+                        <p className="text-xs text-gray-400">{dayNum}</p>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+            {/* Summary */}
+            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 flex justify-between text-sm">
+              <span className="text-gray-500 dark:text-gray-400">
+                Total this week: <span className="font-semibold text-gray-700 dark:text-gray-200">
+                  {stats.dailyTrend.reduce((sum, d) => sum + d.count, 0)}
+                </span>
+              </span>
+              <span className="text-gray-500 dark:text-gray-400">
+                Daily avg: <span className="font-semibold text-gray-700 dark:text-gray-200">
+                  {(stats.dailyTrend.reduce((sum, d) => sum + d.count, 0) / 7).toFixed(1)}
+                </span>
+              </span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-900 rounded-lg border-2 border-dashed border-gray-200 dark:border-gray-600">
+            <div className="text-center">
+              <BarChart3 className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+              <p className="text-gray-500 dark:text-gray-400 font-medium">No Data Yet</p>
+              <p className="text-gray-400 dark:text-gray-500 text-sm">Trend data will appear once incidents are recorded</p>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Response Time Stats - Placeholder */}
+      {/* Response Time Stats */}
       <div className="mt-6">
         <div className="flex items-center gap-2 mb-4">
           <h3 className="font-semibold text-gray-800 dark:text-white">Performance Metrics</h3>
-          <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full flex items-center gap-1">
-            <Info className="w-3 h-3" />
-            Coming Soon
-          </span>
         </div>
         <div className="grid grid-cols-3 gap-6">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 opacity-60">
+          <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 ${stats?.avgResponseTime == null ? 'opacity-60' : ''}`}>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
                 <Clock className="w-5 h-5 text-blue-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-400">--</p>
+                <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                  {stats?.avgResponseTime != null ? formatDuration(stats.avgResponseTime) : '--'}
+                </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Avg. Response Time</p>
               </div>
             </div>
-            <p className="text-xs text-gray-400 italic">Requires timestamp tracking</p>
+            {stats?.avgResponseTime != null ? (
+              <p className="text-xs text-gray-500 dark:text-gray-400">Time to first response</p>
+            ) : (
+              <p className="text-xs text-gray-400 italic">No response data yet</p>
+            )}
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 opacity-60">
+          <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 ${stats?.avgResolutionTime == null ? 'opacity-60' : ''}`}>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
                 <CheckCircle className="w-5 h-5 text-green-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-400">--</p>
+                <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                  {stats?.avgResolutionTime != null ? formatDuration(stats.avgResolutionTime) : '--'}
+                </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Avg. Resolution Time</p>
               </div>
             </div>
-            <p className="text-xs text-gray-400 italic">Requires resolved_at tracking</p>
+            {stats?.avgResolutionTime != null ? (
+              <p className="text-xs text-gray-500 dark:text-gray-400">Time to resolve incident</p>
+            ) : (
+              <p className="text-xs text-gray-400 italic">No resolution data yet</p>
+            )}
           </div>
 
           <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 ${!stats?.mostActiveArea ? 'opacity-60' : ''}`}>

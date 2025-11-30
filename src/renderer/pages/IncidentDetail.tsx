@@ -1,11 +1,14 @@
 import {
     ArrowLeft,
     Clock,
+    FileText,
     History,
     Image as ImageIcon,
     MapPin,
     Send,
-    User
+    User,
+    UserCheck,
+    X
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -13,6 +16,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 interface Incident {
   id: string;
   agency_type: string;
+  reporter_id?: string;
   reporter_name: string;
   reporter_age: number;
   description: string;
@@ -21,8 +25,18 @@ interface Incident {
   longitude: number;
   location_address: string;
   media_urls: string;
+  assigned_station_id?: number;
+  assigned_officer_id?: string;
+  assigned_officer_ids?: string[]; // Multiple officers
   created_at: string;
   updated_at: string;
+  resolved_at?: string;
+  updated_by?: string;
+  // Joined from profiles table via reporter_id
+  reporter?: {
+    email?: string;
+    phone_number?: string;
+  };
 }
 
 interface StatusHistoryEntry {
@@ -43,6 +57,33 @@ interface AgencyStation {
   agencies: { name: string; short_name: string };
 }
 
+interface Officer {
+  id: string;
+  display_name: string;
+  email: string;
+  role: string;
+  phone_number?: string;
+}
+
+interface FinalReportData {
+  summary: string;
+  actionsTaken: string;
+  outcome: string;
+  recommendations?: string;
+  // PNP specific
+  caseNumber?: string;
+  suspects?: string;
+  evidence?: string;
+  // BFP specific
+  fireOrigin?: string;
+  estimatedDamage?: string;
+  casualties?: string;
+  // PDRRMO specific
+  affectedFamilies?: string;
+  evacuees?: string;
+  assistanceProvided?: string;
+}
+
 const STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending', color: 'bg-yellow-500' },
   { value: 'assigned', label: 'Assigned', color: 'bg-blue-500' },
@@ -57,12 +98,26 @@ function IncidentDetail() {
   const [incident, setIncident] = useState<Incident | null>(null);
   const [history, setHistory] = useState<StatusHistoryEntry[]>([]);
   const [stations, setStations] = useState<AgencyStation[]>([]);
+  const [officers, setOfficers] = useState<Officer[]>([]);
   const [loading, setLoading] = useState(true);
   const [newStatus, setNewStatus] = useState('');
   const [notes, setNotes] = useState('');
+  const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
+  const [selectedOfficerIds, setSelectedOfficerIds] = useState<string[]>([]);
+  const [initialOfficerIds, setInitialOfficerIds] = useState<string[]>([]); // Track initial state
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateSuccess, setUpdateSuccess] = useState(false);
+  
+  // Final Report Modal State
+  const [showFinalReportModal, setShowFinalReportModal] = useState(false);
+  const [finalReportData, setFinalReportData] = useState<FinalReportData>({
+    summary: '',
+    actionsTaken: '',
+    outcome: '',
+    recommendations: '',
+  });
+  const [savingFinalReport, setSavingFinalReport] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -71,12 +126,15 @@ function IncidentDetail() {
     }
   }, [id]);
 
-  // Load stations after incident is loaded (needs coordinates)
+  // Load stations and officers after incident is loaded
   useEffect(() => {
     if (incident?.latitude && incident?.longitude) {
       loadStations();
     }
-  }, [incident?.latitude, incident?.longitude]);
+    if (incident?.agency_type) {
+      loadOfficers();
+    }
+  }, [incident?.latitude, incident?.longitude, incident?.agency_type]);
 
   const loadIncident = async () => {
     try {
@@ -85,6 +143,18 @@ function IncidentDetail() {
       console.log('[IncidentDetail] Location coords:', data?.latitude, data?.longitude);
       setIncident(data);
       setNewStatus(data?.status || '');
+      
+      // Pre-select already assigned officers
+      if (data?.assigned_officer_ids && data.assigned_officer_ids.length > 0) {
+        setSelectedOfficerIds(data.assigned_officer_ids);
+        setInitialOfficerIds(data.assigned_officer_ids);
+      } else if (data?.assigned_officer_id) {
+        // Fallback to single officer for backward compatibility
+        setSelectedOfficerIds([data.assigned_officer_id]);
+        setInitialOfficerIds([data.assigned_officer_id]);
+      } else {
+        setInitialOfficerIds([]);
+      }
     } catch (error) {
       console.error('Failed to load incident:', error);
     } finally {
@@ -125,11 +195,48 @@ function IncidentDetail() {
     }
   };
 
+  const loadOfficers = async () => {
+    if (!incident?.agency_type) return;
+    
+    try {
+      const data = await window.api.getOfficersByAgency(incident.agency_type);
+      setOfficers(data);
+    } catch (error) {
+      console.error('Failed to load officers:', error);
+    }
+  };
+
   const handleUpdateStatus = async () => {
     if (!newStatus) return;
     
+    // If changing to 'closed', show final report modal first
+    if (newStatus === 'closed' && incident?.status !== 'closed') {
+      setShowFinalReportModal(true);
+      return;
+    }
+    
+    await performStatusUpdate();
+  };
+
+  // Check if officer selection has changed
+  const hasOfficerChanges = (): boolean => {
+    if (selectedOfficerIds.length !== initialOfficerIds.length) return true;
+    const sortedSelected = [...selectedOfficerIds].sort();
+    const sortedInitial = [...initialOfficerIds].sort();
+    return sortedSelected.some((id, index) => id !== sortedInitial[index]);
+  };
+
+  // Check if there are any changes to submit
+  const hasChanges = (): boolean => {
+    return newStatus !== incident?.status || 
+           hasOfficerChanges() || 
+           selectedStationId !== null ||
+           notes.trim() !== '';
+  };
+
+  const performStatusUpdate = async () => {
     // Confirmation for critical status changes
-    if ((newStatus === 'resolved' || newStatus === 'archived') && 
+    if ((newStatus === 'resolved' || newStatus === 'closed') && 
         !confirm(`Are you sure you want to mark this incident as ${newStatus}? This action cannot be easily undone.`)) {
       return;
     }
@@ -144,11 +251,27 @@ function IncidentDetail() {
         status: newStatus,
         notes: notes,
         updatedBy: 'Admin',
+        stationId: selectedStationId || undefined,
+        officerIds: selectedOfficerIds.length > 0 ? selectedOfficerIds : undefined,
+      });
+
+      // Log security action
+      await window.api.logSecurityAction({
+        action: 'incident_status_changed',
+        details: {
+          incident_id: id,
+          old_status: incident?.status,
+          new_status: newStatus,
+          station_id: selectedStationId,
+          officer_ids: selectedOfficerIds,
+        }
       });
 
       await loadIncident();
       await loadHistory();
       setNotes('');
+      setSelectedStationId(null);
+      // Don't clear selectedOfficerIds - loadIncident will update them from server
       setUpdateSuccess(true);
       setTimeout(() => setUpdateSuccess(false), 3000);
     } catch (error) {
@@ -156,6 +279,53 @@ function IncidentDetail() {
       setUpdateError('Failed to update status. Please try again.');
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleSubmitFinalReport = async () => {
+    if (!finalReportData.summary || !finalReportData.actionsTaken || !finalReportData.outcome) {
+      alert('Please fill in all required fields (Summary, Actions Taken, Outcome)');
+      return;
+    }
+
+    setSavingFinalReport(true);
+    try {
+      // Create final report
+      await window.api.createFinalReport({
+        incidentId: id!,
+        reportDetails: {
+          ...finalReportData,
+          agency_type: incident?.agency_type,
+          incident_description: incident?.description,
+          location: incident?.location_address,
+          reporter_name: incident?.reporter_name,
+          created_at: new Date().toISOString(),
+        },
+        completedBy: 'admin', // TODO: Use actual admin user ID when auth is implemented
+      });
+
+      // Log security action
+      await window.api.logSecurityAction({
+        action: 'final_report_created',
+        details: { incident_id: id }
+      });
+
+      // Close modal and proceed with status update
+      setShowFinalReportModal(false);
+      await performStatusUpdate();
+      
+      // Reset form
+      setFinalReportData({
+        summary: '',
+        actionsTaken: '',
+        outcome: '',
+        recommendations: '',
+      });
+    } catch (error) {
+      console.error('Failed to create final report:', error);
+      alert('Failed to create final report. Please try again.');
+    } finally {
+      setSavingFinalReport(false);
     }
   };
 
@@ -371,6 +541,49 @@ function IncidentDetail() {
             </div>
           )}
 
+          {/* Assigned Officers */}
+          {(incident.assigned_officer_ids?.length || incident.assigned_officer_id) && (
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                <UserCheck size={20} />
+                Assigned Officers ({incident.assigned_officer_ids?.length || 1})
+              </h2>
+              <div className="space-y-3">
+                {officers.filter(o => 
+                  incident.assigned_officer_ids?.includes(o.id) || 
+                  o.id === incident.assigned_officer_id
+                ).map((officer, index) => (
+                  <div 
+                    key={officer.id}
+                    className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+                      <User size={20} className="text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-800 dark:text-white truncate">
+                        {officer.display_name || officer.email}
+                      </p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {officer.role}
+                        {officer.phone_number && ` • ${officer.phone_number}`}
+                      </p>
+                    </div>
+                    {index === 0 && incident.assigned_officer_ids && incident.assigned_officer_ids.length > 1 && (
+                      <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded">
+                        Lead
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {/* Show placeholder if officers not loaded yet */}
+                {officers.length === 0 && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Loading officer details...</p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Status History */}
           <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
             <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
@@ -422,6 +635,28 @@ function IncidentDetail() {
                 <div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">Age</p>
                   <p className="font-medium dark:text-white">{incident.reporter_age} years old</p>
+                </div>
+              )}
+              {incident.reporter?.email && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Email</p>
+                  <a 
+                    href={`mailto:${incident.reporter.email}`}
+                    className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {incident.reporter.email}
+                  </a>
+                </div>
+              )}
+              {incident.reporter?.phone_number && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Contact</p>
+                  <a 
+                    href={`tel:${incident.reporter.phone_number}`}
+                    className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {incident.reporter.phone_number}
+                  </a>
                 </div>
               )}
             </div>
@@ -487,6 +722,106 @@ function IncidentDetail() {
                 </select>
               </div>
 
+              {/* Station Assignment */}
+              <div>
+                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  Assign Station
+                  {incident.assigned_station_id && (
+                    <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+                      (Currently assigned: Station #{incident.assigned_station_id})
+                    </span>
+                  )}
+                </label>
+                <select
+                  value={selectedStationId || ''}
+                  onChange={(e) => setSelectedStationId(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="">
+                    {incident.assigned_station_id 
+                      ? 'Keep current assignment' 
+                      : 'Auto-assign closest station'}
+                  </option>
+                  {stations
+                    .filter(s => s.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase())
+                    .map((station) => (
+                      <option key={station.id} value={station.id}>
+                        {station.name} {station.address ? `- ${station.address}` : ''}
+                      </option>
+                    ))}
+                  {stations.filter(s => s.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase()).length === 0 && (
+                    <option disabled>No stations available for {incident.agency_type?.toUpperCase()}</option>
+                  )}
+                </select>
+                <p className="mt-1 text-xs text-gray-400">
+                  {!incident.assigned_station_id && newStatus !== 'pending' 
+                    ? 'Will auto-assign to closest station if left empty'
+                    : 'Select a station to reassign or leave empty to keep current'}
+                </p>
+              </div>
+
+              {/* Officer Assignment */}
+              <div>
+                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  <span className="flex items-center gap-1">
+                    <UserCheck size={14} />
+                    Assign Officers
+                  </span>
+                  {selectedOfficerIds.length > 0 && (
+                    <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">
+                      ({selectedOfficerIds.length} selected{hasOfficerChanges() ? ' - modified' : ''})
+                    </span>
+                  )}
+                </label>
+                <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-gray-700">
+                  {officers.length === 0 ? (
+                    <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                      No officers available for {incident.agency_type?.toUpperCase()}
+                    </p>
+                  ) : (
+                    officers.map((officer) => {
+                      const isCurrentlyAssigned = initialOfficerIds.includes(officer.id);
+                      return (
+                      <label
+                        key={officer.id}
+                        className={`flex items-center gap-3 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer border-b border-gray-100 dark:border-gray-600 last:border-b-0 ${
+                          isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedOfficerIds.includes(officer.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedOfficerIds([...selectedOfficerIds, officer.id]);
+                            } else {
+                              setSelectedOfficerIds(selectedOfficerIds.filter(id => id !== officer.id));
+                            }
+                          }}
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 dark:text-white truncate flex items-center gap-2">
+                            {officer.display_name || officer.email}
+                            {isCurrentlyAssigned && (
+                              <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded">
+                                Assigned
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {officer.role} {officer.phone_number && `• ${officer.phone_number}`}
+                          </p>
+                        </div>
+                      </label>
+                    );})
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-gray-400">
+                  Select one or more officers to respond to this incident
+                </p>
+              </div>
+
               <div>
                 <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Notes (optional)</label>
                 <textarea
@@ -500,16 +835,238 @@ function IncidentDetail() {
 
               <button
                 onClick={handleUpdateStatus}
-                disabled={updating || newStatus === incident.status}
+                disabled={updating || !hasChanges()}
                 className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 <Send size={18} />
-                {updating ? 'Updating...' : 'Update Status'}
+                {updating ? 'Updating...' : hasOfficerChanges() && newStatus === incident.status ? 'Update Officers' : 'Update Status'}
               </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Final Report Modal */}
+      {showFinalReportModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <FileText size={24} />
+                Final Report - Close Incident
+              </h2>
+              <button
+                onClick={() => setShowFinalReportModal(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                  You are about to close this incident. Please complete the final report before proceeding.
+                </p>
+              </div>
+
+              {/* Common Fields */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Summary <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={finalReportData.summary}
+                  onChange={(e) => setFinalReportData(prev => ({ ...prev, summary: e.target.value }))}
+                  placeholder="Brief summary of the incident and resolution..."
+                  rows={3}
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Actions Taken <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={finalReportData.actionsTaken}
+                  onChange={(e) => setFinalReportData(prev => ({ ...prev, actionsTaken: e.target.value }))}
+                  placeholder="List all actions taken to resolve this incident..."
+                  rows={3}
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Outcome <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={finalReportData.outcome}
+                  onChange={(e) => setFinalReportData(prev => ({ ...prev, outcome: e.target.value }))}
+                  placeholder="Final outcome and current status..."
+                  rows={2}
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+
+              {/* Agency-Specific Fields */}
+              {incident?.agency_type?.toLowerCase() === 'pnp' && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                  <h3 className="text-sm font-semibold text-blue-600 dark:text-blue-400 mb-3">PNP Specific Details</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Case Number</label>
+                      <input
+                        type="text"
+                        value={finalReportData.caseNumber || ''}
+                        onChange={(e) => setFinalReportData(prev => ({ ...prev, caseNumber: e.target.value }))}
+                        placeholder="e.g., PNP-2024-001234"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Suspects</label>
+                      <input
+                        type="text"
+                        value={finalReportData.suspects || ''}
+                        onChange={(e) => setFinalReportData(prev => ({ ...prev, suspects: e.target.value }))}
+                        placeholder="Suspect information if any"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Evidence Collected</label>
+                    <input
+                      type="text"
+                      value={finalReportData.evidence || ''}
+                      onChange={(e) => setFinalReportData(prev => ({ ...prev, evidence: e.target.value }))}
+                      placeholder="List of evidence collected"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {incident?.agency_type?.toLowerCase() === 'bfp' && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                  <h3 className="text-sm font-semibold text-red-600 dark:text-red-400 mb-3">BFP Specific Details</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Fire Origin</label>
+                      <input
+                        type="text"
+                        value={finalReportData.fireOrigin || ''}
+                        onChange={(e) => setFinalReportData(prev => ({ ...prev, fireOrigin: e.target.value }))}
+                        placeholder="Determined origin of fire"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Estimated Damage</label>
+                      <input
+                        type="text"
+                        value={finalReportData.estimatedDamage || ''}
+                        onChange={(e) => setFinalReportData(prev => ({ ...prev, estimatedDamage: e.target.value }))}
+                        placeholder="e.g., ₱500,000"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Casualties</label>
+                    <input
+                      type="text"
+                      value={finalReportData.casualties || ''}
+                      onChange={(e) => setFinalReportData(prev => ({ ...prev, casualties: e.target.value }))}
+                      placeholder="Injuries or fatalities if any"
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {incident?.agency_type?.toLowerCase() === 'pdrrmo' && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                  <h3 className="text-sm font-semibold text-orange-600 dark:text-orange-400 mb-3">PDRRMO Specific Details</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Affected Families</label>
+                      <input
+                        type="text"
+                        value={finalReportData.affectedFamilies || ''}
+                        onChange={(e) => setFinalReportData(prev => ({ ...prev, affectedFamilies: e.target.value }))}
+                        placeholder="Number of families affected"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Evacuees</label>
+                      <input
+                        type="text"
+                        value={finalReportData.evacuees || ''}
+                        onChange={(e) => setFinalReportData(prev => ({ ...prev, evacuees: e.target.value }))}
+                        placeholder="Number of evacuees"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Assistance Provided</label>
+                    <input
+                      type="text"
+                      value={finalReportData.assistanceProvided || ''}
+                      onChange={(e) => setFinalReportData(prev => ({ ...prev, assistanceProvided: e.target.value }))}
+                      placeholder="Relief goods, shelter, etc."
+                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Recommendations (optional)
+                </label>
+                <textarea
+                  value={finalReportData.recommendations || ''}
+                  onChange={(e) => setFinalReportData(prev => ({ ...prev, recommendations: e.target.value }))}
+                  placeholder="Any recommendations for future prevention or follow-up..."
+                  rows={2}
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-end gap-3">
+              <button
+                onClick={() => setShowFinalReportModal(false)}
+                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitFinalReport}
+                disabled={savingFinalReport}
+                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+              >
+                {savingFinalReport ? (
+                  <>
+                    <span className="animate-spin">⏳</span>
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <FileText size={18} />
+                    Submit & Close Incident
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

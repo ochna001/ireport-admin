@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   getIncident: (id: string) => 
     ipcRenderer.invoke('db:getIncident', id),
   
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string }) => 
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; stationId?: number; officerIds?: string[] }) => 
     ipcRenderer.invoke('db:updateIncidentStatus', params),
   
   getStats: () => 
@@ -44,6 +44,57 @@ contextBridge.exposeInMainWorld('api', {
   getAgencies: () =>
     ipcRenderer.invoke('users:getAgencies'),
 
+  // Stations
+  createStation: (data: any) =>
+    ipcRenderer.invoke('stations:create', data),
+  
+  updateStation: (params: { id: number; updates: any }) =>
+    ipcRenderer.invoke('stations:update', params),
+  
+  deleteStation: (id: number) =>
+    ipcRenderer.invoke('stations:delete', id),
+
+  // Resources
+  getResources: () =>
+    ipcRenderer.invoke('resources:getAll'),
+  
+  createResource: (data: any) =>
+    ipcRenderer.invoke('resources:create', data),
+  
+  updateResource: (params: { id: number; updates: any }) =>
+    ipcRenderer.invoke('resources:update', params),
+  
+  deleteResource: (id: number) =>
+    ipcRenderer.invoke('resources:delete', id),
+
+  // Officers
+  getOfficersByAgency: (agencyType: string) =>
+    ipcRenderer.invoke('officers:getByAgency', agencyType),
+
+  // Final Reports
+  createFinalReport: (params: { incidentId: string; reportDetails: any; completedBy: string }) =>
+    ipcRenderer.invoke('finalReports:create', params),
+  
+  getFinalReport: (incidentId: string) =>
+    ipcRenderer.invoke('finalReports:get', incidentId),
+
+  // Security Logging
+  logSecurityAction: (params: { action: string; details: any; userId?: string }) =>
+    ipcRenderer.invoke('security:log', params),
+  
+  getSecurityLogs: (filters?: { limit?: number; action?: string }) =>
+    ipcRenderer.invoke('security:getLogs', filters),
+
+  // User Creation
+  createUser: (userData: { email: string; password: string; displayName: string; role: string; agencyId?: number; stationId?: number; phoneNumber?: string; dateOfBirth?: string }) =>
+    ipcRenderer.invoke('users:create', userData),
+  
+  deleteUser: (userId: string) =>
+    ipcRenderer.invoke('users:delete', userId),
+  
+  resetUserPassword: (params: { userId: string; newPassword: string }) =>
+    ipcRenderer.invoke('users:resetPassword', params),
+
   // Export
   exportIncidents: (params: { format: 'csv' | 'json'; filters?: any }) =>
     ipcRenderer.invoke('export:incidents', params),
@@ -63,6 +114,13 @@ contextBridge.exposeInMainWorld('api', {
   
   updateSettings: (settings: any) =>
     ipcRenderer.invoke('settings:update', settings),
+
+  // Debug Mode
+  setDebugMode: (enabled: boolean) =>
+    ipcRenderer.invoke('app:setDebugMode', enabled),
+  
+  getDebugMode: () =>
+    ipcRenderer.invoke('app:getDebugMode'),
 
   // Event listeners
   onSyncStatus: (callback: (status: any) => void) => {
@@ -84,7 +142,7 @@ export interface ElectronAPI {
   // Incidents
   getIncidents: (filters?: { agency?: string; status?: string; limit?: number }) => Promise<any[]>;
   getIncident: (id: string) => Promise<any>;
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string }) => Promise<{ success: boolean }>;
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; stationId?: number; officerIds?: string[] }) => Promise<{ success: boolean }>;
   getStats: () => Promise<any>;
   getAuditLog: (incidentId: string) => Promise<any[]>;
   getAgencyStations: () => Promise<any[]>;
@@ -100,6 +158,33 @@ export interface ElectronAPI {
   updateUser: (params: { id: string; updates: any }) => Promise<{ success: boolean }>;
   getAgencies: () => Promise<any[]>;
   
+  // Stations
+  createStation: (data: any) => Promise<any>;
+  updateStation: (params: { id: number; updates: any }) => Promise<{ success: boolean }>;
+  deleteStation: (id: number) => Promise<{ success: boolean }>;
+  
+  // Resources
+  getResources: () => Promise<any[]>;
+  createResource: (data: any) => Promise<any>;
+  updateResource: (params: { id: number; updates: any }) => Promise<{ success: boolean }>;
+  deleteResource: (id: number) => Promise<{ success: boolean }>;
+  
+  // Officers
+  getOfficersByAgency: (agencyType: string) => Promise<any[]>;
+  
+  // Final Reports
+  createFinalReport: (params: { incidentId: string; reportDetails: any; completedBy: string }) => Promise<any>;
+  getFinalReport: (incidentId: string) => Promise<any>;
+  
+  // Security Logging
+  logSecurityAction: (params: { action: string; details: any; userId?: string }) => Promise<{ success: boolean }>;
+  getSecurityLogs: (filters?: { limit?: number; action?: string }) => Promise<any[]>;
+  
+  // User Creation
+  createUser: (userData: { email: string; password: string; displayName: string; role: string; agencyId?: number; stationId?: number; phoneNumber?: string; dateOfBirth?: string }) => Promise<{ success: boolean; userId: string }>;
+  deleteUser: (userId: string) => Promise<{ success: boolean }>;
+  resetUserPassword: (params: { userId: string; newPassword: string }) => Promise<{ success: boolean }>;
+  
   // Export
   exportIncidents: (params: { format: 'csv' | 'json'; filters?: any }) => Promise<string>;
   savePdf: (params: { html: string; filename: string }) => Promise<{ success: boolean; path?: string; canceled?: boolean }>;
@@ -109,6 +194,10 @@ export interface ElectronAPI {
   // Settings
   getSettings: () => Promise<any>;
   updateSettings: (settings: any) => Promise<{ success: boolean }>;
+  
+  // Debug Mode
+  setDebugMode: (enabled: boolean) => Promise<{ success: boolean; debugMode: boolean }>;
+  getDebugMode: () => Promise<{ debugMode: boolean }>;
   
   // Events
   onSyncStatus: (callback: (status: any) => void) => void;
