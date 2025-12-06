@@ -7,118 +7,158 @@
 -- 4. Copy and paste the entire content of this file into the editor.
 -- 5. Click "RUN".
 
--- Table for emergency response agencies (PNP, BFP, PDRRMO)
-CREATE TABLE IF NOT EXISTS public.agencies (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL UNIQUE,
-    short_name VARCHAR(10) NOT NULL UNIQUE
+CREATE TABLE public.agencies (
+  id integer NOT NULL DEFAULT nextval('agencies_id_seq'::regclass),
+  name character varying NOT NULL UNIQUE,
+  short_name character varying NOT NULL UNIQUE,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT agencies_pkey PRIMARY KEY (id)
 );
 
--- Insert the default agencies
-INSERT INTO public.agencies (name, short_name)
-VALUES
-    ('Philippine National Police', 'PNP'),
-    ('Bureau of Fire Protection', 'BFP'),
-    ('Provincial Disaster Risk Reduction and Management Office', 'PDRRMO')
-ON CONFLICT (short_name) DO NOTHING;
-
--- Table for individual agency stations/offices with their locations
-CREATE TABLE IF NOT EXISTS public.agency_stations (
-    id SERIAL PRIMARY KEY,
-    agency_id INTEGER NOT NULL REFERENCES public.agencies(id),
-    name TEXT NOT NULL, -- e.g., "Daet Municipal Police Station"
-    latitude DECIMAL(9, 6) NOT NULL,
-    longitude DECIMAL(9, 6) NOT NULL,
-    contact_number TEXT,
-    address TEXT
+CREATE TABLE public.agency_resources (
+  id integer NOT NULL DEFAULT nextval('agency_resources_id_seq'::regclass),
+  station_id integer,
+  name text NOT NULL,
+  type character varying CHECK (type::text = ANY (ARRAY['vehicle'::character varying, 'equipment'::character varying, 'personnel'::character varying]::text[])),
+  status character varying DEFAULT 'available'::character varying CHECK (status::text = ANY (ARRAY['available'::character varying, 'deployed'::character varying, 'maintenance'::character varying]::text[])),
+  description text,
+  created_at timestamp with time zone,
+  updated_at timestamp with time zone,
+  CONSTRAINT agency_resources_pkey PRIMARY KEY (id),
+  CONSTRAINT agency_resources_station_id_fkey FOREIGN KEY (station_id) REFERENCES public.agency_stations(id)
 );
 
--- Table for public user profiles
--- This table is linked to Supabase's built-in `auth.users` table.
-CREATE TABLE IF NOT EXISTS public.profiles (
-    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    display_name TEXT,
-    email TEXT UNIQUE,
-    role VARCHAR(50) NOT NULL CHECK (role IN ('Resident', 'Field Officer', 'Chief')),
-    agency_id INTEGER REFERENCES public.agencies(id),
-    phone_number VARCHAR(20),
-    created_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE public.agency_stations (
+  id integer NOT NULL DEFAULT nextval('agency_stations_id_seq'::regclass),
+  agency_id integer NOT NULL,
+  name text NOT NULL,
+  latitude numeric NOT NULL,
+  longitude numeric NOT NULL,
+  contact_number text,
+  address text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT agency_stations_pkey PRIMARY KEY (id),
+  CONSTRAINT agency_stations_agency_id_fkey FOREIGN KEY (agency_id) REFERENCES public.agencies(id)
 );
 
--- Table for all incident reports
-CREATE TABLE IF NOT EXISTS public.incidents (
-    id BIGSERIAL PRIMARY KEY,
-    incident_type VARCHAR(50) NOT NULL CHECK (incident_type IN ('Crime', 'Fire', 'Disaster')),
-    agency_id INTEGER NOT NULL REFERENCES public.agencies(id),
-    status VARCHAR(50) NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Assigned', 'On-Scene', 'Resolved', 'Closed')),
-    latitude DECIMAL(9, 6),
-    longitude DECIMAL(9, 6),
-    address_details JSONB, -- To store structured address: {"street": "...", "barangay": "..."}
-    submitted_by_user_id UUID REFERENCES public.profiles(id), -- Null if submitted by a guest
-    submitted_by_guest_info TEXT, -- For guest name/contact if provided
-    assigned_to_user_id UUID REFERENCES public.profiles(id), -- Null if unassigned
-    assigned_to_station_id INTEGER REFERENCES public.agency_stations(id), -- Which station is handling the incident
-    created_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE public.final_reports (
+  id bigint NOT NULL DEFAULT nextval('final_reports_id_seq'::regclass),
+  incident_id uuid NOT NULL UNIQUE,
+  report_details jsonb NOT NULL,
+  completed_by_user_id uuid NOT NULL,
+  completed_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT final_reports_pkey PRIMARY KEY (id),
+  CONSTRAINT final_reports_incident_id_fkey FOREIGN KEY (incident_id) REFERENCES public.incidents(id),
+  CONSTRAINT final_reports_completed_by_user_id_fkey FOREIGN KEY (completed_by_user_id) REFERENCES public.profiles(id)
 );
 
--- Table for media files (photos, videos) associated with an incident
-CREATE TABLE IF NOT EXISTS public.media (
-    id BIGSERIAL PRIMARY KEY,
-    incident_id BIGINT NOT NULL REFERENCES public.incidents(id) ON DELETE CASCADE,
-    storage_path TEXT NOT NULL, -- Path to the file in Supabase Storage
-    media_type VARCHAR(20) NOT NULL CHECK (media_type IN ('photo', 'video')),
-    uploaded_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE public.incident_status_history (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  incident_id uuid NOT NULL,
+  status text NOT NULL,
+  notes text,
+  changed_by text NOT NULL,
+  changed_at timestamp with time zone NOT NULL DEFAULT now(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT incident_status_history_pkey PRIMARY KEY (id),
+  CONSTRAINT incident_status_history_incident_id_fkey FOREIGN KEY (incident_id) REFERENCES public.incidents(id)
 );
 
--- Table for logging updates and notes on an incident
-CREATE TABLE IF NOT EXISTS public.incident_updates (
-    id BIGSERIAL PRIMARY KEY,
-    incident_id BIGINT NOT NULL REFERENCES public.incidents(id) ON DELETE CASCADE,
-    author_id UUID REFERENCES public.profiles(id), -- Can be null for system-generated updates
-    update_text TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE public.incident_updates (
+  id bigint NOT NULL DEFAULT nextval('incident_updates_id_seq'::regclass),
+  incident_id uuid NOT NULL,
+  author_id uuid,
+  update_text text NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT incident_updates_pkey PRIMARY KEY (id),
+  CONSTRAINT incident_updates_incident_id_fkey FOREIGN KEY (incident_id) REFERENCES public.incidents(id),
+  CONSTRAINT incident_updates_author_id_fkey FOREIGN KEY (author_id) REFERENCES public.profiles(id)
 );
 
--- Table for detailed final reports upon case closure
-CREATE TABLE IF NOT EXISTS public.final_reports (
-    id BIGSERIAL PRIMARY KEY,
-    incident_id BIGINT NOT NULL UNIQUE REFERENCES public.incidents(id) ON DELETE CASCADE,
-    report_details JSONB NOT NULL, -- Flexible JSONB to store different fields for PNP, BFP, PDRRMO
-    completed_by_user_id UUID NOT NULL REFERENCES public.profiles(id),
-    completed_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE public.incidents (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  agency_type text NOT NULL CHECK (agency_type = ANY (ARRAY['pnp'::text, 'bfp'::text, 'pdrrmo'::text])),
+  reporter_id uuid,
+  reporter_name text NOT NULL,
+  reporter_age integer NOT NULL,
+  description text NOT NULL,
+  latitude numeric NOT NULL,
+  longitude numeric NOT NULL,
+  location_address text,
+  media_urls ARRAY DEFAULT '{}'::text[],
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'assigned'::text, 'in_progress'::text, 'resolved'::text, 'closed'::text])),
+  assigned_officer_id uuid,
+  assigned_station_id integer,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  resolved_at timestamp with time zone,
+  updated_by text,
+  first_response_at timestamp with time zone,
+  assigned_officer_ids ARRAY DEFAULT '{}'::uuid[],
+  reporter_phone text,
+  CONSTRAINT incidents_pkey PRIMARY KEY (id),
+  CONSTRAINT incidents_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES auth.users(id),
+  CONSTRAINT incidents_assigned_officer_id_fkey FOREIGN KEY (assigned_officer_id) REFERENCES auth.users(id),
+  CONSTRAINT incidents_assigned_station_id_fkey FOREIGN KEY (assigned_station_id) REFERENCES public.agency_stations(id)
 );
 
--- Table for user notifications
-CREATE TABLE IF NOT EXISTS public.notifications (
-    id BIGSERIAL PRIMARY KEY,
-    recipient_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-    incident_id BIGINT REFERENCES public.incidents(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL,
-    is_read BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE public.media (
+  id bigint NOT NULL DEFAULT nextval('media_id_seq'::regclass),
+  incident_id bigint NOT NULL,
+  storage_path text NOT NULL,
+  media_type character varying NOT NULL CHECK (media_type::text = ANY (ARRAY['photo'::character varying, 'video'::character varying]::text[])),
+  uploaded_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT media_pkey PRIMARY KEY (id)
 );
 
--- Table for agency resources (vehicles, equipment, personnel units)
-CREATE TABLE IF NOT EXISTS public.agency_resources (
-    id SERIAL PRIMARY KEY,
-    station_id INTEGER NOT NULL REFERENCES public.agency_stations(id) ON DELETE CASCADE,
-    name TEXT NOT NULL, -- e.g., "Patrol Car 01", "Fire Truck Alpha"
-    type VARCHAR(20) NOT NULL CHECK (type IN ('vehicle', 'equipment', 'personnel')),
-    status VARCHAR(20) NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'deployed', 'maintenance')),
-    description TEXT,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE public.notifications (
+  id bigint NOT NULL DEFAULT nextval('notifications_id_seq'::regclass),
+  recipient_id uuid NOT NULL,
+  incident_id uuid,
+  title text NOT NULL,
+  body text NOT NULL,
+  is_read boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT notifications_pkey PRIMARY KEY (id),
+  CONSTRAINT notifications_recipient_id_fkey FOREIGN KEY (recipient_id) REFERENCES public.profiles(id),
+  CONSTRAINT notifications_incident_id_fkey FOREIGN KEY (incident_id) REFERENCES public.incidents(id)
 );
 
--- Enable Row Level Security (RLS) for all tables as a best practice
--- Note: Policies need to be created separately to define access rules.
-ALTER TABLE public.agencies ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.agency_stations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.incidents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.media ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.incident_updates ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.final_reports ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.agency_resources ENABLE ROW LEVEL SECURITY;
+CREATE TABLE public.profiles (
+  id uuid NOT NULL,
+  display_name text,
+  email text UNIQUE,
+  role character varying NOT NULL CHECK (role::text = ANY (ARRAY['Resident'::character varying, 'Desk Officer'::character varying, 'Field Officer'::character varying, 'Chief'::character varying]::text[])),
+  agency_id integer,
+  phone_number character varying,
+  age integer CHECK (age >= 13 AND age <= 120),
+  date_of_birth date CHECK (date_of_birth <= CURRENT_DATE AND date_of_birth >= (CURRENT_DATE - '120 years'::interval)),
+  created_at timestamp with time zone DEFAULT now(),
+  station_id integer,
+  CONSTRAINT profiles_pkey PRIMARY KEY (id),
+  CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id),
+  CONSTRAINT profiles_agency_id_fkey FOREIGN KEY (agency_id) REFERENCES public.agencies(id),
+  CONSTRAINT profiles_station_id_fkey FOREIGN KEY (station_id) REFERENCES public.agency_stations(id)
+);
+
+CREATE TABLE public.push_tokens (
+  id bigint NOT NULL DEFAULT nextval('push_tokens_id_seq'::regclass),
+  token text NOT NULL UNIQUE,
+  user_id uuid,
+  device_id text,
+  platform text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT push_tokens_pkey PRIMARY KEY (id),
+  CONSTRAINT push_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+
+CREATE TABLE public.security_logs (
+  id bigint NOT NULL DEFAULT nextval('security_logs_id_seq'::regclass),
+  user_id uuid,
+  action text NOT NULL,
+  details jsonb,
+  ip_address text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT security_logs_pkey PRIMARY KEY (id)
+);

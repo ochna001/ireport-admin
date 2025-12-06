@@ -221,14 +221,27 @@ ipcMain.handle('app:getDebugMode', async () => {
 });
 
 // IPC Handlers - using Supabase directly
-ipcMain.handle('db:getIncidents', async (_event, filters: { agency?: string; status?: string; limit?: number } = {}) => {
+ipcMain.handle('db:getIncidents', async (_event, filters: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number } = {}) => {
   let query = supabase.from('incidents').select('*');
+
+  const sanitize = (value?: string) => value?.trim().replace(/,/g, ' ') || '';
 
   if (filters.agency) {
     query = query.eq('agency_type', filters.agency);
   }
   if (filters.status) {
     query = query.eq('status', filters.status);
+  }
+  // Schema has only location_address for locality info.
+  if (filters.municipality || filters.barangay) {
+    const municipality = sanitize(filters.municipality);
+    const barangay = sanitize(filters.barangay);
+
+    if (barangay) {
+      query = query.ilike('location_address', `%${barangay}%`);
+    } else if (municipality) {
+      query = query.ilike('location_address', `%${municipality}%`);
+    }
   }
 
   query = query.order('created_at', { ascending: false });
@@ -238,7 +251,10 @@ ipcMain.handle('db:getIncidents', async (_event, filters: { agency?: string; sta
   }
 
   const { data, error } = await query;
-  if (error) throw error;
+  if (error) {
+    console.error('[Admin] getIncidents error', error);
+    throw new Error(error.message || 'Failed to get incidents');
+  }
   return data || [];
 });
 

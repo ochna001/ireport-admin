@@ -1,6 +1,7 @@
 import { ChevronRight, Filter, Search } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { barangaysByMunicipality, municipalities } from '../data/camarinesNorteLocations';
 
 interface Incident {
   id: string;
@@ -20,8 +21,16 @@ function Incidents() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterAgency, setFilterAgency] = useState(searchParams.get('agency') || '');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterMunicipality, setFilterMunicipality] = useState('');
+  const [filterBarangay, setFilterBarangay] = useState('');
+
+  const barangayOptions = useMemo(
+    () => (filterMunicipality ? barangaysByMunicipality[filterMunicipality] || [] : []),
+    [filterMunicipality]
+  );
 
   useEffect(() => {
+    setLoading(true);
     loadIncidents();
 
     // Listen for real-time updates
@@ -32,17 +41,19 @@ function Incidents() {
     return () => {
       window.api.removeAllListeners('incident-updated');
     };
-  }, [filterAgency, filterStatus]);
+  }, [filterAgency, filterStatus, filterMunicipality, filterBarangay]);
 
   const loadIncidents = async () => {
     try {
       const data = await window.api.getIncidents({
         agency: filterAgency || undefined,
         status: filterStatus || undefined,
+        municipality: filterMunicipality || undefined,
+        barangay: filterBarangay || undefined,
       });
       setIncidents(data);
-    } catch (error) {
-      console.error('Failed to load incidents:', error);
+    } catch (error: any) {
+      console.error('Failed to load incidents:', error?.message || error);
     } finally {
       setLoading(false);
     }
@@ -139,6 +150,39 @@ function Incidents() {
             <option value="assigned">Assigned</option>
             <option value="in_progress">In Progress</option>
             <option value="resolved">Resolved</option>
+          </select>
+
+          {/* Municipality Filter */}
+          <select
+            value={filterMunicipality}
+            onChange={(e) => {
+              const nextMunicipality = e.target.value;
+              setFilterMunicipality(nextMunicipality);
+              setFilterBarangay(''); // reset barangay when municipality changes
+            }}
+            className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white min-w-[180px]"
+          >
+            <option value="">All Municipalities</option>
+            {municipalities.map((municipality) => (
+              <option key={municipality} value={municipality}>
+                {municipality}
+              </option>
+            ))}
+          </select>
+
+          {/* Barangay Filter */}
+          <select
+            value={filterBarangay}
+            onChange={(e) => setFilterBarangay(e.target.value)}
+            disabled={!filterMunicipality}
+            className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white min-w-[180px] disabled:opacity-60"
+          >
+            <option value="">All Barangays</option>
+            {barangayOptions.map((barangay) => (
+              <option key={barangay} value={barangay}>
+                {barangay}
+              </option>
+            ))}
           </select>
         </div>
       </div>

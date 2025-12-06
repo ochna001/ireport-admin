@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 // Expose protected methods to renderer
 contextBridge.exposeInMainWorld('api', {
   // Database operations
-  getIncidents: (filters?: { agency?: string; status?: string; limit?: number }) => 
+  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number }) => 
     ipcRenderer.invoke('db:getIncidents', filters),
   
   getIncident: (id: string) => 
@@ -140,7 +140,7 @@ contextBridge.exposeInMainWorld('api', {
 // Type definitions for renderer
 export interface ElectronAPI {
   // Incidents
-  getIncidents: (filters?: { agency?: string; status?: string; limit?: number }) => Promise<any[]>;
+  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number }) => Promise<any[]>;
   getIncident: (id: string) => Promise<any>;
   updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; stationId?: number; officerIds?: string[] }) => Promise<{ success: boolean }>;
   getStats: () => Promise<any>;
