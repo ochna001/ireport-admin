@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getSessionScope, isChiefScoped, SessionScope } from '../utils/sessionScope';
 
 interface Stats {
   total: number;
@@ -31,6 +32,7 @@ function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sessionScope, setSessionScope] = useState<SessionScope>({});
 
   useEffect(() => {
     if (!window.api) {
@@ -82,7 +84,18 @@ function Dashboard() {
 
   const loadStats = async () => {
     try {
-      const data = await window.api.getStats();
+      const scope = getSessionScope();
+      setSessionScope(scope);
+
+      const filters: any = {};
+      if (isChiefScoped(scope)) {
+        filters.stationId = scope.stationId;
+        if (scope.agencyShortName) {
+          filters.agency = scope.agencyShortName.toLowerCase();
+        }
+      }
+
+      const data = await window.api.getStats(Object.keys(filters).length ? filters : undefined);
       setStats(data);
       setError(null);
     } catch (err: any) {
@@ -126,6 +139,12 @@ function Dashboard() {
   return (
     <div className="p-6 dark:bg-gray-950">
       <h1 className="text-2xl font-bold text-gray-800 dark:text-white mb-6">Dashboard</h1>
+
+      {isChiefScoped(sessionScope) && (
+        <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
+          Data scoped to Station {sessionScope.stationName || sessionScope.stationId} ({sessionScope.agencyShortName || 'Agency'} • Chief)
+        </div>
+      )}
 
       {/* Offline Warning */}
       {(stats as any)?._offline && (

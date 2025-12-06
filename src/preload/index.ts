@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 // Expose protected methods to renderer
 contextBridge.exposeInMainWorld('api', {
   // Database operations
-  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number }) => 
+  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number }) => 
     ipcRenderer.invoke('db:getIncidents', filters),
   
   getIncident: (id: string) => 
@@ -12,8 +12,8 @@ contextBridge.exposeInMainWorld('api', {
   updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; stationId?: number; officerIds?: string[] }) => 
     ipcRenderer.invoke('db:updateIncidentStatus', params),
   
-  getStats: () => 
-    ipcRenderer.invoke('db:getStats'),
+  getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => 
+    ipcRenderer.invoke('db:getStats', filters),
   
   getAuditLog: (incidentId: string) => 
     ipcRenderer.invoke('db:getAuditLog', incidentId),
@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('sync:now'),
 
   // User management
-  getUsers: (filters?: { role?: string; agency?: string; search?: string }) =>
+  getUsers: (filters?: { role?: string; agency?: string; stationId?: number; search?: string }) =>
     ipcRenderer.invoke('users:getAll', filters),
   
   getUserById: (id: string) =>
@@ -95,6 +95,13 @@ contextBridge.exposeInMainWorld('api', {
   resetUserPassword: (params: { userId: string; newPassword: string }) =>
     ipcRenderer.invoke('users:resetPassword', params),
 
+  // Auth
+  loginChief: (params: { email: string; password: string }) =>
+    ipcRenderer.invoke('auth:loginChief', params),
+
+  logout: () =>
+    ipcRenderer.invoke('auth:logout'),
+
   // Export
   exportIncidents: (params: { format: 'csv' | 'json'; filters?: any }) =>
     ipcRenderer.invoke('export:incidents', params),
@@ -140,10 +147,10 @@ contextBridge.exposeInMainWorld('api', {
 // Type definitions for renderer
 export interface ElectronAPI {
   // Incidents
-  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number }) => Promise<any[]>;
+  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number }) => Promise<any[]>;
   getIncident: (id: string) => Promise<any>;
   updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; stationId?: number; officerIds?: string[] }) => Promise<{ success: boolean }>;
-  getStats: () => Promise<any>;
+  getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => Promise<any>;
   getAuditLog: (incidentId: string) => Promise<any[]>;
   getAgencyStations: () => Promise<any[]>;
   getNearbyServices: (params: { latitude: number; longitude: number; radius?: number }) => Promise<any[]>;
@@ -153,7 +160,7 @@ export interface ElectronAPI {
   syncNow: () => Promise<{ success: boolean }>;
   
   // Users
-  getUsers: (filters?: { role?: string; agency?: string; search?: string }) => Promise<any[]>;
+  getUsers: (filters?: { role?: string; agency?: string; stationId?: number; search?: string }) => Promise<any[]>;
   getUserById: (id: string) => Promise<any>;
   updateUser: (params: { id: string; updates: any }) => Promise<{ success: boolean }>;
   getAgencies: () => Promise<any[]>;
@@ -185,6 +192,10 @@ export interface ElectronAPI {
   deleteUser: (userId: string) => Promise<{ success: boolean }>;
   resetUserPassword: (params: { userId: string; newPassword: string }) => Promise<{ success: boolean }>;
   
+  // Auth
+  loginChief: (params: { email: string; password: string }) => Promise<any>;
+  logout: () => Promise<{ success: boolean }>;
+
   // Export
   exportIncidents: (params: { format: 'csv' | 'json'; filters?: any }) => Promise<string>;
   savePdf: (params: { html: string; filename: string }) => Promise<{ success: boolean; path?: string; canceled?: boolean }>;

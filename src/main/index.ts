@@ -110,6 +110,10 @@ function clearCache(key: string): void {
   cache.delete(key);
 }
 
+function clearAllCaches(): void {
+  cache.clear();
+}
+
 function createWindow() {
   // Set Content Security Policy
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -221,13 +225,16 @@ ipcMain.handle('app:getDebugMode', async () => {
 });
 
 // IPC Handlers - using Supabase directly
-ipcMain.handle('db:getIncidents', async (_event, filters: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number } = {}) => {
+ipcMain.handle('db:getIncidents', async (_event, filters: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number } = {}) => {
   let query = supabase.from('incidents').select('*');
 
   const sanitize = (value?: string) => value?.trim().replace(/,/g, ' ') || '';
 
   if (filters.agency) {
     query = query.eq('agency_type', filters.agency);
+  }
+  if (filters.stationId) {
+    query = query.eq('assigned_station_id', filters.stationId);
   }
   if (filters.status) {
     query = query.eq('status', filters.status);
@@ -467,21 +474,43 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
   }
 });
 
-ipcMain.handle('db:getStats', async () => {
-  // Check cache first
-  const cached = getCached<any>('stats');
-  if (cached) {
-    return cached;
+ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => {
+  const hasFilters = !!(filters?.from || filters?.to || filters?.stationId || filters?.agency);
+  const cacheKey = hasFilters
+    ? `stats:${filters?.from || 'none'}:${filters?.to || 'none'}:${filters?.stationId || 'all'}:${filters?.agency || 'all'}`
+    : 'stats';
+
+  // Check cache first (skip if requested)
+  if (!filters?.skipCache) {
+    const cached = getCached<any>(cacheKey);
+    if (cached) {
+      return cached;
+    }
   }
 
   console.log('[Admin] Fetching stats from Supabase...');
   console.log('[Admin] Using URL:', supabaseUrl);
   
   try {
-    // Get all incidents for stats including location_address for area aggregation and created_at for trends
-    const { data: incidents, error, count } = await supabase
+    // Get incidents for stats including location_address for area aggregation and created_at for trends
+    let query = supabase
       .from('incidents')
-      .select('status, agency_type, location_address, created_at', { count: 'exact' });
+      .select('id, status, agency_type, location_address, created_at, assigned_station_id', { count: 'exact' });
+
+    if (filters?.from) {
+      query = query.gte('created_at', filters.from);
+    }
+    if (filters?.to) {
+      query = query.lte('created_at', filters.to);
+    }
+    if (filters?.stationId) {
+      query = query.eq('assigned_station_id', filters.stationId);
+    }
+    if (filters?.agency) {
+      query = query.eq('agency_type', filters.agency);
+    }
+
+    const { data: incidents, error, count } = await query;
     
     console.log('[Admin] Query result - data:', incidents?.length, 'error:', error, 'count:', count);
 
@@ -530,22 +559,31 @@ ipcMain.handle('db:getStats', async () => {
       }
     });
 
+    const incidentIds = (incidents || []).map(i => i.id).filter(Boolean);
+
     // Fetch recent activity from incident_status_history
     let recentActivity: any[] = [];
     try {
-      const { data: historyData, error: historyError } = await supabase
-        .from('incident_status_history')
-        .select('incident_id, status, changed_by, changed_at')
-        .order('changed_at', { ascending: false })
-        .limit(10);
-      
-      if (!historyError && historyData) {
-        recentActivity = historyData.map(h => ({
-          incident_id: h.incident_id,
-          status: h.status,
-          changed_by: h.changed_by || 'System',
-          changed_at: h.changed_at,
-        }));
+      if (incidentIds.length === 0) {
+        recentActivity = [];
+      } else {
+        let historyQuery = supabase
+          .from('incident_status_history')
+          .select('incident_id, status, changed_by, changed_at')
+          .in('incident_id', incidentIds)
+          .order('changed_at', { ascending: false })
+          .limit(10);
+
+        const { data: historyData, error: historyError } = await historyQuery;
+        
+        if (!historyError && historyData) {
+          recentActivity = historyData.map(h => ({
+            incident_id: h.incident_id,
+            status: h.status,
+            changed_by: h.changed_by || 'System',
+            changed_at: h.changed_at,
+          }));
+        }
       }
     } catch (e) {
       console.error('[Admin] Failed to fetch recent activity:', e);
@@ -557,25 +595,54 @@ ipcMain.handle('db:getStats', async () => {
     
     try {
       // Get incidents with their status history for time calculations
-      const { data: incidentsWithTime, error: timeError } = await supabase
+      let timeQuery = supabase
         .from('incidents')
         .select('id, created_at, status')
         .in('status', ['assigned', 'in_progress', 'responding', 'resolved', 'closed']);
+
+      if (filters?.from) {
+        timeQuery = timeQuery.gte('created_at', filters.from);
+      }
+      if (filters?.to) {
+        timeQuery = timeQuery.lte('created_at', filters.to);
+      }
+      if (filters?.stationId) {
+        timeQuery = timeQuery.eq('assigned_station_id', filters.stationId);
+      }
+      if (filters?.agency) {
+        timeQuery = timeQuery.eq('agency_type', filters.agency);
+      }
+
+      const { data: incidentsWithTime, error: timeError } = await timeQuery;
       
       if (!timeError && incidentsWithTime && incidentsWithTime.length > 0) {
+        const timeIncidentIds = incidentsWithTime.map(i => i.id).filter(Boolean);
+
         // Get first response times (time from created to first non-pending status)
-        const { data: firstResponses } = await supabase
+        let firstResponseQuery = supabase
           .from('incident_status_history')
           .select('incident_id, status, changed_at')
           .in('status', ['assigned', 'in_progress', 'responding'])
           .order('changed_at', { ascending: true });
+
+        if (timeIncidentIds.length > 0) {
+          firstResponseQuery = firstResponseQuery.in('incident_id', timeIncidentIds);
+        }
+
+        const { data: firstResponses } = await firstResponseQuery;
         
         // Get resolution times
-        const { data: resolutions } = await supabase
+        let resolutionQuery = supabase
           .from('incident_status_history')
           .select('incident_id, status, changed_at')
           .in('status', ['resolved', 'closed'])
           .order('changed_at', { ascending: true });
+
+        if (timeIncidentIds.length > 0) {
+          resolutionQuery = resolutionQuery.in('incident_id', timeIncidentIds);
+        }
+
+        const { data: resolutions } = await resolutionQuery;
         
         // Calculate average response time
         if (firstResponses && firstResponses.length > 0) {
@@ -631,19 +698,37 @@ ipcMain.handle('db:getStats', async () => {
       console.error('[Admin] Failed to calculate performance metrics:', e);
     }
 
-    // Calculate daily incident trend (last 7 days)
+    // Calculate daily incident trend based on the selected window (capped to 60 days for readability)
     const dailyTrend: { date: string; count: number }[] = [];
     try {
-      const today = new Date();
-      for (let i = 6; i >= 0; i--) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toISOString().split('T')[0];
+      const toLocalDateStr = (date: Date) => {
+        const y = date.getFullYear();
+        const m = `${date.getMonth() + 1}`.padStart(2, '0');
+        const d = `${date.getDate()}`.padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      };
+
+      const end = filters?.to ? new Date(filters.to) : new Date();
+      const start = filters?.from ? new Date(filters.from) : new Date(end.getTime() - 6 * 24 * 60 * 60 * 1000);
+
+      let startDate = start;
+      let endDate = end;
+      const diffDays = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+
+      // Cap to last 60 days for UI readability
+      if (diffDays > 59) {
+        startDate = new Date(endDate.getTime() - 59 * 24 * 60 * 60 * 1000);
+      }
+
+      const cursor = new Date(startDate);
+      while (cursor <= endDate) {
+        const dateStr = toLocalDateStr(cursor);
         const count = incidents?.filter(inc => {
-          const incDate = new Date(inc.created_at).toISOString().split('T')[0];
+          const incDate = toLocalDateStr(new Date(inc.created_at));
           return incDate === dateStr;
         }).length || 0;
         dailyTrend.push({ date: dateStr, count });
+        cursor.setDate(cursor.getDate() + 1);
       }
     } catch (e) {
       console.error('[Admin] Failed to calculate daily trend:', e);
@@ -663,7 +748,9 @@ ipcMain.handle('db:getStats', async () => {
     };
     
     console.log('[Admin] Stats result:', result);
-    setCache('stats', result); // Cache the result
+    if (!filters?.skipCache) {
+      setCache(cacheKey, result); // Cache the result
+    }
     return result;
   } catch (err: any) {
     console.error('[Admin] Error in getStats:', err);
@@ -822,12 +909,56 @@ ipcMain.handle('sync:now', async () => {
 // USER MANAGEMENT IPC HANDLERS
 // ============================================
 
-ipcMain.handle('users:getAll', async (_event, filters: { role?: string; agency?: string; search?: string } = {}) => {
-  const cached = getCached<any>('users');
-  if (cached && !filters.search) {
-    return cached;
+// Auth logout - clear in-memory caches to avoid cross-user scope bleed
+ipcMain.handle('auth:logout', async () => {
+  clearAllCaches();
+  return { success: true };
+});
+
+// Chief auth via Supabase
+ipcMain.handle('auth:loginChief', async (_event, { email, password }: { email: string; password: string }) => {
+  if (!email || !password) {
+    throw new Error('Email and password are required');
   }
 
+  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (authError || !authData.user) {
+    console.error('[Admin] Chief login failed:', authError);
+    throw new Error(authError?.message || 'Invalid credentials');
+  }
+
+  // Fetch profile to ensure role and station
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select(`
+      *,
+      agencies (name, short_name),
+      agency_stations:station_id (id, name, agency_id)
+    `)
+    .eq('id', authData.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    console.error('[Admin] Chief profile fetch failed:', profileError);
+    throw new Error(profileError?.message || 'Profile not found');
+  }
+
+  if (profile.role !== 'Chief') {
+    throw new Error('Access denied: account is not a Chief');
+  }
+
+  return {
+    ...profile,
+    agencyShortName: profile.agencies?.short_name,
+    stationName: profile.agency_stations?.name,
+  };
+});
+
+ipcMain.handle('users:getAll', async (_event, filters: { role?: string; agency?: string; stationId?: number; search?: string } = {}) => {
   let query = supabase.from('profiles').select(`
     *,
     agencies (name, short_name)
@@ -839,6 +970,9 @@ ipcMain.handle('users:getAll', async (_event, filters: { role?: string; agency?:
   if (filters.agency) {
     query = query.eq('agency_id', filters.agency);
   }
+   if (filters.stationId) {
+    query = query.eq('station_id', filters.stationId);
+  }
   if (filters.search) {
     query = query.or(`display_name.ilike.%${filters.search}%,email.ilike.%${filters.search}%`);
   }
@@ -847,10 +981,6 @@ ipcMain.handle('users:getAll', async (_event, filters: { role?: string; agency?:
 
   const { data, error } = await query;
   if (error) throw error;
-  
-  if (!filters.search) {
-    setCache('users', data || []);
-  }
   return data || [];
 });
 
@@ -993,6 +1123,7 @@ ipcMain.handle('export:incidents', async (_event, { format, filters }: { format:
   
   if (filters?.status) query = query.eq('status', filters.status);
   if (filters?.agency) query = query.eq('agency_type', filters.agency);
+  if (filters?.stationId) query = query.eq('assigned_station_id', filters.stationId);
   if (filters?.dateFrom) query = query.gte('created_at', filters.dateFrom);
   if (filters?.dateTo) query = query.lte('created_at', filters.dateTo);
   
@@ -1232,7 +1363,7 @@ ipcMain.handle('officers:getByAgency', async (_event, agencyType: string) => {
     // Get officers (Desk Officer, Field Officer, or Chief) for this agency
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, display_name, email, role, phone_number')
+      .select('id, display_name, email, role, phone_number, station_id')
       .eq('agency_id', agency.id)
       .in('role', ['Desk Officer', 'Field Officer', 'Chief'])
       .order('display_name');
@@ -1409,6 +1540,7 @@ ipcMain.handle('users:create', async (_event, userData: {
         email: userData.email.toLowerCase(),
         role: userData.role,
         agency_id: userData.agencyId || null,
+        station_id: userData.stationId || null,
         phone_number: userData.phoneNumber || null,
         date_of_birth: userData.dateOfBirth || null,
         age: age,

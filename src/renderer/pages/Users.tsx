@@ -14,6 +14,7 @@ import {
     X
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { getSessionScope, isChiefScoped } from '../utils/sessionScope';
 
 interface User {
   id: string;
@@ -21,6 +22,7 @@ interface User {
   email: string;
   role: string;
   agency_id: number | null;
+  station_id?: number | null;
   phone_number: string | null;
   age: number | null;
   created_at: string;
@@ -34,6 +36,12 @@ interface Agency {
   id: number;
   name: string;
   short_name: string;
+}
+
+interface Station {
+  id: number;
+  name: string;
+  agency_id: number;
 }
 
 const ROLES = ['Resident', 'Desk Officer', 'Field Officer', 'Chief'];
@@ -72,6 +80,7 @@ interface NewUserData {
   displayName: string;
   role: string;
   agencyId?: number;
+  stationId?: number;
   phoneNumber?: string;
   dateOfBirth?: string; // YYYY-MM-DD format
 }
@@ -82,17 +91,23 @@ interface ValidationErrors {
   password?: string;
   role?: string;
   agencyId?: string;
+  stationId?: string;
   phoneNumber?: string;
   dateOfBirth?: string;
 }
 
 function Users() {
+  const initialScope = getSessionScope();
+  const chiefScopeActive = isChiefScoped(initialScope);
   const [users, setUsers] = useState<User[]>([]);
   const [agencies, setAgencies] = useState<Agency[]>([]);
+  const [stations, setStations] = useState<Station[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
-  const [agencyFilter, setAgencyFilter] = useState('');
+  const [agencyFilter, setAgencyFilter] = useState(
+    chiefScopeActive && initialScope.agencyShortName ? initialScope.agencyShortName.toLowerCase() : ''
+  );
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   
@@ -104,6 +119,7 @@ function Users() {
     displayName: '',
     role: 'Field Officer',
     agencyId: undefined,
+    stationId: undefined,
     phoneNumber: '',
     dateOfBirth: '',
   });
@@ -129,12 +145,18 @@ function Users() {
 
   const loadData = async () => {
     try {
-      const [usersData, agenciesData] = await Promise.all([
-        window.api.getUsers(),
-        window.api.getAgencies()
+      const scope = getSessionScope();
+      const [usersData, agenciesData, stationsData] = await Promise.all([
+        window.api.getUsers({
+          stationId: isChiefScoped(scope) ? scope.stationId : undefined,
+          agency: isChiefScoped(scope) ? scope.agencyId : undefined,
+        }),
+        window.api.getAgencies(),
+        window.api.getAgencyStations(),
       ]);
       setUsers(usersData);
       setAgencies(agenciesData);
+      setStations(stationsData || []);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -144,9 +166,14 @@ function Users() {
 
   const loadUsers = async () => {
     try {
+      const scope = getSessionScope();
+      const agencyParam = isChiefScoped(scope)
+        ? scope.agencyId
+        : (agencyFilter ? parseInt(agencyFilter) : undefined);
       const data = await window.api.getUsers({
         role: roleFilter || undefined,
-        agency: agencyFilter || undefined,
+        agency: agencyParam,
+        stationId: isChiefScoped(scope) ? scope.stationId : undefined,
         search: searchQuery || undefined,
       });
       setUsers(data);
@@ -229,6 +256,11 @@ function Users() {
     if (OFFICER_ROLES.includes(newUserData.role) && !newUserData.agencyId) {
       errors.agencyId = 'Agency is required for officers';
     }
+
+    // Validate station for chiefs to support per-station scope
+    if (newUserData.role === 'Chief' && !newUserData.stationId) {
+      errors.stationId = 'Station is required for chiefs';
+    }
     
     // Validate phone number if provided
     if (newUserData.phoneNumber && !isValidPhoneNumber(newUserData.phoneNumber)) {
@@ -255,6 +287,7 @@ function Users() {
         ...newUserData,
         email: newUserData.email.trim().toLowerCase(),
         displayName: newUserData.displayName.trim(),
+        stationId: newUserData.stationId,
         phoneNumber: newUserData.phoneNumber?.trim() || undefined,
       });
       setShowCreateModal(false);
@@ -264,6 +297,7 @@ function Users() {
         displayName: '',
         role: 'Field Officer',
         agencyId: undefined,
+        stationId: undefined,
         phoneNumber: '',
         dateOfBirth: '',
       });
@@ -378,6 +412,12 @@ function Users() {
         </div>
       </div>
 
+      {chiefScopeActive && (
+        <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
+          User list scoped to Station {initialScope.stationName || initialScope.stationId} ({initialScope.agencyShortName || 'Agency'} • Chief). Agency filter locked.
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 mb-6">
         <div className="flex flex-wrap gap-4">
@@ -414,6 +454,7 @@ function Users() {
             <select
               value={agencyFilter}
               onChange={(e) => setAgencyFilter(e.target.value)}
+              disabled={chiefScopeActive}
               className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
             >
               <option value="">All Agencies</option>
@@ -591,6 +632,7 @@ function Users() {
         <EditUserModal
           user={selectedUser}
           agencies={agencies}
+          stations={stations}
           onClose={() => {
             setShowEditModal(false);
             setSelectedUser(null);
@@ -644,7 +686,11 @@ function Users() {
                     <select
                       value={newUserData.agencyId || ''}
                       onChange={(e) => {
-                        setNewUserData({ ...newUserData, agencyId: e.target.value ? parseInt(e.target.value) : undefined });
+                        setNewUserData({ 
+                          ...newUserData, 
+                          agencyId: e.target.value ? parseInt(e.target.value) : undefined,
+                          stationId: undefined,
+                        });
                         if (validationErrors.agencyId) {
                           setValidationErrors(prev => ({ ...prev, agencyId: undefined }));
                         }
@@ -661,6 +707,40 @@ function Users() {
                     {validationErrors.agencyId && (
                       <p className="mt-1 text-sm text-red-500">{validationErrors.agencyId}</p>
                     )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Station {newUserData.role === 'Chief' && <span className="text-red-500">*</span>}
+                    </label>
+                    <select
+                      value={newUserData.stationId || ''}
+                      onChange={(e) => {
+                        setNewUserData({ ...newUserData, stationId: e.target.value ? parseInt(e.target.value) : undefined });
+                        if (validationErrors.stationId) {
+                          setValidationErrors(prev => ({ ...prev, stationId: undefined }));
+                        }
+                      }}
+                      disabled={!newUserData.agencyId}
+                      className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
+                        validationErrors.stationId ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                      } ${!newUserData.agencyId ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    >
+                      <option value="">Select Station</option>
+                      {stations
+                        .filter(station => !newUserData.agencyId || station.agency_id === newUserData.agencyId)
+                        .map(station => (
+                          <option key={station.id} value={station.id}>
+                            {station.name}
+                          </option>
+                        ))}
+                    </select>
+                    {validationErrors.stationId && (
+                      <p className="mt-1 text-sm text-red-500">{validationErrors.stationId}</p>
+                    )}
+                    <p className="mt-1 text-xs text-gray-400">
+                      Required for Chiefs; optional for other officers.
+                    </p>
                   </div>
 
                   <div>
@@ -910,11 +990,13 @@ function Users() {
 function EditUserModal({ 
   user, 
   agencies, 
+  stations,
   onClose, 
   onSave 
 }: { 
   user: User; 
   agencies: Agency[];
+  stations: Station[];
   onClose: () => void; 
   onSave: (updates: Partial<User>) => void;
 }) {
@@ -923,6 +1005,7 @@ function EditUserModal({
     role: user.role,
     agency_id: user.agency_id?.toString() || '',
     phone_number: user.phone_number || '',
+    station_id: user.station_id?.toString() || '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -934,6 +1017,7 @@ function EditUserModal({
       role: formData.role,
       agency_id: formData.agency_id ? parseInt(formData.agency_id) : null,
       phone_number: formData.phone_number || null,
+      station_id: formData.station_id ? parseInt(formData.station_id) : null,
     });
     setSaving(false);
   };
@@ -974,13 +1058,30 @@ function EditUserModal({
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Agency</label>
             <select
               value={formData.agency_id}
-              onChange={(e) => setFormData({ ...formData, agency_id: e.target.value })}
+              onChange={(e) => setFormData({ ...formData, agency_id: e.target.value, station_id: '' })}
               className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
             >
               <option value="">No Agency</option>
               {agencies.map(agency => (
                 <option key={agency.id} value={agency.id}>{agency.short_name} - {agency.name}</option>
               ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Station</label>
+            <select
+              value={formData.station_id}
+              onChange={(e) => setFormData({ ...formData, station_id: e.target.value })}
+              disabled={!formData.agency_id}
+              className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white disabled:opacity-60"
+            >
+              <option value="">No Station</option>
+              {stations
+                .filter(station => !formData.agency_id || station.agency_id.toString() === formData.agency_id)
+                .map(station => (
+                  <option key={station.id} value={station.id}>{station.name}</option>
+                ))}
             </select>
           </div>
 

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getSessionScope } from '../utils/sessionScope';
 
 const SETTINGS_KEY = 'ireport_admin_settings';
 
@@ -44,6 +45,27 @@ interface AppSettings {
   security: {
     debugMode: boolean;
   };
+  session: {
+    role?: string;
+    agencyId?: number;
+    agencyShortName?: string;
+    stationId?: number;
+    stationName?: string;
+    userId?: string;
+  };
+}
+
+interface AgencyOption {
+  id: number;
+  name: string;
+  short_name: string;
+}
+
+interface StationOption {
+  id: number;
+  name: string;
+  agency_id: number;
+  agencies?: { short_name?: string; name?: string };
 }
 
 function Settings() {
@@ -52,6 +74,7 @@ function Settings() {
     display: { theme: 'light', compactMode: false, autoRefresh: true, refreshInterval: 30 },
     sync: { autoSync: true, syncInterval: 30 },
     security: { debugMode: false },
+    session: {},
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -64,11 +87,30 @@ function Settings() {
   const [confirmPin, setConfirmPin] = useState('');
   const [pinError, setPinError] = useState('');
   const [pinSuccess, setPinSuccess] = useState(false);
+  const [agencies, setAgencies] = useState<AgencyOption[]>([]);
+  const [stations, setStations] = useState<StationOption[]>([]);
   const navigate = useNavigate();
 
   // Load settings from localStorage on mount
   useEffect(() => {
     loadSettings();
+  }, []);
+
+  useEffect(() => {
+    const loadOptions = async () => {
+      try {
+        const [agencyList, stationList] = await Promise.all([
+          window.api.getAgencies(),
+          window.api.getAgencyStations(),
+        ]);
+        setAgencies(agencyList || []);
+        setStations(stationList || []);
+      } catch (error) {
+        console.error('Failed to load agency/station options:', error);
+      }
+    };
+
+    loadOptions();
   }, []);
 
   // Auto-save settings when they change
@@ -92,6 +134,7 @@ function Settings() {
       if (saved) {
         const parsed = JSON.parse(saved);
         // Merge with defaults to handle missing properties from old saved settings
+        const scopedSession = getSessionScope();
         setSettings({
           notifications: { 
             enabled: true, 
@@ -115,15 +158,18 @@ function Settings() {
             debugMode: false,
             ...parsed.security 
           },
+          session: { ...(scopedSession || {}) },
         });
       } else {
         // Fallback to API defaults
         const data = await window.api.getSettings();
+        const scopedSession = getSessionScope();
         setSettings({
           notifications: { enabled: true, sound: true, desktop: true, ...data?.notifications },
           display: { theme: 'light', compactMode: false, autoRefresh: true, refreshInterval: 30, ...data?.display },
           sync: { autoSync: true, syncInterval: 30, ...data?.sync },
           security: { debugMode: false, ...data?.security },
+          session: { ...(scopedSession || {}) },
         });
       }
     } catch (error) {
@@ -149,7 +195,16 @@ function Settings() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const data = await window.api.exportIncidents({ format: exportFormat });
+      const scope = getSessionScope();
+      const filters: any = {};
+      if (scope.role === 'Chief' && scope.stationId) {
+        filters.stationId = scope.stationId;
+        if (scope.agencyShortName) {
+          filters.agency = scope.agencyShortName.toLowerCase();
+        }
+      }
+
+      const data = await window.api.exportIncidents({ format: exportFormat, filters });
       
       // Create download
       const blob = new Blob([data], { 
@@ -176,7 +231,9 @@ function Settings() {
       display: { theme: 'light', compactMode: false, autoRefresh: true, refreshInterval: 30 },
       sync: { autoSync: true, syncInterval: 30 },
       security: { debugMode: false },
+      session: {},
     });
+    window.api.logout().catch(() => {});
   };
 
   // Helper to handle numeric PIN input
@@ -221,9 +278,15 @@ function Settings() {
   };
 
   const handleLogout = () => {
+    window.api.logout().catch(() => {});
     localStorage.removeItem('ireport_admin_auth');
+    localStorage.removeItem('ireport_admin_current_user');
     navigate('/login');
   };
+
+  const filteredStations = settings.session?.agencyId
+    ? stations.filter((s) => s.agency_id === settings.session?.agencyId)
+    : stations;
 
   if (loading) {
     return (
@@ -275,6 +338,25 @@ function Settings() {
       </div>
 
       <div className="space-y-6">
+        {/* Session Scope Section (read-only, driven by login) */}
+        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Shield className="w-5 h-5 text-purple-600" />
+              <div>
+                <h2 className="font-semibold text-gray-800 dark:text-white">Session Scope</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Scope is set by the logged-in account (Chief with station).</p>
+              </div>
+            </div>
+          </div>
+          <div className="p-4 space-y-2 text-sm text-gray-700 dark:text-gray-300">
+            <p><span className="font-semibold">Role:</span> {getSessionScope().role || 'None (full access)'}</p>
+            <p><span className="font-semibold">Agency:</span> {getSessionScope().agencyShortName || '—'}</p>
+            <p><span className="font-semibold">Station:</span> {getSessionScope().stationName || getSessionScope().stationId || '—'}</p>
+            <p className="text-gray-500 dark:text-gray-400">To change scope, log out and sign in with a different account.</p>
+          </div>
+        </section>
+
         {/* Notifications Section */}
         <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">

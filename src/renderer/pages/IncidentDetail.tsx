@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { getSessionScope, isChiefScoped } from '../utils/sessionScope';
 
 interface Incident {
   id: string;
@@ -24,7 +25,7 @@ interface Incident {
   latitude: number;
   longitude: number;
   location_address: string;
-  media_urls: string;
+  media_urls: string | string[] | null;
   assigned_station_id?: number;
   assigned_officer_id?: string;
   assigned_officer_ids?: string[]; // Multiple officers
@@ -63,6 +64,7 @@ interface Officer {
   email: string;
   role: string;
   phone_number?: string;
+  station_id?: number | null;
 }
 
 interface FinalReportData {
@@ -200,7 +202,14 @@ function IncidentDetail() {
     
     try {
       const data = await window.api.getOfficersByAgency(incident.agency_type);
-      setOfficers(data);
+      const scope = getSessionScope();
+
+      let filtered = data || [];
+      if (isChiefScoped(scope) && scope.stationId) {
+        filtered = filtered.filter((officer: Officer) => !officer.station_id || officer.station_id === scope.stationId);
+      }
+
+      setOfficers(filtered);
     } catch (error) {
       console.error('Failed to load officers:', error);
     }
@@ -350,12 +359,37 @@ function IncidentDetail() {
   };
 
   const getMediaUrls = (): string[] => {
-    if (!incident?.media_urls) return [];
-    try {
-      return JSON.parse(incident.media_urls);
-    } catch {
-      return [];
+    const raw = incident?.media_urls;
+    if (!raw) return [];
+
+    // Supabase returns text[] so handle arrays first
+    if (Array.isArray(raw)) {
+      return raw.filter((item): item is string => typeof item === 'string');
     }
+
+    // Fallback: stringified JSON array or single URL string
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((item): item is string => typeof item === 'string');
+        }
+      } catch {
+        // Not JSON, treat as single URL
+        if (raw.trim().length > 0) {
+          return [raw.trim()];
+        }
+      }
+    }
+
+    return [];
+  };
+
+  const getMediaType = (url: string): 'video' | 'image' | 'unknown' => {
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.match(/\.(mp4|mov|webm|ogg|m4v)$/)) return 'video';
+    if (lowerUrl.match(/\.(jpg|jpeg|png|gif|webp|avif|heic|heif)$/)) return 'image';
+    return 'unknown';
   };
 
   // Calculate distance between two coordinates in km (Haversine formula)
@@ -418,6 +452,11 @@ function IncidentDetail() {
       </div>
     );
   }
+
+  const mediaItems = getMediaUrls().map((url) => ({
+    url,
+    type: getMediaType(url),
+  }));
 
   return (
     <div className="p-6 max-w-6xl mx-auto dark:bg-gray-950">
@@ -515,28 +554,73 @@ function IncidentDetail() {
           </div>
 
           {/* Media */}
-          {getMediaUrls().length > 0 && (
+          {mediaItems.length > 0 && (
             <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
               <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
                 <ImageIcon size={20} />
-                Media ({getMediaUrls().length})
+                Media ({mediaItems.length})
               </h2>
               <div className="grid grid-cols-3 gap-4">
-                {getMediaUrls().map((url, index) => (
-                  <a
-                    key={index}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="aspect-square bg-gray-100 rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
-                  >
-                    <img
-                      src={url}
-                      alt={`Media ${index + 1}`}
-                      className="w-full h-full object-cover"
-                    />
-                  </a>
-                ))}
+                {mediaItems.map((item, index) => {
+                  const isVideo = item.type === 'video';
+                  const isImage = item.type === 'image';
+
+                  if (isVideo) {
+                    return (
+                      <div
+                        key={index}
+                        className="relative aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg overflow-hidden"
+                      >
+                        <video
+                          src={item.url}
+                          controls
+                          preload="metadata"
+                          className="w-full h-full object-cover"
+                        >
+                          Your browser does not support the video tag.
+                        </video>
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="absolute bottom-2 right-2 text-xs px-2 py-1 bg-black/70 text-white rounded"
+                        >
+                          Open
+                        </a>
+                      </div>
+                    );
+                  }
+
+                  if (isImage) {
+                    return (
+                      <a
+                        key={index}
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
+                      >
+                        <img
+                          src={item.url}
+                          alt={`Media ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      </a>
+                    );
+                  }
+
+                  return (
+                    <a
+                      key={index}
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-center aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors"
+                    >
+                      View file
+                    </a>
+                  );
+                })}
               </div>
             </div>
           )}

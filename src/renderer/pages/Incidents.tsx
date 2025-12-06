@@ -2,6 +2,7 @@ import { ChevronRight, Filter, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { barangaysByMunicipality, municipalities } from '../data/camarinesNorteLocations';
+import { getSessionScope, isChiefScoped, SessionScope } from '../utils/sessionScope';
 
 interface Incident {
   id: string;
@@ -16,13 +17,20 @@ interface Incident {
 function Incidents() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const initialScope = getSessionScope();
+  const [sessionScope, setSessionScope] = useState<SessionScope>(initialScope);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterAgency, setFilterAgency] = useState(searchParams.get('agency') || '');
+  const [filterAgency, setFilterAgency] = useState(
+    initialScope.role === 'Chief' && initialScope.agencyShortName
+      ? initialScope.agencyShortName.toLowerCase()
+      : searchParams.get('agency') || ''
+  );
   const [filterStatus, setFilterStatus] = useState('');
   const [filterMunicipality, setFilterMunicipality] = useState('');
   const [filterBarangay, setFilterBarangay] = useState('');
+  const chiefScopeActive = isChiefScoped(sessionScope);
 
   const barangayOptions = useMemo(
     () => (filterMunicipality ? barangaysByMunicipality[filterMunicipality] || [] : []),
@@ -45,12 +53,29 @@ function Incidents() {
 
   const loadIncidents = async () => {
     try {
-      const data = await window.api.getIncidents({
+      const scope = getSessionScope();
+      setSessionScope(scope);
+
+      const filters: any = {
         agency: filterAgency || undefined,
         status: filterStatus || undefined,
         municipality: filterMunicipality || undefined,
         barangay: filterBarangay || undefined,
-      });
+      };
+
+      if (isChiefScoped(scope)) {
+        filters.agency = scope.agencyShortName?.toLowerCase();
+        filters.stationId = scope.stationId;
+
+        if (scope.agencyShortName) {
+          const scopedAgency = scope.agencyShortName.toLowerCase();
+          if (filterAgency !== scopedAgency) {
+            setFilterAgency(scopedAgency);
+          }
+        }
+      }
+
+      const data = await window.api.getIncidents(filters);
       setIncidents(data);
     } catch (error: any) {
       console.error('Failed to load incidents:', error?.message || error);
@@ -109,6 +134,12 @@ function Incidents() {
         </span>
       </div>
 
+      {chiefScopeActive && (
+        <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
+          Station scope active: {sessionScope.stationName || `Station ${sessionScope.stationId}`} ({sessionScope.agencyShortName || 'Agency'} • Chief). Agency filter is locked to your station.
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700 mb-6">
         <div className="flex items-center gap-4">
@@ -130,6 +161,7 @@ function Incidents() {
             <select
               value={filterAgency}
               onChange={(e) => setFilterAgency(e.target.value)}
+              disabled={chiefScopeActive}
               className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
             >
               <option value="">All Agencies</option>

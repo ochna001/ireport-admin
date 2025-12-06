@@ -6,7 +6,6 @@ import {
     CheckCircle,
     Clock,
     Download,
-    FileJson,
     FileSpreadsheet,
     FileText,
     Filter,
@@ -17,7 +16,9 @@ import {
     RefreshCw,
     TrendingUp
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { barangaysByMunicipality, municipalities } from '../data/camarinesNorteLocations';
+import { getSessionScope, isChiefScoped, SessionScope } from '../utils/sessionScope';
 
 interface ReportStats {
   total: number;
@@ -39,6 +40,8 @@ interface ReportConfig {
   customEndDate: string;
   agencies: string[];
   statuses: string[];
+  municipality: string;
+  barangay: string;
   includeFields: {
     description: boolean;
     location: boolean;
@@ -46,7 +49,7 @@ interface ReportConfig {
     timeline: boolean;
     media: boolean;
   };
-  format: 'csv' | 'json' | 'pdf';
+  format: 'csv' | 'pdf';
   groupBy: 'none' | 'agency' | 'status' | 'date' | 'location';
 }
 
@@ -54,19 +57,33 @@ const AGENCIES = ['PNP', 'BFP', 'PDRRMO'];
 const STATUSES = ['pending', 'assigned', 'responding', 'resolved'];
 
 function Reports() {
+  const initialScope = getSessionScope();
+  const [sessionScope, setSessionScope] = useState<SessionScope>(initialScope);
   const [stats, setStats] = useState<ReportStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [dateRange, setDateRange] = useState('7d');
-  const [selectedAgency, setSelectedAgency] = useState('all');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [selectedAgency, setSelectedAgency] = useState(
+    initialScope.role === 'Chief' && initialScope.agencyShortName
+      ? initialScope.agencyShortName.toLowerCase()
+      : 'all'
+  );
   const [generating, setGenerating] = useState(false);
   const [showReportBuilder, setShowReportBuilder] = useState(false);
+  const [skipCacheNext, setSkipCacheNext] = useState(false);
   
   const [reportConfig, setReportConfig] = useState<ReportConfig>({
     dateRange: '30d',
     customStartDate: '',
     customEndDate: '',
-    agencies: [],
+    agencies:
+      initialScope.role === 'Chief' && initialScope.agencyShortName
+        ? [initialScope.agencyShortName.toUpperCase()]
+        : [],
     statuses: [],
+    municipality: '',
+    barangay: '',
     includeFields: {
       description: true,
       location: true,
@@ -77,15 +94,87 @@ function Reports() {
     format: 'csv',
     groupBy: 'none',
   });
+  const chiefScopeActive = isChiefScoped(sessionScope);
+
+  const barangayOptions = useMemo(
+    () => (reportConfig.municipality ? barangaysByMunicipality[reportConfig.municipality] || [] : []),
+    [reportConfig.municipality]
+  );
 
   useEffect(() => {
     loadStats();
-  }, [dateRange, selectedAgency]);
+  }, [dateRange, selectedAgency, customStart, customEnd]);
 
-  const loadStats = async () => {
+  useEffect(() => {
+    if (chiefScopeActive && sessionScope.agencyShortName) {
+      const scopedAgency = sessionScope.agencyShortName.toUpperCase();
+      setReportConfig(prev => ({
+        ...prev,
+        agencies: [scopedAgency],
+      }));
+      setSelectedAgency(sessionScope.agencyShortName.toLowerCase());
+    }
+  }, [chiefScopeActive, sessionScope.agencyShortName]);
+
+  const loadStats = async (skipCache = false) => {
+    if (skipCache) setSkipCacheNext(true);
     setLoading(true);
     try {
-      const data = await window.api.getStats();
+      const dateFilters = (() => {
+        const to = new Date();
+        let from: Date | null = null;
+
+        switch (dateRange) {
+          case 'today':
+            from = new Date(to);
+            from.setHours(0, 0, 0, 0);
+            break;
+          case '7d':
+            from = new Date(to.getTime() - 6 * 24 * 60 * 60 * 1000);
+            break;
+          case '30d':
+            from = new Date(to.getTime() - 29 * 24 * 60 * 60 * 1000);
+            break;
+          case '90d':
+            from = new Date(to.getTime() - 89 * 24 * 60 * 60 * 1000);
+            break;
+          case '1y':
+            from = new Date(to.getTime() - 364 * 24 * 60 * 60 * 1000);
+            break;
+          case 'custom':
+            if (!customStart || !customEnd) return null;
+            from = new Date(customStart);
+            const customTo = new Date(customEnd);
+            customTo.setHours(23, 59, 59, 999);
+            return { from: from.toISOString(), to: customTo.toISOString() };
+          default:
+            break;
+        }
+
+        if (from) {
+          const toCopy = new Date(to);
+          toCopy.setHours(23, 59, 59, 999);
+          return { from: from.toISOString(), to: toCopy.toISOString() };
+        }
+        return null;
+      })();
+
+      const payload: any = dateFilters ? { ...dateFilters } : {};
+      const scope = getSessionScope();
+      setSessionScope(scope);
+
+      if (isChiefScoped(scope)) {
+        payload.stationId = scope.stationId;
+        if (scope.agencyShortName) {
+          payload.agency = scope.agencyShortName.toLowerCase();
+        }
+      }
+
+      if (skipCacheNext || skipCache) {
+        payload.skipCache = true;
+      }
+
+      const data = await window.api.getStats(Object.keys(payload).length ? payload : undefined);
       // Use real data from API
       setStats({
         ...data,
@@ -104,6 +193,7 @@ function Reports() {
       console.error('Failed to load stats:', error);
     } finally {
       setLoading(false);
+      setSkipCacheNext(false);
     }
   };
 
@@ -141,6 +231,7 @@ function Reports() {
   };
 
   const toggleAgency = (agency: string) => {
+    if (chiefScopeActive) return;
     setReportConfig(prev => ({
       ...prev,
       agencies: prev.agencies.includes(agency)
@@ -234,12 +325,29 @@ function Reports() {
       if (reportConfig.statuses.length > 0) {
         filters.status = reportConfig.statuses[0]; // API supports single status for now
       }
+      if (reportConfig.municipality) {
+        filters.municipality = reportConfig.municipality;
+      }
+      if (reportConfig.barangay) {
+        filters.barangay = reportConfig.barangay;
+      }
+
+      const scope = getSessionScope();
+      setSessionScope(scope);
+      if (isChiefScoped(scope)) {
+        filters.stationId = scope.stationId;
+        filters.agency = scope.agencyShortName?.toLowerCase();
+      }
 
       const incidents = await window.api.getIncidents(filters);
       
       // Filter by date range
       let filteredIncidents = incidents;
       const now = new Date();
+
+      if (isChiefScoped(scope) && scope.stationId) {
+        filteredIncidents = filteredIncidents.filter((i: any) => i.assigned_station_id === scope.stationId);
+      }
       
       if (reportConfig.dateRange !== 'custom') {
         const daysMap: Record<string, number> = {
@@ -270,6 +378,18 @@ function Reports() {
       if (reportConfig.statuses.length > 0) {
         filteredIncidents = filteredIncidents.filter((i: any) => 
           reportConfig.statuses.includes(i.status)
+        );
+      }
+      if (reportConfig.municipality) {
+        const muni = reportConfig.municipality.toLowerCase();
+        filteredIncidents = filteredIncidents.filter((i: any) => 
+          (i.location_address || '').toLowerCase().includes(muni)
+        );
+      }
+      if (reportConfig.barangay) {
+        const brgy = reportConfig.barangay.toLowerCase();
+        filteredIncidents = filteredIncidents.filter((i: any) => 
+          (i.location_address || '').toLowerCase().includes(brgy)
         );
       }
 
@@ -355,10 +475,6 @@ function Reports() {
         }
         filename = generateFilename('csv');
         mimeType = 'text/csv';
-      } else if (reportConfig.format === 'json') {
-        content = JSON.stringify(finalData, null, 2);
-        filename = generateFilename('json');
-        mimeType = 'application/json';
       } else if (reportConfig.format === 'pdf') {
         // Generate PDF with preview first
         const html = generatePrintableHTML(finalData, reportConfig);
@@ -502,11 +618,30 @@ function Reports() {
             onChange={(e) => setDateRange(e.target.value)}
             className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
           >
+            <option value="today">Today</option>
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
             <option value="90d">Last 90 days</option>
             <option value="1y">Last year</option>
+            <option value="custom">Custom</option>
           </select>
+          {dateRange === 'custom' && (
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+              />
+              <span className="text-gray-500 dark:text-gray-400">to</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+              />
+            </div>
+          )}
           <button
             onClick={() => setShowReportBuilder(!showReportBuilder)}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
@@ -515,7 +650,7 @@ function Reports() {
             Generate Report
           </button>
           <button
-            onClick={loadStats}
+            onClick={() => loadStats(true)}
             className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors dark:text-white"
           >
             <RefreshCw className="w-4 h-4" />
@@ -523,6 +658,12 @@ function Reports() {
           </button>
         </div>
       </div>
+
+      {chiefScopeActive && (
+        <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
+          Reports are limited to Station {sessionScope.stationName || sessionScope.stationId} ({sessionScope.agencyShortName || 'Agency'} • Chief). Agency selection is locked to your station.
+        </div>
+      )}
 
       {/* Report Builder Panel */}
       {showReportBuilder && (
@@ -593,12 +734,15 @@ function Reports() {
                     <button
                       key={agency}
                       onClick={() => toggleAgency(agency)}
+                      disabled={chiefScopeActive}
                       className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
                         reportConfig.agencies.includes(agency)
                           ? agency === 'PNP' ? 'bg-blue-600 text-white' 
                             : agency === 'BFP' ? 'bg-red-600 text-white'
                             : 'bg-teal-600 text-white'
                           : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                      } ${
+                        chiefScopeActive ? 'opacity-60 cursor-not-allowed' : ''
                       }`}
                     >
                       {agency}
@@ -629,6 +773,44 @@ function Reports() {
                       {status}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Municipality / Barangay */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Municipality
+                  </label>
+                  <select
+                    value={reportConfig.municipality}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setReportConfig(prev => ({ ...prev, municipality: value, barangay: '' }));
+                    }}
+                    className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white text-sm"
+                  >
+                    <option value="">All Municipalities</option>
+                    {municipalities.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Barangay
+                  </label>
+                  <select
+                    value={reportConfig.barangay}
+                    onChange={(e) => setReportConfig(prev => ({ ...prev, barangay: e.target.value }))}
+                    disabled={!reportConfig.municipality}
+                    className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white text-sm disabled:opacity-60"
+                  >
+                    <option value="">All Barangays</option>
+                    {barangayOptions.map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -692,17 +874,6 @@ function Reports() {
                   >
                     <FileSpreadsheet className="w-4 h-4" />
                     CSV
-                  </button>
-                  <button
-                    onClick={() => setReportConfig(prev => ({ ...prev, format: 'json' }))}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
-                      reportConfig.format === 'json'
-                        ? 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-400'
-                        : 'border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    <FileJson className="w-4 h-4" />
-                    JSON
                   </button>
                   <button
                     onClick={() => setReportConfig(prev => ({ ...prev, format: 'pdf' }))}
@@ -865,62 +1036,100 @@ function Reports() {
       </div>
 
       {/* Trend Chart */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 md:p-6">
         <h3 className="font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
           <TrendingUp className="w-5 h-5 text-gray-400" />
           Daily Incident Trend
-          <span className="text-sm font-normal text-gray-400 ml-2">(Last 7 days)</span>
+          <span className="text-sm font-normal text-gray-400 ml-2">
+            {dateRange === 'custom' && customStart && customEnd
+              ? `${customStart} to ${customEnd}`
+              : dateRange === 'today'
+                ? 'Today'
+                : dateRange === '7d'
+                  ? 'Last 7 days'
+                  : dateRange === '30d'
+                    ? 'Last 30 days'
+                    : dateRange === '90d'
+                      ? 'Last 90 days'
+                      : dateRange === '1y'
+                        ? 'Last year'
+                        : 'All time'}
+          </span>
         </h3>
         {stats?.dailyTrend && stats.dailyTrend.length > 0 ? (
-          <div className="h-64">
-            {/* Bar Chart */}
-            <div className="flex items-end justify-between h-48 gap-2 px-2">
-              {(() => {
-                const maxCount = Math.max(...stats.dailyTrend.map(d => d.count), 1);
-                return stats.dailyTrend.map((day, index) => {
-                  const heightPercent = maxCount > 0 ? (day.count / maxCount) * 100 : 0;
-                  const dayName = new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' });
-                  const dayNum = new Date(day.date).getDate();
-                  
-                  return (
-                    <div key={index} className="flex-1 flex flex-col items-center gap-1">
-                      <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-                        {day.count}
-                      </span>
-                      <div className="w-full flex-1 flex items-end">
-                        <div 
-                          className={`w-full rounded-t-md transition-all duration-500 hover:bg-blue-600 cursor-pointer ${day.count > 0 ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                          style={{ height: day.count > 0 ? `${heightPercent}%` : '4px' }}
-                          title={`${day.date}: ${day.count} incidents`}
-                        />
+          <div className="flex flex-col gap-4">
+            {/* Bar Chart with horizontal scroll when many days */}
+            <div className="overflow-x-auto pb-3">
+              <div
+                className="flex items-end gap-3 px-3 md:px-6 pt-2 pb-4 min-h-[12rem]"
+                style={{
+                  minWidth: stats.dailyTrend.length < 14 ? '100%' : `${stats.dailyTrend.length * 46}px`,
+                  justifyContent: stats.dailyTrend.length < 14 ? 'space-between' : 'flex-start',
+                }}
+              >
+                {(() => {
+                  const maxCount = Math.max(...stats.dailyTrend.map(d => d.count), 1);
+                  const totalDays = stats.dailyTrend.length;
+                  const labelStep = totalDays > 42 ? 4 : totalDays > 28 ? 3 : totalDays > 16 ? 2 : 1;
+
+                  return stats.dailyTrend.map((day, index) => {
+                    const heightPercent = maxCount > 0 ? (day.count / maxCount) * 100 : 0;
+                    const dayName = new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' });
+                    const dayNum = new Date(day.date).getDate();
+                    const showLabel = (index % labelStep === 0) || index === totalDays - 1;
+                    
+                    return (
+                      <div key={index} className="w-8 flex flex-col items-center gap-1">
+                        <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                          {day.count}
+                        </span>
+                        <div className="w-full h-40 flex items-end">
+                          <div 
+                            className={`w-full rounded-t-md transition-all duration-500 hover:bg-blue-600 cursor-pointer ${day.count > 0 ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                            style={{ height: `${day.count > 0 ? heightPercent : 4}%` }}
+                            title={`${day.date}: ${day.count} incidents`}
+                          />
+                        </div>
+                        <div className="text-center h-8">
+                          {showLabel ? (
+                            <>
+                              <p className="text-[10px] font-medium text-gray-600 dark:text-gray-300 leading-tight">{dayName}</p>
+                              <p className="text-[10px] text-gray-400 leading-tight">{dayNum}</p>
+                            </>
+                          ) : (
+                            <span className="text-[10px] text-transparent select-none">.</span>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-center">
-                        <p className="text-xs font-medium text-gray-600 dark:text-gray-300">{dayName}</p>
-                        <p className="text-xs text-gray-400">{dayNum}</p>
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
+                    );
+                  });
+                })()}
+              </div>
             </div>
             {/* Summary */}
-            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 flex justify-between text-sm">
-              <span className="text-gray-500 dark:text-gray-400">
-                Total this week: <span className="font-semibold text-gray-700 dark:text-gray-200">
+            <div className="pt-4 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between text-sm px-3 md:px-6">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 dark:text-gray-400">
+                  Total this week:
+                </span>
+                <span className="font-semibold text-gray-700 dark:text-gray-200">
                   {stats.dailyTrend.reduce((sum, d) => sum + d.count, 0)}
                 </span>
-              </span>
-              <span className="text-gray-500 dark:text-gray-400">
-                Daily avg: <span className="font-semibold text-gray-700 dark:text-gray-200">
-                  {(stats.dailyTrend.reduce((sum, d) => sum + d.count, 0) / 7).toFixed(1)}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 dark:text-gray-400">
+                  Daily avg:
                 </span>
-              </span>
+                <span className="font-semibold text-gray-700 dark:text-gray-200">
+                  {(stats.dailyTrend.reduce((sum, d) => sum + d.count, 0) / Math.max(stats.dailyTrend.length, 1)).toFixed(1)}
+                </span>
+              </div>
             </div>
           </div>
         ) : (
           <div className="h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-900 rounded-lg border-2 border-dashed border-gray-200 dark:border-gray-600">
             <div className="text-center">
-              <BarChart3 className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+              <BarChart3 className="w-12 h-14 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
               <p className="text-gray-500 dark:text-gray-400 font-medium">No Data Yet</p>
               <p className="text-gray-400 dark:text-gray-500 text-sm">Trend data will appear once incidents are recorded</p>
             </div>

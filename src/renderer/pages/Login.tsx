@@ -1,38 +1,71 @@
-import { Lock, Shield } from 'lucide-react';
+import { Lock, Shield, UserCircle2, KeyRound } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 function Login({ onLogin }: { onLogin: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [authMode, setAuthMode] = useState<'admin' | 'chief'>('admin');
   const navigate = useNavigate();
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Empty check
-    if (!pin) {
-      setErrorMessage('Please enter your PIN');
-      return;
-    }
-    
-    // Length validation
-    if (pin.length < 4) {
-      setErrorMessage('PIN must be at least 4 digits');
+    if (authMode === 'admin') {
+      // Admin: PIN only (default 1234)
+      if (!pin) {
+        setErrorMessage('Please enter your PIN');
+        return;
+      }
+      if (pin.length < 4) {
+        setErrorMessage('PIN must be at least 4 digits');
+        return;
+      }
+
+      const storedPin = localStorage.getItem('ireport_admin_pin') || '1234';
+      if (pin !== storedPin) {
+        setErrorMessage('Invalid PIN. Please try again.');
+        setPin('');
+        return;
+      }
+
+      // Clear backend caches to avoid stale scoped data
+      window.api.logout?.().catch(() => {});
+
+      localStorage.setItem('ireport_admin_auth', 'true');
+      localStorage.setItem('ireport_admin_current_user', JSON.stringify({ role: 'Admin' }));
+      onLogin();
+      navigate('/dashboard');
       return;
     }
 
-    // Check stored PIN or use default
-    const storedPin = localStorage.getItem('ireport_admin_pin') || '1234';
-    
-    if (pin === storedPin) {
-      localStorage.setItem('ireport_admin_auth', 'true');
-      onLogin();
-      navigate('/dashboard');
-    } else {
-      setErrorMessage('Invalid PIN. Please try again.');
-      setPin('');
+    // Chief: Supabase auth (email + password)
+    if (!email.trim()) {
+      setErrorMessage('Please enter your email');
+      return;
     }
+    if (!password) {
+      setErrorMessage('Please enter your password');
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    window.api.loginChief({ email: normalizedEmail, password })
+      .then((profile) => {
+        // Clear backend caches to avoid stale scoped data
+        window.api.logout?.().catch(() => {});
+
+        localStorage.setItem('ireport_admin_auth', 'true');
+        localStorage.setItem('ireport_admin_current_user', JSON.stringify(profile));
+        onLogin();
+        navigate('/dashboard');
+      })
+      .catch((err: any) => {
+        console.error('Chief login failed:', err);
+        setErrorMessage(err?.message || 'Login failed. Please check your credentials.');
+      });
   };
 
   const handlePinChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -57,9 +90,77 @@ function Login({ onLogin }: { onLogin: () => void }) {
 
         <div className="p-8">
           <form onSubmit={handleLogin}>
+            <div className="grid grid-cols-2 gap-2 mb-6">
+              <button
+                type="button"
+                onClick={() => { setAuthMode('admin'); setErrorMessage(''); }}
+                className={`w-full py-2 rounded-lg text-sm font-semibold border ${
+                  authMode === 'admin'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-200'
+                }`}
+              >
+                Admin (PIN)
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthMode('chief'); setErrorMessage(''); }}
+                className={`w-full py-2 rounded-lg text-sm font-semibold border ${
+                  authMode === 'chief'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-200'
+                }`}
+              >
+                Chief (Supabase)
+              </button>
+            </div>
+
+            {authMode === 'chief' && (
+              <>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Work Email
+                  </label>
+                  <div className="relative">
+                    <UserCircle2 className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        setErrorMessage('');
+                      }}
+                      className="w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors border-gray-200 focus:ring-blue-200 focus:border-blue-500"
+                      placeholder="chief@agency.gov.ph"
+                      autoFocus={authMode === 'chief'}
+                    />
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setErrorMessage('');
+                      }}
+                      className="w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors border-gray-200 focus:ring-blue-200 focus:border-blue-500"
+                      placeholder="••••••••"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Enter Access PIN
+                {authMode === 'admin' ? 'Enter Access PIN' : 'Admin PIN (optional)'}
               </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
@@ -74,7 +175,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                       : 'border-gray-200 focus:ring-blue-200 focus:border-blue-500'
                   }`}
                   placeholder="••••"
-                  autoFocus
+                  disabled={authMode === 'chief'}
                 />
               </div>
               {errorMessage && (
