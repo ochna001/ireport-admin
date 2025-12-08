@@ -123,8 +123,8 @@ function createWindow() {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           process.env.NODE_ENV === 'development'
-            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host ws://localhost:*; frame-src 'self' https://www.openstreetmap.org https://maps.google.com;"
-            : "default-src 'self'; script-src 'self' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host; frame-src 'self' https://www.openstreetmap.org https://maps.google.com;"
+            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host https://router.project-osrm.org ws://localhost:*; frame-src 'self' https://www.openstreetmap.org https://maps.google.com;"
+            : "default-src 'self'; script-src 'self' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host https://router.project-osrm.org; frame-src 'self' https://www.openstreetmap.org https://maps.google.com;"
         ]
       }
     });
@@ -266,10 +266,20 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
     query = query.ilike('location_address', `%${barangay}%`);
   }
   
-  // Search by description, reporter name, or ID
+  // Search by description, reporter name, or exact ID (UUID)
   if (filters.search) {
     const searchTerm = sanitize(filters.search);
-    query = query.or(`description.ilike.%${searchTerm}%,reporter_name.ilike.%${searchTerm}%,id.ilike.%${searchTerm}%`);
+    console.log('[Admin] Searching incidents for:', searchTerm);
+
+    // If the term looks like a full UUID, also match on id.eq.
+    // PostgREST does not allow casts (id::text) in the filter key, so we only support exact UUID here.
+    const uuidPattern = /^[0-9a-fA-F-]{36}$/;
+    if (uuidPattern.test(searchTerm)) {
+      query = query.or(`description.ilike.*${searchTerm}*,reporter_name.ilike.*${searchTerm}*,id.eq.${searchTerm}`);
+    } else {
+      // Default: search only in text fields
+      query = query.or(`description.ilike.*${searchTerm}*,reporter_name.ilike.*${searchTerm}*`);
+    }
   }
 
   query = query.order('created_at', { ascending: false });
@@ -597,24 +607,69 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
     }
 
     // Create notifications for assigned officers
-    if (officerIds && officerIds.length > 0) {
-      const notifications = officerIds.map(officerId => ({
-        recipient_id: officerId,
-        incident_id: id,
-        title: 'New Incident Assignment',
-        body: `You have been assigned to incident #${id.slice(0, 8)}. Status: ${status}`,
-        is_read: false,
-        created_at: now
-      }));
+    if (officerIds !== undefined) {
+      const oldOfficerIds: string[] = currentIncident?.assigned_officer_ids || [];
+      const newOfficerIds: string[] = officerIds;
+      
+      // Determine which officers are new, still assigned, or removed
+      const addedOfficers = newOfficerIds.filter(oid => !oldOfficerIds.includes(oid));
+      const stillAssigned = newOfficerIds.filter(oid => oldOfficerIds.includes(oid));
+      const removedOfficers = oldOfficerIds.filter(oid => !newOfficerIds.includes(oid));
+      
+      const allNotifications: any[] = [];
+      
+      // Notify newly assigned officers
+      if (addedOfficers.length > 0) {
+        addedOfficers.forEach(officerId => {
+          allNotifications.push({
+            recipient_id: officerId,
+            incident_id: id,
+            title: 'New Incident Assignment',
+            body: `You have been assigned to incident #${id.slice(0, 8).toUpperCase()}. Status: ${status}`,
+            is_read: false,
+            created_at: now
+          });
+        });
+      }
+      
+      // Notify officers who remain assigned (only if there were changes to the team)
+      if (stillAssigned.length > 0 && (addedOfficers.length > 0 || removedOfficers.length > 0)) {
+        stillAssigned.forEach(officerId => {
+          allNotifications.push({
+            recipient_id: officerId,
+            incident_id: id,
+            title: 'Incident Team Updated',
+            body: `The response team for incident #${id.slice(0, 8).toUpperCase()} has been updated. Status: ${status}`,
+            is_read: false,
+            created_at: now
+          });
+        });
+      }
+      
+      // Notify removed officers
+      if (removedOfficers.length > 0) {
+        removedOfficers.forEach(officerId => {
+          allNotifications.push({
+            recipient_id: officerId,
+            incident_id: id,
+            title: 'Unassigned from Incident',
+            body: `You have been unassigned from incident #${id.slice(0, 8).toUpperCase()}.`,
+            is_read: false,
+            created_at: now
+          });
+        });
+      }
+      
+      if (allNotifications.length > 0) {
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert(allNotifications);
 
-      const { error: notifError } = await supabase
-        .from('notifications')
-        .insert(notifications);
-
-      if (notifError) {
-        console.error('[Admin] Failed to create officer notifications:', notifError);
-      } else {
-        console.log(`[Admin] Created notifications for ${officerIds.length} officer(s)`);
+        if (notifError) {
+          console.error('[Admin] Failed to create officer notifications:', notifError);
+        } else {
+          console.log(`[Admin] Created ${allNotifications.length} notification(s) for officers`);
+        }
       }
     }
 
@@ -1098,8 +1153,8 @@ ipcMain.handle('auth:loginChief', async (_event, { email, password }: { email: s
     throw new Error(profileError?.message || 'Profile not found');
   }
 
-  if (profile.role !== 'Chief' && profile.role !== 'Desk Officer') {
-    throw new Error(`Access denied: account is a ${profile.role}, not authorized for this login`);
+  if (profile.role !== 'Chief') {
+    throw new Error(`Access denied: only Chief accounts can use this login`);
   }
 
   // Extract municipality from station address or coordinates
@@ -1125,6 +1180,70 @@ ipcMain.handle('auth:loginChief', async (_event, { email, password }: { email: s
     if (detectedMuni) {
       stationMunicipality = detectedMuni;
       console.log(`[Admin] Detected municipality from station coordinates: ${detectedMuni}`);
+    }
+  }
+
+  return {
+    ...profile,
+    agencyShortName: profile.agencies?.short_name,
+    stationName: profile.agency_stations?.name,
+    stationAddress: stationAddress,
+    stationMunicipality: stationMunicipality,
+  };
+});
+
+// Desk Officer auth via Supabase
+ipcMain.handle('auth:loginOfficer', async (_event, { email, password }: { email: string; password: string }) => {
+  if (!email || !password) {
+    throw new Error('Email and password are required');
+  }
+
+  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (authError || !authData.user) {
+    console.error('[Admin] Officer login failed:', authError);
+    throw new Error(authError?.message || 'Invalid credentials');
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select(`
+      *,
+      agencies (name, short_name),
+      agency_stations:station_id (id, name, agency_id, address, latitude, longitude)
+    `)
+    .eq('id', authData.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    console.error('[Admin] Officer profile fetch failed:', profileError);
+    throw new Error(profileError?.message || 'Profile not found');
+  }
+
+  if (profile.role !== 'Desk Officer') {
+    throw new Error(`Access denied: only Desk Officer accounts can use this login`);
+  }
+
+  const stationAddress = profile.agency_stations?.address || '';
+  const municipalities = ['Basud', 'Capalonga', 'Daet', 'Jose Panganiban', 'Labo', 'Mercedes', 'Paracale', 'San Lorenzo Ruiz', 'San Vicente', 'Santa Elena', 'Talisay', 'Vinzons'];
+  let stationMunicipality = '';
+  
+  for (const muni of municipalities) {
+    if (stationAddress.toLowerCase().includes(muni.toLowerCase())) {
+      stationMunicipality = muni;
+      break;
+    }
+  }
+  
+  if (!stationMunicipality && profile.agency_stations?.latitude && profile.agency_stations?.longitude) {
+    const lat = parseFloat(profile.agency_stations.latitude);
+    const lng = parseFloat(profile.agency_stations.longitude);
+    const detectedMuni = getMunicipalityFromCoordinates(lat, lng);
+    if (detectedMuni) {
+      stationMunicipality = detectedMuni;
     }
   }
 
@@ -1402,6 +1521,7 @@ ipcMain.handle('settings:update', async (_event, settings) => {
 
 let previewWindow: BrowserWindow | null = null;
 let pendingPdfData: { html: string; filename: string; pdfBuffer: Buffer } | null = null;
+let userClickedSave = false;
 
 ipcMain.handle('report:preview-pdf', async (_event, { html, filename }) => {
   try {
@@ -1477,9 +1597,9 @@ ipcMain.handle('report:preview-pdf', async (_event, { html, filename }) => {
         </div>
         <script>
           function savePdf() {
-            // Signal main process to save
+            // Set hash to signal save intent before closing
+            location.hash = 'save';
             window.close();
-            // The main process will handle saving after window closes
           }
         </script>
       </body>
@@ -1506,9 +1626,21 @@ ipcMain.handle('report:preview-pdf', async (_event, { html, filename }) => {
     await previewWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(previewHtml)}`);
     previewWindow.show();
 
-    // Handle window close - prompt to save
+    // Handle window close - only save if user clicked Save button
+    previewWindow.on('close', () => {
+      // Check URL hash before window is destroyed
+      try {
+        const currentUrl = previewWindow?.webContents?.getURL() || '';
+        if (currentUrl.includes('#save')) {
+          userClickedSave = true;
+        }
+      } catch (e) {
+        // Window may already be destroyed
+      }
+    });
+
     previewWindow.on('closed', async () => {
-      if (pendingPdfData) {
+      if (pendingPdfData && userClickedSave) {
         const result = await dialog.showSaveDialog(mainWindow!, {
           defaultPath: pendingPdfData.filename,
           filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
@@ -1518,8 +1650,9 @@ ipcMain.handle('report:preview-pdf', async (_event, { html, filename }) => {
           writeFileSync(result.filePath, pendingPdfData.pdfBuffer);
           console.log('[Admin] PDF saved to:', result.filePath);
         }
-        pendingPdfData = null;
       }
+      pendingPdfData = null;
+      userClickedSave = false;
       previewWindow = null;
     });
 
@@ -1731,7 +1864,7 @@ interface DraftSaveParams {
   agencyType: 'pnp' | 'bfp' | 'pdrrmo';
   draftDetails: any;
   status?: 'draft' | 'ready_for_review';
-  authorId: string;
+  authorId?: string;
 }
 
 ipcMain.handle('finalReportDrafts:get', async (_event, incidentId: string) => {
@@ -1762,7 +1895,7 @@ ipcMain.handle('finalReportDrafts:save', async (_event, params: DraftSaveParams)
         agency_type: agencyType.toLowerCase(),
         draft_details: draftDetails,
         status,
-        author_id: authorId,
+        author_id: authorId || null,
         updated_at: new Date().toISOString()
       }, {
         onConflict: 'incident_id'
@@ -1778,7 +1911,7 @@ ipcMain.handle('finalReportDrafts:save', async (_event, params: DraftSaveParams)
   }
 });
 
-ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorId }: { incidentId: string; authorId: string }) => {
+ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorId }: { incidentId: string; authorId?: string }) => {
   try {
     const now = new Date().toISOString();
     
@@ -1793,13 +1926,19 @@ ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorI
       throw new Error('Draft not found');
     }
     
+    // Use draft author_id as fallback if authorId not provided
+    const completedByUserId = authorId || draft.author_id;
+    if (!completedByUserId) {
+      throw new Error('Author ID is required to publish the report. Please ensure you are logged in.');
+    }
+    
     // 2. Upsert into final_reports
     const { error: finalError } = await supabase
       .from('final_reports')
       .upsert({
         incident_id: incidentId,
         report_details: draft.draft_details,
-        completed_by_user_id: authorId,
+        completed_by_user_id: completedByUserId,
         completed_at: now
       }, {
         onConflict: 'incident_id'

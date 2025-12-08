@@ -6,16 +6,18 @@ import {
     History,
     Image as ImageIcon,
     MapPin,
+    RefreshCcw,
     Send,
     User,
     UserCheck,
     Truck,
     X
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getSessionScope, isStationScoped } from '../utils/sessionScope';
 import { FinalReportModal } from '../components/FinalReportModal';
+import { RouteMap } from '../components/RouteMap';
 
 interface Incident {
   id: string;
@@ -120,6 +122,7 @@ function IncidentDetail() {
   const [resources, setResources] = useState<AgencyResource[]>([]);
   const [unitReports, setUnitReports] = useState<any[]>([]);
   const [finalReport, setFinalReport] = useState<any>(null);
+  const [draftReport, setDraftReport] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [newStatus, setNewStatus] = useState('');
   const [notes, setNotes] = useState('');
@@ -148,6 +151,18 @@ function IncidentDetail() {
 
   // Media Upload State
   const [uploadingMedia, setUploadingMedia] = useState(false);
+  
+  // Draft media (from final_report_drafts.draft_details.media_urls)
+  const [draftMediaUrls, setDraftMediaUrls] = useState<string[]>([]);
+  
+  // Routing state
+  const [showRoute, setShowRoute] = useState(false);
+  const [routeInfo, setRouteInfo] = useState<{ distance: number; duration: number } | null>(null);
+
+  // Callback for when route is loaded from RouteMap component
+  const handleRouteLoaded = useCallback((distance: number, duration: number) => {
+    setRouteInfo({ distance, duration });
+  }, []);
 
   useEffect(() => {
     if (id) {
@@ -155,6 +170,7 @@ function IncidentDetail() {
       loadHistory();
       loadUnitReports();
       loadFinalReport();
+      loadDraft();
     }
   }, [id]);
 
@@ -217,6 +233,35 @@ function IncidentDetail() {
       setFinalReport(data);
     } catch (error) {
       console.error('Failed to load final report:', error);
+    }
+  };
+
+  const loadDraft = async () => {
+    try {
+      const draft = await window.api.getFinalReportDraft(id!);
+      setDraftReport(draft);
+      if (draft?.draft_details?.media_urls) {
+        const urls = draft.draft_details.media_urls;
+        if (Array.isArray(urls)) {
+          setDraftMediaUrls(urls.filter((u: any): u is string => typeof u === 'string'));
+        } else if (typeof urls === 'string') {
+          // Handle JSON string or single URL
+          try {
+            const parsed = JSON.parse(urls);
+            if (Array.isArray(parsed)) {
+              setDraftMediaUrls(parsed.filter((u: any): u is string => typeof u === 'string'));
+            }
+          } catch {
+            if (urls.trim()) setDraftMediaUrls([urls.trim()]);
+          }
+        }
+      } else {
+        setDraftMediaUrls([]);
+      }
+    } catch (error) {
+      console.error('Failed to load draft:', error);
+      setDraftMediaUrls([]);
+      setDraftReport(null);
     }
   };
 
@@ -355,6 +400,161 @@ function IncidentDetail() {
     } finally {
       setUpdating(false);
     }
+  };
+
+  // Format details for display (Shared logic with FinalReportModal)
+  const formatReportDetails = (details: any) => {
+    if (!details) return null;
+    
+    const entries = Object.entries(details).filter(([key, value]) => {
+      // Skip internal fields and empty values
+      if (key === 'timestamp' || key.endsWith('_data')) return false;
+      if (value === '' || value === '0' || value === null || value === undefined) return false;
+      return true;
+    });
+    
+    return entries;
+  };
+
+  const renderReportValue = (key: string, value: any) => {
+    // Try to parse JSON strings that look like arrays/objects
+    let content = value;
+    if (typeof value === 'string' && (value.trim().startsWith('[') || value.trim().startsWith('{'))) {
+      try {
+        content = JSON.parse(value);
+      } catch (e) {
+        // Not valid JSON, keep as string
+      }
+    }
+
+    if (Array.isArray(content)) {
+      // Handle array of persons (suspects/victims)
+      if (content.length > 0 && (content[0].firstName || content[0].lastName)) {
+        return (
+          <div className="space-y-2 mt-1">
+            {content.map((person: any, idx: number) => (
+              <div key={idx} className="bg-gray-50 dark:bg-gray-700/50 p-2 rounded text-sm border border-gray-100 dark:border-gray-700">
+                <p className="font-medium text-gray-800 dark:text-gray-200">
+                  {person.firstName} {person.middleName} {person.lastName}
+                </p>
+                {person.alias && <p className="text-xs text-gray-500">Alias: {person.alias}</p>}
+                {(person.address || person.occupation) && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    {[person.address, person.occupation].filter(Boolean).join(' • ')}
+                  </p>
+                )}
+                {person.status && <p className="text-xs text-gray-500">Status: {person.status}</p>}
+              </div>
+            ))}
+          </div>
+        );
+      }
+      // Generic array
+      return (
+        <ul className="list-disc list-inside mt-1">
+          {content.map((item: any, idx: number) => (
+            <li key={idx} className="text-gray-800 dark:text-gray-200">
+              {typeof item === 'object' ? JSON.stringify(item) : String(item)}
+            </li>
+          ))}
+        </ul>
+      );
+    }
+
+    if (typeof content === 'object' && content !== null) {
+      return <pre className="text-xs bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto">{JSON.stringify(content, null, 2)}</pre>;
+    }
+
+    return <p className="mt-1 text-gray-800 dark:text-white whitespace-pre-wrap">{String(content)}</p>;
+  };
+
+  const handleExportPDF = () => {
+    if (!finalReport) return;
+    
+    // Create a printable window
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow popups to export PDF');
+      return;
+    }
+    
+    const detailsHtml = formatReportDetails(finalReport.report_details)?.map(([key, value]) => {
+      // Simple rendering for print - JSON stringify complex objects for now if renderReportValue logic is too complex to inject
+      // We'll do a basic rendering here
+      let content = value;
+      try {
+        if (typeof value === 'string' && (value.trim().startsWith('[') || value.trim().startsWith('{'))) {
+           content = JSON.parse(value);
+        }
+      } catch {}
+
+      let valueHtml = '';
+      if (Array.isArray(content) && content.length > 0 && (content[0].firstName || content[0].lastName)) {
+         valueHtml = content.map((p: any) => `
+           <div style="margin-bottom: 8px; padding: 8px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;">
+             <strong>${p.firstName} ${p.middleName || ''} ${p.lastName}</strong>
+             ${p.address ? `<br><span style="color: #666; font-size: 0.9em;">${p.address}</span>` : ''}
+           </div>
+         `).join('');
+      } else if (typeof content === 'object') {
+         valueHtml = `<pre style="white-space: pre-wrap; font-size: 0.8em; background: #f3f4f6; padding: 8px;">${JSON.stringify(content, null, 2)}</pre>`;
+      } else {
+         valueHtml = `<p style="white-space: pre-wrap; margin: 0;">${String(content)}</p>`;
+      }
+
+      return `
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #6b7280; margin-bottom: 4px;">
+            ${key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
+          </div>
+          ${valueHtml}
+        </div>
+      `;
+    }).join('') || '';
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Final Report - Incident #${incident?.id?.slice(0,8).toUpperCase()}</title>
+          <style>
+            body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding: 40px; color: #111; line-height: 1.5; }
+            .header { border-bottom: 2px solid #e5e7eb; padding-bottom: 20px; margin-bottom: 30px; }
+            .title { font-size: 24px; font-weight: bold; margin-bottom: 8px; }
+            .subtitle { color: #6b7280; font-size: 14px; }
+            .meta { margin-bottom: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; font-size: 14px; }
+            .meta-item { margin-bottom: 4px; }
+            .label { color: #6b7280; font-weight: 500; }
+            .footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; text-align: center; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="title">${getAgencyName(incident?.agency_type || '')} - Final Report</div>
+            <div class="subtitle">Incident ID: #${incident?.id?.toUpperCase()}</div>
+          </div>
+          
+          <div class="meta">
+            <div class="meta-item"><span class="label">Date Reported:</span> ${incident?.created_at ? new Date(incident.created_at).toLocaleString() : 'N/A'}</div>
+            <div class="meta-item"><span class="label">Reporter:</span> ${incident?.reporter_name || 'N/A'}</div>
+            <div class="meta-item"><span class="label">Location:</span> ${incident?.location_address || 'N/A'}</div>
+            <div class="meta-item"><span class="label">Status:</span> ${incident?.status?.toUpperCase()}</div>
+          </div>
+
+          <div class="content">
+            ${detailsHtml}
+          </div>
+
+          <div class="footer">
+            Generated on ${new Date().toLocaleString()} • iReport Admin System
+            <br>
+            Completed at: ${finalReport.completed_at ? new Date(finalReport.completed_at).toLocaleString() : 'N/A'}
+          </div>
+        </body>
+      </html>
+    `);
+    
+    printWindow.document.close();
+    printWindow.print();
   };
 
   const handleSubmitFinalReport = async () => {
@@ -536,6 +736,12 @@ function IncidentDetail() {
       .slice(0, 5); // Top 5 nearest
   };
 
+  // Get the assigned station for routing
+  const getAssignedStation = (): AgencyStation | undefined => {
+    if (!incident?.assigned_station_id) return undefined;
+    return stations.find(s => s.id === incident.assigned_station_id);
+  };
+
   const getAgencyIcon = (shortName: string) => {
     switch (shortName?.toUpperCase()) {
       case 'PNP': return '🚔';
@@ -543,6 +749,16 @@ function IncidentDetail() {
       case 'PDRRMO': return '🚑';
       default: return '📍';
     }
+  };
+
+  const handleRefresh = () => {
+    if (!id) return;
+    setLoading(true);
+    loadIncident();
+    loadHistory();
+    loadUnitReports();
+    loadFinalReport();
+    loadDraft();
   };
 
   if (loading) {
@@ -567,27 +783,39 @@ function IncidentDetail() {
     );
   }
 
-  const mediaItems = getMediaUrls().map((url) => ({
+  // Combine incident media_urls with draft media_urls (deduplicated)
+  const allMediaUrls = [...new Set([...getMediaUrls(), ...draftMediaUrls])];
+  const mediaItems = allMediaUrls.map((url) => ({
     url,
     type: getMediaType(url),
+    source: draftMediaUrls.includes(url) && !getMediaUrls().includes(url) ? 'draft' : 'incident',
   }));
 
   return (
     <div className="p-6 max-w-6xl mx-auto dark:bg-gray-950">
       {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
-        <button
-          onClick={() => navigate('/incidents')}
-          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg dark:text-white"
-        >
-          <ArrowLeft size={24} />
-        </button>
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">
-            Incident #{incident.id.substring(0, 8).toUpperCase()}
-          </h1>
-          <p className="text-gray-500 dark:text-gray-400">{getAgencyName(incident.agency_type)}</p>
+      <div className="flex items-center justify-between gap-4 mb-6">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => navigate('/incidents')}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg dark:text-white"
+          >
+            <ArrowLeft size={24} />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800 dark:text-white">
+              Incident #{incident.id.substring(0, 8).toUpperCase()}
+            </h1>
+            <p className="text-gray-500 dark:text-gray-400">{getAgencyName(incident.agency_type)}</p>
+          </div>
         </div>
+        <button
+          onClick={handleRefresh}
+          className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-600 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+        >
+          <RefreshCcw size={16} />
+          Refresh
+        </button>
       </div>
 
       <div className="grid grid-cols-3 gap-6">
@@ -630,7 +858,7 @@ function IncidentDetail() {
                     Published
                   </span>
                   <button
-                    onClick={() => {/* TODO: Export PDF */}}
+                    onClick={handleExportPDF}
                     className="px-3 py-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-600 text-sm flex items-center gap-1"
                   >
                     <FileText size={14} />
@@ -639,26 +867,58 @@ function IncidentDetail() {
                 </div>
                 
                 <div className="space-y-4">
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Summary</h3>
-                    <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{finalReport.report_details?.summary || finalReport.report_details?.narrative || 'N/A'}</p>
-                  </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Actions Taken</h3>
-                    <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{finalReport.report_details?.actionsTaken || 'N/A'}</p>
-                  </div>
-                  
-                  {finalReport.report_details?.recommendations && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Recommendations</h3>
-                      <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{finalReport.report_details?.recommendations}</p>
+                  {formatReportDetails(finalReport.report_details)?.map(([key, value]) => (
+                    <div key={key}>
+                      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 uppercase text-xs">
+                        {key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
+                      </h3>
+                      {renderReportValue(key, value)}
                     </div>
-                  )}
+                  ))}
                   
                   <div className="pt-2 border-t border-green-200 dark:border-green-800 text-xs text-gray-500 dark:text-gray-400">
                     Completed on {formatDate(finalReport.completed_at)}
                   </div>
+                </div>
+              </div>
+            ) : draftReport ? (
+              <div className="bg-gradient-to-br from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 rounded-lg p-4 border border-yellow-200 dark:border-yellow-800">
+                <div className="flex items-center justify-between mb-3">
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    draftReport.status === 'ready_for_review'
+                      ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
+                      : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+                  }`}>
+                    {draftReport.status === 'ready_for_review' ? 'Ready for Review' : 'Draft In Progress'}
+                  </span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    Last saved: {draftReport.updated_at ? new Date(draftReport.updated_at).toLocaleDateString() : 'N/A'}
+                  </span>
+                </div>
+
+                <div className="space-y-4 opacity-80">
+                  {formatReportDetails(draftReport.draft_details)?.slice(0, 3).map(([key, value]) => (
+                    <div key={key}>
+                      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 uppercase text-xs">
+                        {key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
+                      </h3>
+                      <div className="line-clamp-2 text-sm">
+                        {renderReportValue(key, value)}
+                      </div>
+                    </div>
+                  ))}
+                  {(!draftReport.draft_details || Object.keys(draftReport.draft_details).length === 0) && (
+                     <p className="text-sm text-gray-500 italic">No details entered yet.</p>
+                  )}
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-yellow-200 dark:border-yellow-800 flex justify-end">
+                  <button
+                    onClick={() => setShowEnhancedReportModal(true)}
+                    className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                  >
+                    Continue Editing <ArrowLeft className="rotate-180" size={14} />
+                  </button>
                 </div>
               </div>
             ) : (
@@ -682,26 +942,66 @@ function IncidentDetail() {
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
                   Coordinates: {Number(incident.latitude).toFixed(6)}, {Number(incident.longitude).toFixed(6)}
                 </p>
-                {/* Embedded Map */}
-                <div className="rounded-lg overflow-hidden border border-gray-200">
-                  <iframe
-                    title="Incident Location"
-                    width="100%"
-                    height="300"
-                    style={{ border: 0 }}
-                    loading="lazy"
-                    allowFullScreen
-                    referrerPolicy="no-referrer-when-downgrade"
-                    src={`https://www.openstreetmap.org/export/embed.html?bbox=${Number(incident.longitude) - 0.01}%2C${Number(incident.latitude) - 0.01}%2C${Number(incident.longitude) + 0.01}%2C${Number(incident.latitude) + 0.01}&layer=mapnik&marker=${incident.latitude}%2C${incident.longitude}`}
+                {/* Interactive Map with Route */}
+                <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
+                  {/* Route Toggle Button */}
+                  {incident.assigned_station_id && getAssignedStation() && (
+                    <div className="bg-gray-50 dark:bg-gray-700 p-2 border-b border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                      <button
+                        onClick={() => setShowRoute(!showRoute)}
+                        className={`px-3 py-1.5 text-sm rounded-lg flex items-center gap-2 transition-colors ${
+                          showRoute 
+                            ? 'bg-blue-600 text-white' 
+                            : 'bg-white dark:bg-gray-600 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-500'
+                        }`}
+                      >
+                        <Truck size={16} />
+                        {showRoute ? 'Hide Route' : 'Show Route from Station'}
+                      </button>
+                      {showRoute && routeInfo && (
+                        <div className="text-sm text-gray-600 dark:text-gray-300">
+                          <span className="font-medium">{routeInfo.distance.toFixed(1)} km</span>
+                          <span className="mx-2">•</span>
+                          <span className="font-medium">~{Math.round(routeInfo.duration)} min</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Leaflet Map with Route */}
+                  <RouteMap
+                    incidentLat={Number(incident.latitude)}
+                    incidentLng={Number(incident.longitude)}
+                    incidentAddress={incident.location_address}
+                    stationLat={getAssignedStation()?.latitude}
+                    stationLng={getAssignedStation()?.longitude}
+                    stationName={getAssignedStation()?.name}
+                    showRoute={showRoute}
+                    onRouteLoaded={handleRouteLoaded}
                   />
-                  <a
-                    href={`https://www.openstreetmap.org/?mlat=${incident.latitude}&mlon=${incident.longitude}#map=16/${incident.latitude}/${incident.longitude}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block text-center py-2 text-sm text-blue-600 hover:bg-blue-50 transition-colors"
-                  >
-                    View larger map ↗
-                  </a>
+                  
+                  {/* Map Actions */}
+                  <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 px-3 py-2 border-t border-gray-200 dark:border-gray-600">
+                    <a
+                      href={`https://www.openstreetmap.org/?mlat=${incident.latitude}&mlon=${incident.longitude}#map=16/${incident.latitude}/${incident.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-blue-600 hover:underline"
+                    >
+                      View larger map ↗
+                    </a>
+                    {showRoute && getAssignedStation() && (
+                      <a
+                        href={`https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${getAssignedStation()!.latitude}%2C${getAssignedStation()!.longitude}%3B${incident.latitude}%2C${incident.longitude}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-green-600 hover:underline flex items-center gap-1"
+                      >
+                        <Truck size={14} />
+                        Open directions ↗
+                      </a>
+                    )}
+                  </div>
                 </div>
 
                 {/* Nearby Stations */}
@@ -783,6 +1083,11 @@ function IncidentDetail() {
                         >
                           Your browser does not support the video tag.
                         </video>
+                        {item.source === 'draft' && (
+                          <span className="absolute top-2 left-2 text-xs px-2 py-1 bg-purple-600 text-white rounded font-medium">
+                            Draft
+                          </span>
+                        )}
                         <a
                           href={item.url}
                           target="_blank"
@@ -797,19 +1102,28 @@ function IncidentDetail() {
 
                   if (isImage) {
                     return (
-                      <a
+                      <div
                         key={index}
-                        href={item.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
+                        className="relative aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
                       >
-                        <img
-                          src={item.url}
-                          alt={`Media ${index + 1}`}
-                          className="w-full h-full object-cover"
-                        />
-                      </a>
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block w-full h-full"
+                        >
+                          <img
+                            src={item.url}
+                            alt={`Media ${index + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                        </a>
+                        {item.source === 'draft' && (
+                          <span className="absolute top-2 left-2 text-xs px-2 py-1 bg-purple-600 text-white rounded font-medium">
+                            Draft
+                          </span>
+                        )}
+                      </div>
                     );
                   }
 
@@ -882,34 +1196,164 @@ function IncidentDetail() {
                 Field Officer Reports ({unitReports.length})
               </h2>
               <div className="space-y-4">
-                {unitReports.map((report) => (
-                  <div key={report.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-gray-800 dark:text-white">{report.title}</span>
-                      <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
-                        {report.agency}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                      By: {report.profiles?.display_name || 'Unknown Officer'}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Submitted: {formatDate(report.created_at)}
-                    </p>
-                    {report.details && (
-                      <details className="mt-2">
-                        <summary className="text-sm text-blue-600 dark:text-blue-400 cursor-pointer hover:underline">
-                          View Details
-                        </summary>
-                        <div className="mt-2 p-3 bg-white dark:bg-gray-800 rounded text-sm">
-                          <pre className="whitespace-pre-wrap text-gray-700 dark:text-gray-300">
-                            {JSON.stringify(report.details, null, 2)}
-                          </pre>
+                {unitReports.map((report) => {
+                  // Parse details - handle both string and object formats
+                  let details: any = {};
+                  if (report.details) {
+                    if (typeof report.details === 'string') {
+                      try {
+                        details = JSON.parse(report.details);
+                      } catch {
+                        details = { raw: report.details };
+                      }
+                    } else {
+                      details = report.details;
+                    }
+                  }
+                  
+                  // Extract media URLs
+                  let mediaUrls: string[] = [];
+                  if (details.media_urls) {
+                    if (typeof details.media_urls === 'string') {
+                      try {
+                        mediaUrls = JSON.parse(details.media_urls);
+                      } catch {
+                        // Try to extract URLs from the string
+                        const urlMatches = details.media_urls.match(/https?:\/\/[^\s"\\]+/g);
+                        if (urlMatches) mediaUrls = urlMatches;
+                      }
+                    } else if (Array.isArray(details.media_urls)) {
+                      mediaUrls = details.media_urls;
+                    }
+                  }
+                  
+                  return (
+                    <div key={report.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-gray-800 dark:text-white">{report.title}</span>
+                        <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
+                          {report.agency}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                        By: {report.profiles?.display_name || 'Unknown Officer'}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Submitted: {formatDate(report.created_at)}
+                      </p>
+                      
+                      {/* Formatted Details */}
+                      {report.details && (
+                        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                          <div className="space-y-2 text-sm">
+                            {/* Narrative */}
+                            {details.narrative && (
+                              <div>
+                                <span className="font-medium text-gray-700 dark:text-gray-300">Narrative:</span>
+                                <p className="mt-1 text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{details.narrative}</p>
+                              </div>
+                            )}
+                            
+                            {/* Suspects */}
+                            {details.suspects && (
+                              <div>
+                                <span className="font-medium text-gray-700 dark:text-gray-300">Suspects:</span>
+                                <p className="mt-1 text-gray-600 dark:text-gray-400">{details.suspects}</p>
+                              </div>
+                            )}
+                            
+                            {/* Victims */}
+                            {details.victims && (
+                              <div>
+                                <span className="font-medium text-gray-700 dark:text-gray-300">Victims:</span>
+                                <p className="mt-1 text-gray-600 dark:text-gray-400">{details.victims}</p>
+                              </div>
+                            )}
+                            
+                            {/* Counts */}
+                            <div className="flex flex-wrap gap-4 mt-2">
+                              {details.victims_count && (
+                                <span className="text-gray-600 dark:text-gray-400">
+                                  <strong>Victims:</strong> {details.victims_count}
+                                </span>
+                              )}
+                              {details.suspects_count && (
+                                <span className="text-gray-600 dark:text-gray-400">
+                                  <strong>Suspects:</strong> {details.suspects_count}
+                                </span>
+                              )}
+                              {details.evidence_count && (
+                                <span className="text-gray-600 dark:text-gray-400">
+                                  <strong>Evidence:</strong> {details.evidence_count}
+                                </span>
+                              )}
+                            </div>
+                            
+                            {/* Timestamp */}
+                            {details.timestamp && (
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Report Time: {new Date(details.timestamp).toLocaleString()}
+                              </p>
+                            )}
+                            
+                            {/* Media Gallery */}
+                            {mediaUrls.length > 0 && (
+                              <div className="mt-3">
+                                <span className="font-medium text-gray-700 dark:text-gray-300 block mb-2">
+                                  Attached Media ({mediaUrls.length}):
+                                </span>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                  {mediaUrls.map((url, idx) => {
+                                    const isVideo = url.toLowerCase().includes('.mp4') || url.toLowerCase().includes('.mov') || url.toLowerCase().includes('.webm');
+                                    return (
+                                      <a
+                                        key={idx}
+                                        href={url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="relative group aspect-square rounded-lg overflow-hidden bg-gray-200 dark:bg-gray-600 hover:ring-2 hover:ring-blue-500 transition-all"
+                                      >
+                                        {isVideo ? (
+                                          <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                                            <video
+                                              src={url}
+                                              className="w-full h-full object-cover"
+                                              muted
+                                              preload="metadata"
+                                            />
+                                            <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                                              <div className="w-12 h-12 rounded-full bg-white/80 flex items-center justify-center">
+                                                <div className="w-0 h-0 border-t-8 border-t-transparent border-l-12 border-l-gray-800 border-b-8 border-b-transparent ml-1"></div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <img
+                                            src={url}
+                                            alt={`Evidence ${idx + 1}`}
+                                            className="w-full h-full object-cover"
+                                            onError={(e) => {
+                                              (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23999"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>';
+                                            }}
+                                          />
+                                        )}
+                                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <span className="text-xs text-white">
+                                            {isVideo ? '🎬 Video' : '📷 Photo'}
+                                          </span>
+                                        </div>
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </details>
-                    )}
-                  </div>
-                ))}
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1535,11 +1979,16 @@ function IncidentDetail() {
         onClose={() => setShowEnhancedReportModal(false)}
         incident={incident}
         existingFinalReport={finalReport}
+        latestUnitReport={unitReports.length > 0 ? unitReports[0] : null}
         onReportPublished={() => {
           loadFinalReport();
-          loadIncident();
+          loadIncident(); // status might change
+        }}
+        onDraftSaved={() => {
+          loadDraft();
         }}
       />
+
     </div>
   );
 }

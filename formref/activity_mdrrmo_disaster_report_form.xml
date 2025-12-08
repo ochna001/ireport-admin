@@ -1,0 +1,335 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F5F5F5"
+    android:fitsSystemWindows="false"
+    tools:context=".MdrrmoDisasterReportFormActivity">
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:fillViewport="true"
+        android:isScrollContainer="true"
+        android:scrollbars="vertical"
+        android:clipToPadding="false"
+        android:paddingTop="8dp"
+        android:paddingHorizontal="8dp"
+        android:paddingBottom="100dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:orientation="vertical"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="MDRRMO Disaster Report"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#222"
+                android:layout_marginBottom="16dp"/>
+
+            <!-- Disaster Type Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Disaster Information" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="8dp"
+                android:layout_marginBottom="16dp">
+                <LinearLayout
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Disaster Type"/>
+                    <Spinner
+                        android:id="@+id/spinnerDisasterType"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:minHeight="48dp"
+                        android:entries="@array/disaster_type_options"/>
+                    <EditText
+                        android:id="@+id/editDisasterTypeOther"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:hint="Specify other disaster type..."
+                        android:visibility="gone"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Affected Area / Barangay(s)"/>
+                    <EditText
+                        android:id="@+id/editAffectedArea"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:hint="List affected areas, barangays, or sitios..."
+                        android:minLines="2"/>
+
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- Casualties Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Casualties" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="8dp"
+                android:layout_marginBottom="16dp">
+                <LinearLayout
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:orientation="horizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="8dp">
+
+                        <LinearLayout
+                            android:orientation="vertical"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="4dp">
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/InputLabel"
+                                android:text="Dead"
+                                android:textColor="#D32F2F"/>
+                            <EditText
+                                android:id="@+id/editCasualtiesDead"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/FormInput"
+                                android:hint="0"
+                                android:inputType="number"
+                                android:textAlignment="center"/>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:orientation="vertical"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:layout_marginHorizontal="4dp">
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/InputLabel"
+                                android:text="Injured"
+                                android:textColor="#FF6F00"/>
+                            <EditText
+                                android:id="@+id/editCasualtiesInjured"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/FormInput"
+                                android:hint="0"
+                                android:inputType="number"
+                                android:textAlignment="center"/>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:orientation="vertical"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp">
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/InputLabel"
+                                android:text="Missing"
+                                android:textColor="#1565C0"/>
+                            <EditText
+                                android:id="@+id/editCasualtiesMissing"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/FormInput"
+                                android:hint="0"
+                                android:inputType="number"
+                                android:textAlignment="center"/>
+                        </LinearLayout>
+
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Families Affected"/>
+                    <EditText
+                        android:id="@+id/editFamiliesAffected"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:hint="Number of families"
+                        android:inputType="number"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Individuals Affected"/>
+                    <EditText
+                        android:id="@+id/editIndividualsAffected"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:hint="Number of individuals"
+                        android:inputType="number"/>
+
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- Damage Assessment Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Damage Assessment" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="8dp"
+                android:layout_marginBottom="16dp">
+                <LinearLayout
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Damage Level"/>
+                    <Spinner
+                        android:id="@+id/spinnerDamageLevel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:minHeight="48dp"
+                        android:entries="@array/damage_level_options"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Damage Details"/>
+                    <EditText
+                        android:id="@+id/editDamageDetails"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:hint="Describe infrastructure, property, or agricultural damage..."
+                        android:minLines="3"/>
+
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- Narrative Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Narrative Report" />
+
+            <EditText
+                android:id="@+id/editNarrative"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@android:drawable/edit_text"
+                android:minLines="4"
+                android:padding="12dp"
+                android:hint="Provide a detailed chronological account of the disaster response..."
+                android:layout_marginBottom="16dp"/>
+
+            <!-- Documentation Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Documentation (Photos/Videos)" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp">
+
+                <Button
+                    android:id="@+id/btnCapturePhoto"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="📷 Photo"
+                    android:layout_marginEnd="8dp"/>
+
+                <Button
+                    android:id="@+id/btnCaptureVideo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🎥 Video"/>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvMediaCount"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="No documentation attached"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recyclerMediaPreview"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:visibility="gone"
+                android:layout_marginBottom="16dp"/>
+
+            <Button
+                android:id="@+id/btnSubmitDisasterReport"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Submit Disaster Report"
+                android:backgroundTint="#006400"
+                android:textColor="#FFF"/>
+
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+</androidx.constraintlayout.widget.ConstraintLayout>

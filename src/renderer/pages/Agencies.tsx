@@ -486,7 +486,7 @@ function Agencies() {
         >
           <div className="flex items-center gap-2">
             <Truck className="w-4 h-4" />
-            Resources ({resources.length})
+            Resources ({filteredResources.length})
           </div>
         </button>
       </div>
@@ -723,7 +723,7 @@ function Agencies() {
                   <Truck className="w-5 h-5 text-blue-600" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-gray-800 dark:text-white">{resources.length}</p>
+                  <p className="text-2xl font-bold text-gray-800 dark:text-white">{filteredResources.length}</p>
                   <p className="text-sm text-gray-500 dark:text-gray-400">Total Resources</p>
                 </div>
               </div>
@@ -735,7 +735,7 @@ function Agencies() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-gray-800 dark:text-white">
-                    {resources.filter(r => r.status === 'available').length}
+                    {filteredResources.filter(r => r.status === 'available').length}
                   </p>
                   <p className="text-sm text-gray-500 dark:text-gray-400">Available</p>
                 </div>
@@ -748,7 +748,7 @@ function Agencies() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-gray-800 dark:text-white">
-                    {resources.filter(r => r.status === 'deployed').length}
+                    {filteredResources.filter(r => r.status === 'deployed').length}
                   </p>
                   <p className="text-sm text-gray-500 dark:text-gray-400">Deployed</p>
                 </div>
@@ -761,7 +761,7 @@ function Agencies() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-gray-800 dark:text-white">
-                    {resources.filter(r => r.status === 'maintenance').length}
+                    {filteredResources.filter(r => r.status === 'maintenance').length}
                   </p>
                   <p className="text-sm text-gray-500 dark:text-gray-400">Maintenance</p>
                 </div>

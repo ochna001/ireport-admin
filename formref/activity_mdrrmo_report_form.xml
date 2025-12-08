@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F5F5F5"
+    android:fitsSystemWindows="false"
+    tools:context=".MdrrmoReportFormActivity">
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:fillViewport="true"
+        android:isScrollContainer="true"
+        android:scrollbars="vertical"
+        android:clipToPadding="false"
+        android:paddingTop="8dp"
+        android:paddingHorizontal="8dp"
+        android:paddingBottom="100dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:orientation="vertical"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="MDRRMO Patient Care Report"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#222"
+                android:layout_marginBottom="16dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Incident Information" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="8dp"
+                android:layout_marginBottom="16dp">
+                <LinearLayout
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:orientation="horizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content">
+
+                        <LinearLayout
+                            android:orientation="vertical"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content">
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/InputLabel"
+                                android:text="Nature of Call"/>
+                            <Spinner
+                                android:id="@+id/spinnerNatureOfCall"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/FormInput"
+                                android:minHeight="48dp"
+                                android:entries="@array/nature_of_call_options"/>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:orientation="vertical"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp">
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/InputLabel"
+                                android:text="Type of Emergency"/>
+                            <Spinner
+                                android:id="@+id/spinnerEmergencyType"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                style="@style/FormInput"
+                                android:minHeight="48dp"
+                                android:entries="@array/emergency_type_options"/>
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Timings (Tap to Set)"/>
+
+                    <LinearLayout
+                        android:orientation="horizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content">
+                        <EditText android:id="@+id/timeCall" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="Call" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                        <EditText android:id="@+id/timeDispatch" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="Dispatch" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                        <EditText android:id="@+id/timeScene" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="At Scene" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                        <EditText android:id="@+id/timeDeparture" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="Departure" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:orientation="horizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content">
+                        <EditText android:id="@+id/timeFacility" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="At Facility" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                        <EditText android:id="@+id/timeHandover" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="Handover" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                        <EditText android:id="@+id/timeClear" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="Clear" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                        <EditText android:id="@+id/timeBase" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" style="@style/FormInput" android:hint="At Base" android:textSize="12sp" android:focusable="false" android:clickable="true"/>
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Location"/>
+                    <EditText
+                        android:id="@+id/editIncidentLocation"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:hint="Incident Address"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Area Type"/>
+                    <Spinner
+                        android:id="@+id/spinnerAreaType"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:minHeight="48dp"
+                        android:entries="@array/area_type_options"/>
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Patients" />
+
+            <LinearLayout
+                android:id="@+id/containerPatients"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"/>
+
+            <Button
+                android:id="@+id/btnAddPatient"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="+ Add Patient"
+                android:backgroundTint="#555"
+                android:textColor="#FFF"
+                android:layout_marginBottom="24dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Receiving Facility" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="8dp"
+                android:layout_marginBottom="16dp">
+                <LinearLayout
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Facility Type"/>
+                    <Spinner
+                        android:id="@+id/spinnerFacilityType"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:minHeight="48dp"
+                        android:entries="@array/facility_type_options"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/InputLabel"
+                        android:text="Name of Facility"/>
+                    <EditText
+                        android:id="@+id/editFacilityName"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/FormInput"
+                        android:hint="Hospital/Clinic Name"/>
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Narrative Notes" />
+
+            <EditText
+                android:id="@+id/editNarrative"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@android:drawable/edit_text"
+                android:minLines="3"
+                android:padding="12dp"
+                android:hint="Chronological Report..."
+                android:layout_marginBottom="16dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                style="@style/SectionHeader"
+                android:text="Documentation (Photos/Videos)" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp">
+
+                <Button
+                    android:id="@+id/btnCapturePhoto"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="📷 Photo"
+                    android:layout_marginEnd="8dp"/>
+
+                <Button
+                    android:id="@+id/btnCaptureVideo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🎥 Video"/>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvMediaCount"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="No documentation attached"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recyclerMediaPreview"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:visibility="gone"
+                android:layout_marginBottom="16dp"/>
+
+            <Button
+                android:id="@+id/btnSubmitMdrrmoReport"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Submit Report"
+                android:backgroundTint="#006400"
+                android:textColor="#FFF"/>
+
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+</androidx.constraintlayout.widget.ConstraintLayout>

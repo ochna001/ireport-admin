@@ -8,6 +8,8 @@ interface FinalReportModalProps {
   incident: any;
   existingFinalReport: any | null;
   onReportPublished: () => void;
+  onDraftSaved?: () => void;
+  latestUnitReport?: any;
 }
 
 // ============================================
@@ -65,6 +67,114 @@ interface PdrrmoFormData {
   timeClear: string;
   timeBase: string;
   patientsCount: number;
+  patients: PdrrmoPatientEntry[];
+}
+
+interface PdrrmoPatientEntry {
+  id: string;
+  name: string;
+  age: string;
+  sex: string;
+  address: string;
+  nextOfKin: string;
+  chiefComplaint: string;
+  condition: string;
+  medications: string;
+  allergies: string;
+  vitals: {
+    bp: string;
+    pulse: string;
+    resp: string;
+    temp: string;
+    spo2: string;
+  };
+}
+
+const createEmptyPdrrmoPatient = (): PdrrmoPatientEntry => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  name: '',
+  age: '',
+  sex: '',
+  address: '',
+  nextOfKin: '',
+  chiefComplaint: '',
+  condition: '',
+  medications: '',
+  allergies: '',
+  vitals: {
+    bp: '',
+    pulse: '',
+    resp: '',
+    temp: '',
+    spo2: ''
+  }
+});
+
+const parsePdrrmoPatients = (raw: any): PdrrmoPatientEntry[] => {
+  if (!raw) return [];
+  let parsed: any[] = [];
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      console.warn('Failed to parse PDRRMO patients JSON', e);
+      return [];
+    }
+  } else if (Array.isArray(raw)) {
+    parsed = raw;
+  } else if (raw?.patients && Array.isArray(raw.patients)) {
+    parsed = raw.patients;
+  } else {
+    return [];
+  }
+
+  // Helper to extract vital value from nested object with t1/t2/t3 structure
+  const extractVital = (vitalObj: any): string => {
+    if (!vitalObj) return '';
+    if (typeof vitalObj === 'string') return vitalObj;
+    if (typeof vitalObj === 'object') {
+      // Try t1, t2, t3 in order, return first non-empty
+      return vitalObj.t1 || vitalObj.t2 || vitalObj.t3 || '';
+    }
+    return '';
+  };
+
+  return parsed.map((patient, index) => ({
+    id: patient?.id || `patient-${index}-${Date.now()}`,
+    name: patient?.name || '',
+    age: patient?.age?.toString?.() || patient?.age || '',
+    sex: patient?.sex || '',
+    address: patient?.address || '',
+    nextOfKin: patient?.nextOfKin || patient?.next_of_kin || '',
+    chiefComplaint: patient?.chiefComplaint || patient?.chief_complaint || patient?.chiefComplaint || '',
+    condition: patient?.condition || patient?.patient_narrative || '',
+    medications: patient?.medications || patient?.meds || '',
+    allergies: patient?.allergies || '',
+    vitals: {
+      bp: extractVital(patient?.vitals?.bp || patient?.bp),
+      pulse: extractVital(patient?.vitals?.pulse || patient?.pulse || patient?.pulse_rate),
+      resp: extractVital(patient?.vitals?.resp || patient?.resp || patient?.resp_rate),
+      temp: extractVital(patient?.vitals?.temp || patient?.temp),
+      spo2: extractVital(patient?.vitals?.spo2 || patient?.spo2)
+    }
+  }));
+};
+
+// ============================================
+// MDRRMO DISASTER REPORT FIELDS (matches MdrrmoDisasterReportFormActivity.java)
+// ============================================
+interface MdrrmoDisasterFormData {
+  disasterType: string;
+  disasterTypeOther: string;
+  affectedArea: string;
+  casualtiesDead: number;
+  casualtiesInjured: number;
+  casualtiesMissing: number;
+  familiesAffected: number;
+  individualsAffected: number;
+  damageLevel: string;
+  damageDetails: string;
+  narrative: string;
 }
 
 // Validation errors interface
@@ -98,7 +208,7 @@ const defaultBfpForm: BfpFormData = {
   estimatedDamage: ''
 };
 
-const defaultPdrrmoForm: PdrrmoFormData = {
+const buildDefaultPdrrmoForm = (): PdrrmoFormData => ({
   natureOfCall: '',
   emergencyType: '',
   areaType: '',
@@ -114,10 +224,27 @@ const defaultPdrrmoForm: PdrrmoFormData = {
   timeHandover: '',
   timeClear: '',
   timeBase: '',
-  patientsCount: 0
+  patientsCount: 0,
+  patients: []
+});
+
+const defaultPdrrmoForm = buildDefaultPdrrmoForm();
+
+const defaultMdrrmoDisasterForm: MdrrmoDisasterFormData = {
+  disasterType: '',
+  disasterTypeOther: '',
+  affectedArea: '',
+  casualtiesDead: 0,
+  casualtiesInjured: 0,
+  casualtiesMissing: 0,
+  familiesAffected: 0,
+  individualsAffected: 0,
+  damageLevel: '',
+  damageDetails: '',
+  narrative: ''
 };
 
-export function FinalReportModal({ isOpen, onClose, incident, existingFinalReport, onReportPublished }: FinalReportModalProps) {
+export function FinalReportModal({ isOpen, onClose, incident, existingFinalReport, onReportPublished, onDraftSaved, latestUnitReport }: FinalReportModalProps) {
   const [activeTab, setActiveTab] = useState<'draft' | 'published'>('draft');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -129,7 +256,11 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
   // Agency-specific form data
   const [pnpForm, setPnpForm] = useState<PnpFormData>({ ...defaultPnpForm });
   const [bfpForm, setBfpForm] = useState<BfpFormData>({ ...defaultBfpForm });
-  const [pdrrmoForm, setPdrrmoForm] = useState<PdrrmoFormData>({ ...defaultPdrrmoForm });
+  const [pdrrmoForm, setPdrrmoForm] = useState<PdrrmoFormData>(buildDefaultPdrrmoForm());
+  const [mdrrmoDisasterForm, setMdrrmoDisasterForm] = useState<MdrrmoDisasterFormData>({ ...defaultMdrrmoDisasterForm });
+  
+  // For PDRRMO, we can have either "Emergency" or "Disaster" report types
+  const [pdrrmoReportType, setPdrrmoReportType] = useState<'emergency' | 'disaster'>('emergency');
 
   const agencyType = incident?.agency_type?.toLowerCase() || 'pnp';
 
@@ -145,7 +276,11 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       if (agencyType === 'bfp') {
         setBfpForm(prev => ({ ...prev, fireLocation: prev.fireLocation || incident.location_address }));
       } else if (agencyType === 'pdrrmo') {
+        // Pre-fill both forms just in case
         setPdrrmoForm(prev => ({ ...prev, incidentLocation: prev.incidentLocation || incident.location_address }));
+        setMdrrmoDisasterForm(prev => ({ ...prev, affectedArea: prev.affectedArea || incident.location_address }));
+      } else if (agencyType === 'mdrrmo_disaster') {
+        setMdrrmoDisasterForm(prev => ({ ...prev, affectedArea: prev.affectedArea || incident.location_address }));
       }
     }
   }, [incident, agencyType]);
@@ -156,14 +291,57 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     setSaveError(null);
     try {
       const draftData = await window.api.getFinalReportDraft(incident.id);
+      
       if (draftData) {
         setDraft(draftData);
-        setDraftStatus(draftData.status || 'draft');
-        populateFormFromDetails(draftData.draft_details);
-        setActiveTab('draft');
-      } else if (existingFinalReport) {
-        populateFormFromDetails(existingFinalReport.report_details);
-        setActiveTab('published');
+        setDraftStatus(draftData.status as any);
+        const details = draftData.draft_details;
+        
+        populateFormFromDetails(details);
+        
+        // Auto-detect report type for PDRRMO based on fields present
+        if (agencyType === 'pdrrmo') {
+          if (details.disaster_type || details.disasterType) {
+            setPdrrmoReportType('disaster');
+          } else {
+            setPdrrmoReportType('emergency');
+          }
+        }
+      } else {
+        // No draft, try to load existing final report to pre-fill
+        if (existingFinalReport) {
+          const details = existingFinalReport.report_details;
+          populateFormFromDetails(details);
+          
+          if (agencyType === 'pdrrmo') {
+            if (details.disaster_type || details.disasterType) {
+              setPdrrmoReportType('disaster');
+            }
+          }
+        } else if (latestUnitReport && latestUnitReport.details) {
+          // Pre-fill from latest unit report
+          let details = latestUnitReport.details;
+          if (typeof details === 'string') {
+            try {
+              details = JSON.parse(details);
+            } catch (e) {
+              console.error('Failed to parse unit report details', e);
+              details = { narrative: latestUnitReport.details }; // Fallback
+            }
+          }
+          
+          console.log('Pre-filling from unit report:', details);
+          populateFormFromDetails(details);
+          
+          // Auto-detect report type for PDRRMO based on unit report fields
+          if (agencyType === 'pdrrmo') {
+            if (details.disaster_type || details.disasterType) {
+              setPdrrmoReportType('disaster');
+            } else {
+              setPdrrmoReportType('emergency');
+            }
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to load draft:', error);
@@ -177,8 +355,36 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     
     if (agencyType === 'pnp') {
       // Parse suspects/victims from stored format
-      const parseSuspects = details.suspects_data || details.suspects || [];
-      const parseVictims = details.victims_data || details.victims || [];
+      let parseSuspects = details.suspects_data || details.suspects || [];
+      let parseVictims = details.victims_data || details.victims || [];
+
+      // Handle stringified JSON if necessary (legacy/edge case)
+      if (typeof parseSuspects === 'string') {
+        try {
+          if (parseSuspects.trim().startsWith('[')) {
+            parseSuspects = JSON.parse(parseSuspects);
+          } else {
+             // Fallback for simple string (e.g. "Name 1; Name 2") - don't try to parse as objects
+             parseSuspects = [];
+          }
+        } catch (e) {
+          console.error('Failed to parse suspects JSON:', e);
+          parseSuspects = [];
+        }
+      }
+
+      if (typeof parseVictims === 'string') {
+        try {
+          if (parseVictims.trim().startsWith('[')) {
+            parseVictims = JSON.parse(parseVictims);
+          } else {
+            parseVictims = [];
+          }
+        } catch (e) {
+          console.error('Failed to parse victims JSON:', e);
+          parseVictims = [];
+        }
+      }
       
       setPnpForm({
         narrative: details.narrative || '',
@@ -201,6 +407,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         estimatedDamage: details.estimatedDamage || details.estimated_damage || ''
       });
     } else if (agencyType === 'pdrrmo') {
+      const patients = parsePdrrmoPatients(details.patients || details.patients_data);
       setPdrrmoForm({
         natureOfCall: details.natureOfCall || details.nature_of_call || '',
         emergencyType: details.emergencyType || details.emergency_type || '',
@@ -217,7 +424,22 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         timeHandover: details.time_handover || details.timeHandover || '',
         timeClear: details.time_clear || details.timeClear || '',
         timeBase: details.time_base || details.timeBase || '',
-        patientsCount: parseInt(details.patients_count || details.patientsCount || '0') || 0
+        patientsCount: patients.length || parseInt(details.patients_count || details.patientsCount || '0') || 0,
+        patients: patients
+      });
+    } else if (agencyType === 'mdrrmo_disaster') {
+      setMdrrmoDisasterForm({
+        disasterType: details.disaster_type || details.disasterType || '',
+        disasterTypeOther: details.disaster_type_other || details.disasterTypeOther || '',
+        affectedArea: details.affected_area || details.affectedArea || incident?.location_address || '',
+        casualtiesDead: parseInt(details.casualties_dead || details.casualtiesDead || '0') || 0,
+        casualtiesInjured: parseInt(details.casualties_injured || details.casualtiesInjured || '0') || 0,
+        casualtiesMissing: parseInt(details.casualties_missing || details.casualtiesMissing || '0') || 0,
+        familiesAffected: parseInt(details.families_affected || details.familiesAffected || '0') || 0,
+        individualsAffected: parseInt(details.individuals_affected || details.individualsAffected || '0') || 0,
+        damageLevel: details.damage_level || details.damageLevel || '',
+        damageDetails: details.damage_details || details.damageDetails || '',
+        narrative: details.narrative || ''
       });
     }
   };
@@ -242,11 +464,40 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         newErrors.classOfFire = 'Class of fire is required';
       }
     } else if (agencyType === 'pdrrmo') {
-      if (!pdrrmoForm.incidentLocation.trim()) {
-        newErrors.incidentLocation = 'Incident location is required';
+      if (pdrrmoReportType === 'emergency') {
+        if (!pdrrmoForm.incidentLocation.trim()) {
+          newErrors.incidentLocation = 'Incident location is required';
+        }
+        if (!pdrrmoForm.natureOfCall) {
+          newErrors.natureOfCall = 'Nature of call is required';
+        }
+      } else {
+        // Disaster validation
+        if (!mdrrmoDisasterForm.disasterType) {
+          newErrors.disasterType = 'Disaster type is required';
+        }
+        if (mdrrmoDisasterForm.disasterType === 'Other' && !mdrrmoDisasterForm.disasterTypeOther.trim()) {
+          newErrors.disasterTypeOther = 'Please specify the disaster type';
+        }
+        if (!mdrrmoDisasterForm.affectedArea.trim()) {
+          newErrors.affectedArea = 'Affected area is required';
+        }
+        if (!mdrrmoDisasterForm.narrative.trim()) {
+          newErrors.narrative = 'Narrative report is required';
+        }
       }
-      if (!pdrrmoForm.natureOfCall) {
-        newErrors.natureOfCall = 'Nature of call is required';
+    } else if (agencyType === 'mdrrmo_disaster') {
+      if (!mdrrmoDisasterForm.disasterType) {
+        newErrors.disasterType = 'Disaster type is required';
+      }
+      if (mdrrmoDisasterForm.disasterType === 'Other' && !mdrrmoDisasterForm.disasterTypeOther.trim()) {
+        newErrors.disasterTypeOther = 'Please specify the disaster type';
+      }
+      if (!mdrrmoDisasterForm.affectedArea.trim()) {
+        newErrors.affectedArea = 'Affected area is required';
+      }
+      if (!mdrrmoDisasterForm.narrative.trim()) {
+        newErrors.narrative = 'Narrative report is required';
       }
     }
     
@@ -256,6 +507,19 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
 
   const getFormDetails = (): any => {
     const timestamp = new Date().toISOString();
+    
+    // Helper to get media URLs safely
+    const getMediaUrls = () => {
+      if (!incident?.media_urls) return [];
+      if (Array.isArray(incident.media_urls)) return incident.media_urls;
+      try {
+        return JSON.parse(incident.media_urls);
+      } catch {
+        return [];
+      }
+    };
+
+    const mediaUrls = getMediaUrls();
     
     if (agencyType === 'pnp') {
       // Filter out empty person entries
@@ -272,6 +536,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         victims_count: validVictims.length.toString(),
         evidence_count: pnpForm.evidenceCount.toString(),
         caseNumber: pnpForm.caseNumber,
+        media_urls: mediaUrls,
         timestamp
       };
     } else if (agencyType === 'bfp') {
@@ -282,26 +547,74 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         rootCause: bfpForm.rootCause,
         peopleInjured: bfpForm.peopleInjured,
         estimatedDamage: bfpForm.estimatedDamage,
+        media_urls: mediaUrls,
         timestamp
       };
+    } else if (agencyType === 'pdrrmo') {
+      if (pdrrmoReportType === 'emergency') {
+        return {
+          natureOfCall: pdrrmoForm.natureOfCall,
+          emergencyType: pdrrmoForm.emergencyType,
+          areaType: pdrrmoForm.areaType,
+          incidentLocation: pdrrmoForm.incidentLocation,
+          narrative: pdrrmoForm.narrative,
+          facilityType: pdrrmoForm.facilityType,
+          facilityName: pdrrmoForm.facilityName,
+          time_call: pdrrmoForm.timeCall,
+          time_dispatch: pdrrmoForm.timeDispatch,
+          time_scene: pdrrmoForm.timeScene,
+          time_depart: pdrrmoForm.timeDeparture,
+          time_facility: pdrrmoForm.timeFacility,
+          time_handover: pdrrmoForm.timeHandover,
+          time_clear: pdrrmoForm.timeClear,
+          time_base: pdrrmoForm.timeBase,
+          patients_count: pdrrmoForm.patients.length.toString(),
+          patients: pdrrmoForm.patients,
+          patients_data: pdrrmoForm.patients,
+          media_urls: mediaUrls,
+          timestamp
+        };
+      } else {
+        // PDRRMO Disaster Report
+        const finalDisasterType = mdrrmoDisasterForm.disasterType === 'Other' 
+          ? mdrrmoDisasterForm.disasterTypeOther 
+          : mdrrmoDisasterForm.disasterType;
+        
+        return {
+          report_type: 'DISASTER',
+          disaster_type: finalDisasterType,
+          affected_area: mdrrmoDisasterForm.affectedArea,
+          casualties_dead: mdrrmoDisasterForm.casualtiesDead,
+          casualties_injured: mdrrmoDisasterForm.casualtiesInjured,
+          casualties_missing: mdrrmoDisasterForm.casualtiesMissing,
+          families_affected: mdrrmoDisasterForm.familiesAffected,
+          individuals_affected: mdrrmoDisasterForm.individualsAffected,
+          damage_level: mdrrmoDisasterForm.damageLevel,
+          damage_details: mdrrmoDisasterForm.damageDetails,
+          narrative: mdrrmoDisasterForm.narrative,
+          media_urls: mediaUrls,
+          timestamp
+        };
+      }
     } else {
+      // mdrrmo_disaster
+      const finalDisasterType = mdrrmoDisasterForm.disasterType === 'Other' 
+        ? mdrrmoDisasterForm.disasterTypeOther 
+        : mdrrmoDisasterForm.disasterType;
+      
       return {
-        natureOfCall: pdrrmoForm.natureOfCall,
-        emergencyType: pdrrmoForm.emergencyType,
-        areaType: pdrrmoForm.areaType,
-        incidentLocation: pdrrmoForm.incidentLocation,
-        narrative: pdrrmoForm.narrative,
-        facilityType: pdrrmoForm.facilityType,
-        facilityName: pdrrmoForm.facilityName,
-        time_call: pdrrmoForm.timeCall,
-        time_dispatch: pdrrmoForm.timeDispatch,
-        time_scene: pdrrmoForm.timeScene,
-        time_depart: pdrrmoForm.timeDeparture,
-        time_facility: pdrrmoForm.timeFacility,
-        time_handover: pdrrmoForm.timeHandover,
-        time_clear: pdrrmoForm.timeClear,
-        time_base: pdrrmoForm.timeBase,
-        patients_count: pdrrmoForm.patientsCount.toString(),
+        report_type: 'DISASTER',
+        disaster_type: finalDisasterType,
+        affected_area: mdrrmoDisasterForm.affectedArea,
+        casualties_dead: mdrrmoDisasterForm.casualtiesDead,
+        casualties_injured: mdrrmoDisasterForm.casualtiesInjured,
+        casualties_missing: mdrrmoDisasterForm.casualtiesMissing,
+        families_affected: mdrrmoDisasterForm.familiesAffected,
+        individuals_affected: mdrrmoDisasterForm.individualsAffected,
+        damage_level: mdrrmoDisasterForm.damageLevel,
+        damage_details: mdrrmoDisasterForm.damageDetails,
+        narrative: mdrrmoDisasterForm.narrative,
+        media_urls: mediaUrls,
         timestamp
       };
     }
@@ -324,11 +637,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         agencyType: agencyType,
         draftDetails: getFormDetails(),
         status,
-        authorId: scope.userId || ''
+        authorId: scope.userId || undefined
       });
       setDraftStatus(status);
       await loadDraft();
       setSaveError(null);
+      if (onDraftSaved) onDraftSaved();
     } catch (error: any) {
       setSaveError(error.message || 'Failed to save draft');
     } finally {
@@ -357,13 +671,13 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           agencyType: agencyType,
           draftDetails: getFormDetails(),
           status: 'ready_for_review',
-          authorId: scope.userId || ''
+          authorId: scope.userId || undefined
         });
       }
       
       await window.api.promoteFinalReportDraft({
         incidentId: incident.id,
-        authorId: scope.userId || ''
+        authorId: scope.userId || undefined
       });
       
       onReportPublished();
@@ -384,6 +698,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       setPnpForm({ ...defaultPnpForm });
       setBfpForm({ ...defaultBfpForm });
       setPdrrmoForm({ ...defaultPdrrmoForm });
+      setMdrrmoDisasterForm({ ...defaultMdrrmoDisasterForm });
+      if (onDraftSaved) onDraftSaved();
     } catch (error: any) {
       setSaveError(error.message || 'Failed to delete draft');
     }
@@ -421,13 +737,65 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     return entries;
   };
 
+  const renderReportValue = (key: string, value: any) => {
+    // Try to parse JSON strings that look like arrays/objects
+    let content = value;
+    if (typeof value === 'string' && (value.trim().startsWith('[') || value.trim().startsWith('{'))) {
+      try {
+        content = JSON.parse(value);
+      } catch (e) {
+        // Not valid JSON, keep as string
+      }
+    }
+
+    if (Array.isArray(content)) {
+      // Handle array of persons (suspects/victims)
+      if (content.length > 0 && (content[0].firstName || content[0].lastName)) {
+        return (
+          <div className="space-y-2 mt-1">
+            {content.map((person: any, idx: number) => (
+              <div key={idx} className="bg-gray-50 dark:bg-gray-700/50 p-2 rounded text-sm border border-gray-100 dark:border-gray-700">
+                <p className="font-medium text-gray-800 dark:text-gray-200">
+                  {person.firstName} {person.middleName} {person.lastName}
+                </p>
+                {person.alias && <p className="text-xs text-gray-500">Alias: {person.alias}</p>}
+                {(person.address || person.occupation) && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    {[person.address, person.occupation].filter(Boolean).join(' • ')}
+                  </p>
+                )}
+                {person.status && <p className="text-xs text-gray-500">Status: {person.status}</p>}
+              </div>
+            ))}
+          </div>
+        );
+      }
+      // Generic array
+      return (
+        <ul className="list-disc list-inside mt-1">
+          {content.map((item: any, idx: number) => (
+            <li key={idx} className="text-gray-800 dark:text-gray-200">
+              {typeof item === 'object' ? JSON.stringify(item) : String(item)}
+            </li>
+          ))}
+        </ul>
+      );
+    }
+
+    if (typeof content === 'object' && content !== null) {
+      return <pre className="text-xs bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto">{JSON.stringify(content, null, 2)}</pre>;
+    }
+
+    return <p className="mt-1 text-gray-800 dark:text-white whitespace-pre-wrap">{String(content)}</p>;
+  };
+
   if (!isOpen) return null;
 
   const color = getAgencyColor();
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4" style={{ isolation: 'isolate' }}>
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden relative z-10">
         {/* Header */}
         <div className={`p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between rounded-t-xl bg-gradient-to-r ${
           color === 'blue' ? 'from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/20' :
@@ -548,7 +916,40 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
                 <BfpForm form={bfpForm} setForm={setBfpForm} errors={errors} setErrors={setErrors} />
               )}
               {agencyType === 'pdrrmo' && (
-                <PdrrmoForm form={pdrrmoForm} setForm={setPdrrmoForm} errors={errors} setErrors={setErrors} />
+                <div className="space-y-4">
+                  {/* Report Type Selector */}
+                  <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                    <button
+                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                        pdrrmoReportType === 'emergency'
+                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                      }`}
+                      onClick={() => setPdrrmoReportType('emergency')}
+                    >
+                      Emergency Report
+                    </button>
+                    <button
+                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                        pdrrmoReportType === 'disaster'
+                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                      }`}
+                      onClick={() => setPdrrmoReportType('disaster')}
+                    >
+                      Disaster Report
+                    </button>
+                  </div>
+
+                  {pdrrmoReportType === 'emergency' ? (
+                    <PdrrmoForm form={pdrrmoForm} setForm={setPdrrmoForm} errors={errors} setErrors={setErrors} />
+                  ) : (
+                    <MdrrmoDisasterForm form={mdrrmoDisasterForm} setForm={setMdrrmoDisasterForm} errors={errors} setErrors={setErrors} />
+                  )}
+                </div>
+              )}
+              {agencyType === 'mdrrmo_disaster' && (
+                <MdrrmoDisasterForm form={mdrrmoDisasterForm} setForm={setMdrrmoDisasterForm} errors={errors} setErrors={setErrors} />
               )}
             </div>
           ) : (
@@ -567,9 +968,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
                         <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                           {key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
                         </span>
-                        <p className="mt-1 text-gray-800 dark:text-white whitespace-pre-wrap">
-                          {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
-                        </p>
+                        {renderReportValue(key, value)}
                       </div>
                     ))}
                   </div>
@@ -892,13 +1291,44 @@ function BfpForm({ form, setForm, errors, setErrors }: {
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
           Area Ownership
         </label>
-        <input
-          type="text"
+        <select
           value={form.areaOwnership}
           onChange={(e) => setForm(prev => ({ ...prev, areaOwnership: e.target.value }))}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
-          placeholder="Owner of the affected area..."
-        />
+        >
+          <option value="">Select area ownership...</option>
+          <optgroup label="Residential">
+            <option value="Residential - Private">Residential - Private</option>
+            <option value="Residential - Rental">Residential - Rental</option>
+            <option value="Residential - Government">Residential - Government</option>
+          </optgroup>
+          <optgroup label="Commercial">
+            <option value="Commercial - Private">Commercial - Private</option>
+            <option value="Commercial - Rental">Commercial - Rental</option>
+            <option value="Commercial - Government">Commercial - Government</option>
+          </optgroup>
+          <optgroup label="Industrial">
+            <option value="Industrial - Private">Industrial - Private</option>
+            <option value="Industrial - Rental">Industrial - Rental</option>
+            <option value="Industrial - Government">Industrial - Government</option>
+          </optgroup>
+          <optgroup label="Agricultural">
+            <option value="Agricultural - Private">Agricultural - Private</option>
+            <option value="Agricultural - Rental">Agricultural - Rental</option>
+            <option value="Agricultural - Government">Agricultural - Government</option>
+          </optgroup>
+          <optgroup label="Institutional">
+            <option value="Institutional - Private">Institutional - Private</option>
+            <option value="Institutional - Government">Institutional - Government</option>
+          </optgroup>
+          <optgroup label="Other">
+            <option value="Mixed Use - Private">Mixed Use - Private</option>
+            <option value="Mixed Use - Rental">Mixed Use - Rental</option>
+            <option value="Vacant Lot">Vacant Lot</option>
+            <option value="Public Space">Public Space</option>
+            <option value="Other">Other</option>
+          </optgroup>
+        </select>
       </div>
 
       {/* Class of Fire */}
@@ -1132,19 +1562,120 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
         </div>
       </div>
 
-      {/* Patients Count */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Number of Patients
-        </label>
-        <input
-          type="number"
-          min="0"
-          value={form.patientsCount}
-          onChange={(e) => setForm(prev => ({ ...prev, patientsCount: parseInt(e.target.value) || 0 }))}
-          className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
-        />
-      </div>
+      {/* Patients Section */}
+      {form.patients.length > 0 && (
+        <div className="bg-cyan-50 dark:bg-cyan-900/20 rounded-lg p-4 border border-cyan-200 dark:border-cyan-800">
+          <h4 className="font-medium text-cyan-800 dark:text-cyan-200 mb-3">
+            Patient Details ({form.patients.length} patient{form.patients.length !== 1 ? 's' : ''})
+          </h4>
+          <div className="space-y-4">
+            {form.patients.map((patient, index) => (
+              <div key={patient.id} className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-cyan-300 dark:border-cyan-700">
+                <h5 className="font-semibold text-cyan-700 dark:text-cyan-300 mb-3">Patient {index + 1}</h5>
+                
+                {/* Basic Info */}
+                <div className="grid grid-cols-4 gap-3 mb-3">
+                  <div>
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Name</label>
+                    <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.name || 'N/A'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Age</label>
+                    <div className="text-sm text-gray-900 dark:text-white">{patient.age || 'N/A'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Sex</label>
+                    <div className="text-sm text-gray-900 dark:text-white">{patient.sex || 'N/A'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Next of Kin</label>
+                    <div className="text-sm text-gray-900 dark:text-white">{patient.nextOfKin || 'N/A'}</div>
+                  </div>
+                </div>
+
+                {/* Address */}
+                {patient.address && (
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Address</label>
+                    <div className="text-sm text-gray-900 dark:text-white">{patient.address}</div>
+                  </div>
+                )}
+
+                {/* Chief Complaint */}
+                {patient.chiefComplaint && (
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Chief Complaint</label>
+                    <div className="text-sm text-gray-900 dark:text-white">{patient.chiefComplaint}</div>
+                  </div>
+                )}
+
+                {/* Vitals */}
+                {(patient.vitals.bp || patient.vitals.pulse || patient.vitals.resp || patient.vitals.temp || patient.vitals.spo2) && (
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-2">Vital Signs</label>
+                    <div className="grid grid-cols-5 gap-2">
+                      {patient.vitals.bp && (
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
+                          <div className="text-xs text-gray-500 dark:text-gray-400">BP</div>
+                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.bp}</div>
+                        </div>
+                      )}
+                      {patient.vitals.pulse && (
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
+                          <div className="text-xs text-gray-500 dark:text-gray-400">Pulse</div>
+                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.pulse}</div>
+                        </div>
+                      )}
+                      {patient.vitals.resp && (
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
+                          <div className="text-xs text-gray-500 dark:text-gray-400">Resp</div>
+                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.resp}</div>
+                        </div>
+                      )}
+                      {patient.vitals.temp && (
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
+                          <div className="text-xs text-gray-500 dark:text-gray-400">Temp</div>
+                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.temp}</div>
+                        </div>
+                      )}
+                      {patient.vitals.spo2 && (
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
+                          <div className="text-xs text-gray-500 dark:text-gray-400">SpO2</div>
+                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.spo2}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Medications & Allergies */}
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  {patient.medications && (
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Medications</label>
+                      <div className="text-sm text-gray-900 dark:text-white">{patient.medications}</div>
+                    </div>
+                  )}
+                  {patient.allergies && (
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Allergies</label>
+                      <div className="text-sm text-gray-900 dark:text-white">{patient.allergies}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Condition/Narrative */}
+                {patient.condition && (
+                  <div>
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Patient Narrative</label>
+                    <div className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap">{patient.condition}</div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Narrative */}
       <div>
@@ -1158,6 +1689,217 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           placeholder="Detailed narrative of the emergency response..."
         />
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// MDRRMO DISASTER FORM COMPONENT (matches MdrrmoDisasterReportFormActivity.java)
+// ============================================
+function MdrrmoDisasterForm({ form, setForm, errors, setErrors }: { 
+  form: MdrrmoDisasterFormData; 
+  setForm: React.Dispatch<React.SetStateAction<MdrrmoDisasterFormData>>;
+  errors: ValidationErrors;
+  setErrors: React.Dispatch<React.SetStateAction<ValidationErrors>>;
+}) {
+  return (
+    <div className="space-y-4">
+      {/* Disaster Information */}
+      <div className="bg-cyan-50 dark:bg-cyan-900/20 rounded-lg p-4 border border-cyan-200 dark:border-cyan-800">
+        <h4 className="font-medium text-cyan-800 dark:text-cyan-200 mb-3">Disaster Information</h4>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Disaster Type <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={form.disasterType}
+              onChange={(e) => {
+                setForm(prev => ({ ...prev, disasterType: e.target.value }));
+                if (errors.disasterType) setErrors(prev => ({ ...prev, disasterType: '' }));
+              }}
+              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
+                errors.disasterType ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+              }`}
+            >
+              <option value="">Select...</option>
+              <option value="Flood">Flood</option>
+              <option value="Typhoon">Typhoon</option>
+              <option value="Earthquake">Earthquake</option>
+              <option value="Landslide">Landslide</option>
+              <option value="Fire">Fire</option>
+              <option value="Tsunami">Tsunami</option>
+              <option value="Drought">Drought</option>
+              <option value="Other">Other</option>
+            </select>
+            {errors.disasterType && (
+              <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
+                <AlertCircle size={14} /> {errors.disasterType}
+              </p>
+            )}
+          </div>
+          {form.disasterType === 'Other' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Specify Disaster Type <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={form.disasterTypeOther}
+                onChange={(e) => {
+                  setForm(prev => ({ ...prev, disasterTypeOther: e.target.value }));
+                  if (errors.disasterTypeOther) setErrors(prev => ({ ...prev, disasterTypeOther: '' }));
+                }}
+                className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
+                  errors.disasterTypeOther ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+                }`}
+                placeholder="Specify other disaster type..."
+              />
+              {errors.disasterTypeOther && (
+                <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
+                  <AlertCircle size={14} /> {errors.disasterTypeOther}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Affected Area / Barangay(s) <span className="text-red-500">*</span>
+          </label>
+          <textarea
+            value={form.affectedArea}
+            onChange={(e) => {
+              setForm(prev => ({ ...prev, affectedArea: e.target.value }));
+              if (errors.affectedArea) setErrors(prev => ({ ...prev, affectedArea: '' }));
+            }}
+            rows={2}
+            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
+              errors.affectedArea ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            }`}
+            placeholder="List affected areas, barangays, or sitios..."
+          />
+          {errors.affectedArea && (
+            <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
+              <AlertCircle size={14} /> {errors.affectedArea}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Casualties */}
+      <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4 border border-red-200 dark:border-red-800">
+        <h4 className="font-medium text-red-800 dark:text-red-200 mb-3">Casualties</h4>
+        <div className="grid grid-cols-3 gap-4 mb-4">
+          <div>
+            <label className="block text-sm font-medium text-red-700 dark:text-red-300 mb-1">Dead</label>
+            <input
+              type="number"
+              min="0"
+              value={form.casualtiesDead}
+              onChange={(e) => setForm(prev => ({ ...prev, casualtiesDead: parseInt(e.target.value) || 0 }))}
+              className="w-full px-3 py-2 border border-red-300 dark:border-red-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent text-center"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-orange-700 dark:text-orange-300 mb-1">Injured</label>
+            <input
+              type="number"
+              min="0"
+              value={form.casualtiesInjured}
+              onChange={(e) => setForm(prev => ({ ...prev, casualtiesInjured: parseInt(e.target.value) || 0 }))}
+              className="w-full px-3 py-2 border border-orange-300 dark:border-orange-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent text-center"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-blue-700 dark:text-blue-300 mb-1">Missing</label>
+            <input
+              type="number"
+              min="0"
+              value={form.casualtiesMissing}
+              onChange={(e) => setForm(prev => ({ ...prev, casualtiesMissing: parseInt(e.target.value) || 0 }))}
+              className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent text-center"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Families Affected</label>
+            <input
+              type="number"
+              min="0"
+              value={form.familiesAffected}
+              onChange={(e) => setForm(prev => ({ ...prev, familiesAffected: parseInt(e.target.value) || 0 }))}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+              placeholder="Number of families"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Individuals Affected</label>
+            <input
+              type="number"
+              min="0"
+              value={form.individualsAffected}
+              onChange={(e) => setForm(prev => ({ ...prev, individualsAffected: parseInt(e.target.value) || 0 }))}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+              placeholder="Number of individuals"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Damage Assessment */}
+      <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-4 border border-orange-200 dark:border-orange-800">
+        <h4 className="font-medium text-orange-800 dark:text-orange-200 mb-3">Damage Assessment</h4>
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Damage Level</label>
+          <select
+            value={form.damageLevel}
+            onChange={(e) => setForm(prev => ({ ...prev, damageLevel: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+          >
+            <option value="">Select...</option>
+            <option value="Minor">Minor</option>
+            <option value="Moderate">Moderate</option>
+            <option value="Severe">Severe</option>
+            <option value="Catastrophic">Catastrophic</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Damage Details</label>
+          <textarea
+            value={form.damageDetails}
+            onChange={(e) => setForm(prev => ({ ...prev, damageDetails: e.target.value }))}
+            rows={3}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+            placeholder="Describe infrastructure, property, or agricultural damage..."
+          />
+        </div>
+      </div>
+
+      {/* Narrative */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Narrative Report <span className="text-red-500">*</span>
+        </label>
+        <textarea
+          value={form.narrative}
+          onChange={(e) => {
+            setForm(prev => ({ ...prev, narrative: e.target.value }));
+            if (errors.narrative) setErrors(prev => ({ ...prev, narrative: '' }));
+          }}
+          rows={4}
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
+            errors.narrative ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+          }`}
+          placeholder="Provide a detailed chronological account of the disaster response..."
+        />
+        {errors.narrative && (
+          <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
+            <AlertCircle size={14} /> {errors.narrative}
+          </p>
+        )}
       </div>
     </div>
   );

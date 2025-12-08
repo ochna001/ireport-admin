@@ -98,6 +98,8 @@ contextBridge.exposeInMainWorld('api', {
   // Auth
   loginChief: (params: { email: string; password: string }) =>
     ipcRenderer.invoke('auth:loginChief', params),
+  loginOfficer: (params: { email: string; password: string }) =>
+    ipcRenderer.invoke('auth:loginOfficer', params),
 
   logout: () =>
     ipcRenderer.invoke('auth:logout'),
@@ -142,9 +144,9 @@ contextBridge.exposeInMainWorld('api', {
   // Final Report Drafts
   getFinalReportDraft: (incidentId: string) =>
     ipcRenderer.invoke('finalReportDrafts:get', incidentId),
-  saveFinalReportDraft: (params: { incidentId: string; agencyType: string; draftDetails: any; status?: string; authorId: string }) =>
+  saveFinalReportDraft: (params: { incidentId: string; agencyType: string; draftDetails: any; status?: string; authorId?: string }) =>
     ipcRenderer.invoke('finalReportDrafts:save', params),
-  promoteFinalReportDraft: (params: { incidentId: string; authorId: string }) =>
+  promoteFinalReportDraft: (params: { incidentId: string; authorId?: string }) =>
     ipcRenderer.invoke('finalReportDrafts:promote', params),
   deleteFinalReportDraft: (incidentId: string) =>
     ipcRenderer.invoke('finalReportDrafts:delete', incidentId),
@@ -236,8 +238,8 @@ export interface ElectronAPI {
   
   // Final Report Drafts
   getFinalReportDraft: (incidentId: string) => Promise<any | null>;
-  saveFinalReportDraft: (params: { incidentId: string; agencyType: string; draftDetails: any; status?: string; authorId: string }) => Promise<{ success: boolean; draft: any }>;
-  promoteFinalReportDraft: (params: { incidentId: string; authorId: string }) => Promise<{ success: boolean }>;
+  saveFinalReportDraft: (params: { incidentId: string; agencyType: string; draftDetails: any; status?: string; authorId?: string }) => Promise<{ success: boolean; draft: any }>;
+  promoteFinalReportDraft: (params: { incidentId: string; authorId?: string }) => Promise<{ success: boolean }>;
   deleteFinalReportDraft: (incidentId: string) => Promise<{ success: boolean }>;
   listFinalReportDrafts: (filters?: { agencyType?: string; status?: string; stationId?: number }) => Promise<any[]>;
   
@@ -252,6 +254,7 @@ export interface ElectronAPI {
   
   // Auth
   loginChief: (params: { email: string; password: string }) => Promise<any>;
+  loginOfficer: (params: { email: string; password: string }) => Promise<any>;
   logout: () => Promise<{ success: boolean }>;
 
   // Export

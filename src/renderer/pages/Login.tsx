@@ -88,8 +88,8 @@ function Login({ onLogin }: { onLogin: () => void }) {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    // Use the same login method for both chief and officer for now
-    window.api.loginChief({ email: normalizedEmail, password })
+    const loginMethod = selectedRole === 'chief' ? window.api.loginChief : window.api.loginOfficer;
+    loginMethod({ email: normalizedEmail, password })
       .then((profile) => {
         // Clear backend caches to avoid stale scoped data
         window.api.logout?.().catch(() => {});

@@ -443,7 +443,7 @@ function Users() {
 
       {stationScopeActive && (
         <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
-          User list scoped to Station {initialScope.stationName || initialScope.stationId} ({initialScope.agencyShortName || 'Agency'} • Chief). Agency filter locked.
+          User list scoped to your station{initialScope.stationName ? ` (${initialScope.stationName})` : ''}. Agency filter locked.
         </div>
       )}
 
@@ -1164,12 +1164,14 @@ function EditUserModal({
             <select
               value={formData.role}
               onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-              className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+              disabled={formData.role === 'Resident'}
+              className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {ROLES.map(role => (
                 <option key={role} value={role}>{role}</option>
               ))}
             </select>
+            {formData.role === 'Resident' && <p className="text-xs text-gray-400 mt-1">Resident role cannot be changed</p>}
           </div>
 
           <div>
@@ -1177,7 +1179,7 @@ function EditUserModal({
             <select
               value={formData.agency_id}
               onChange={(e) => setFormData({ ...formData, agency_id: e.target.value, station_id: '' })}
-              disabled={!isAdmin}
+              disabled={!isAdmin || formData.role === 'Resident'}
               className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white disabled:opacity-60 disabled:cursor-not-allowed ${
                 errors.agency_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
               }`}
@@ -1196,7 +1198,7 @@ function EditUserModal({
             <select
               value={formData.station_id}
               onChange={(e) => setFormData({ ...formData, station_id: e.target.value })}
-              disabled={!isAdmin || !formData.agency_id}
+              disabled={!isAdmin || !formData.agency_id || formData.role === 'Resident'}
               className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white disabled:opacity-60 disabled:cursor-not-allowed ${
                 errors.station_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
               }`}

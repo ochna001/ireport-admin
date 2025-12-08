@@ -106,15 +106,27 @@ function Reports() {
   }, [dateRange, selectedAgency, customStart, customEnd]);
 
   useEffect(() => {
-    if (stationScopeActive && sessionScope.agencyShortName) {
-      const scopedAgency = sessionScope.agencyShortName.toUpperCase();
-      setReportConfig(prev => ({
-        ...prev,
-        agencies: [scopedAgency],
-      }));
-      setSelectedAgency(sessionScope.agencyShortName.toLowerCase());
+    if (stationScopeActive) {
+      // Set agency filter
+      if (sessionScope.agencyShortName) {
+        const scopedAgency = sessionScope.agencyShortName.toUpperCase();
+        setReportConfig(prev => ({
+          ...prev,
+          agencies: [scopedAgency],
+          // Also default municipality to station's municipality if available
+          municipality: sessionScope.stationMunicipality || prev.municipality,
+        }));
+        setSelectedAgency(sessionScope.agencyShortName.toLowerCase());
+      }
+      // Default municipality to station's municipality
+      if (sessionScope.stationMunicipality) {
+        setReportConfig(prev => ({
+          ...prev,
+          municipality: sessionScope.stationMunicipality || prev.municipality,
+        }));
+      }
     }
-  }, [stationScopeActive, sessionScope.agencyShortName]);
+  }, [stationScopeActive, sessionScope.agencyShortName, sessionScope.stationMunicipality]);
 
   const loadStats = async (skipCache = false) => {
     if (skipCache) setSkipCacheNext(true);
@@ -666,7 +678,7 @@ function Reports() {
 
       {stationScopeActive && (
         <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
-          Reports are limited to Station {sessionScope.stationName || sessionScope.stationId} ({sessionScope.agencyShortName || 'Agency'} • Chief). Agency selection is locked to your station.
+          Reports are limited to your station{sessionScope.stationName ? ` (${sessionScope.stationName})` : ''}. Agency selection is locked to your station.
         </div>
       )}
 

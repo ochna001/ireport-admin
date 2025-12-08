@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSessionScope, isChiefScoped, SessionScope } from '../utils/sessionScope';
+import { getSessionScope, isStationScoped, SessionScope } from '../utils/sessionScope';
 
 interface Stats {
   total: number;
@@ -165,9 +165,9 @@ function Dashboard() {
     <div className="p-6 dark:bg-gray-950">
       <h1 className="text-2xl font-bold text-gray-800 dark:text-white mb-6">Dashboard</h1>
 
-      {isChiefScoped(sessionScope) && (
+      {isStationScoped(sessionScope) && (
         <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
-          Data scoped to Station {sessionScope.stationName || sessionScope.stationId} ({sessionScope.agencyShortName || 'Agency'} • Chief)
+          Data scoped to Station {sessionScope.stationName || sessionScope.stationId} ({sessionScope.agencyShortName || 'Agency'} • {sessionScope.role || 'Chief'})
         </div>
       )}
 
@@ -231,46 +231,52 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* Agency Breakdown */}
-      <div className="grid grid-cols-3 gap-6 mb-8">
-        <div 
-          className="bg-blue-600 rounded-xl p-6 text-white cursor-pointer hover:bg-blue-700 transition-colors"
-          onClick={() => navigate('/incidents?agency=pnp')}
-        >
-          <div className="flex items-center gap-4">
-            <Shield size={32} />
-            <div>
-              <p className="text-blue-100">PNP Reports</p>
-              <p className="text-3xl font-bold">{getAgencyCount('pnp')}</p>
+      {/* Agency Breakdown - Show only user's agency for station-scoped users */}
+      <div className={`grid ${isStationScoped(sessionScope) ? 'grid-cols-1 max-w-md' : 'grid-cols-3'} gap-6 mb-8`}>
+        {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'pnp') && (
+          <div 
+            className="bg-blue-600 rounded-xl p-6 text-white cursor-pointer hover:bg-blue-700 transition-colors"
+            onClick={() => navigate('/incidents?agency=pnp')}
+          >
+            <div className="flex items-center gap-4">
+              <Shield size={32} />
+              <div>
+                <p className="text-blue-100">PNP Reports</p>
+                <p className="text-3xl font-bold">{getAgencyCount('pnp')}</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        <div 
-          className="bg-red-600 rounded-xl p-6 text-white cursor-pointer hover:bg-red-700 transition-colors"
-          onClick={() => navigate('/incidents?agency=bfp')}
-        >
-          <div className="flex items-center gap-4">
-            <Flame size={32} />
-            <div>
-              <p className="text-red-100">BFP Reports</p>
-              <p className="text-3xl font-bold">{getAgencyCount('bfp')}</p>
+        {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'bfp') && (
+          <div 
+            className="bg-red-600 rounded-xl p-6 text-white cursor-pointer hover:bg-red-700 transition-colors"
+            onClick={() => navigate('/incidents?agency=bfp')}
+          >
+            <div className="flex items-center gap-4">
+              <Flame size={32} />
+              <div>
+                <p className="text-red-100">BFP Reports</p>
+                <p className="text-3xl font-bold">{getAgencyCount('bfp')}</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        <div 
-          className="bg-cyan-600 rounded-xl p-6 text-white cursor-pointer hover:bg-cyan-700 transition-colors"
-          onClick={() => navigate('/incidents?agency=pdrrmo')}
-        >
-          <div className="flex items-center gap-4">
-            <Waves size={32} />
-            <div>
-              <p className="text-cyan-100">PDRRMO Reports</p>
-              <p className="text-3xl font-bold">{getAgencyCount('pdrrmo')}</p>
+        {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'pdrrmo') && (
+          <div 
+            className="bg-cyan-600 rounded-xl p-6 text-white cursor-pointer hover:bg-cyan-700 transition-colors"
+            onClick={() => navigate('/incidents?agency=pdrrmo')}
+          >
+            <div className="flex items-center gap-4">
+              <Waves size={32} />
+              <div>
+                <p className="text-cyan-100">PDRRMO Reports</p>
+                <p className="text-3xl font-bold">{getAgencyCount('pdrrmo')}</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Recent Activity */}

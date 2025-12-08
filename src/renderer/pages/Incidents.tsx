@@ -41,11 +41,7 @@ function Incidents() {
   );
   const [filterStatus, setFilterStatus] = useState('');
   // Station-scoped users have locked municipality based on their station
-  const [filterMunicipality, setFilterMunicipality] = useState(
-    stationScopeActive && initialScope.stationMunicipality
-      ? initialScope.stationMunicipality
-      : ''
-  );
+  const [filterMunicipality, setFilterMunicipality] = useState(''); // Default to all to allow cross-municipality assignments
   const [filterBarangay, setFilterBarangay] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: keyof Incident; direction: 'asc' | 'desc' } | null>(null);
 
@@ -106,11 +102,7 @@ function Incidents() {
       if (isStationScoped(scope)) {
         filters.agency = scope.agencyShortName?.toLowerCase();
         filters.stationId = scope.stationId;
-        // Also apply municipality filter from station
-        if (scope.stationMunicipality) {
-          filters.municipality = scope.stationMunicipality;
-        }
-
+        
         if (scope.agencyShortName) {
           const scopedAgency = scope.agencyShortName.toLowerCase();
           if (filterAgency !== scopedAgency) {
@@ -225,7 +217,7 @@ function Incidents() {
         <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
           <strong>Station scope active:</strong> {sessionScope.stationName || `Station ${sessionScope.stationId}`} ({sessionScope.agencyShortName || 'Agency'} • {sessionScope.role})
           {sessionScope.stationMunicipality && <span> • {sessionScope.stationMunicipality}</span>}
-          <span className="block mt-1 text-purple-600 dark:text-purple-300">Agency and municipality filters are locked to your station.</span>
+          <span className="block mt-1 text-purple-600 dark:text-purple-300">Agency filter is locked to your station.</span>
         </div>
       )}
 
@@ -281,8 +273,7 @@ function Incidents() {
               setFilterMunicipality(nextMunicipality);
               setFilterBarangay(''); // reset barangay when municipality changes
             }}
-            disabled={stationScopeActive && !!sessionScope.stationMunicipality}
-            className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white min-w-[180px] disabled:opacity-60"
+            className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white min-w-[180px]"
           >
             <option value="">All Municipalities</option>
             {municipalities.map((municipality) => (
