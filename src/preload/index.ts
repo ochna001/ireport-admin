@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   getIncident: (id: string) => 
     ipcRenderer.invoke('db:getIncident', id),
   
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; stationId?: number; officerIds?: string[] }) => 
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[] }) => 
     ipcRenderer.invoke('db:updateIncidentStatus', params),
   
   getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => 
@@ -115,6 +115,42 @@ contextBridge.exposeInMainWorld('api', {
   openExternal: (url: string) =>
     ipcRenderer.invoke('app:openExternal', url),
 
+  // Unit Reports
+  getUnitReportsByIncident: (incidentId: string) =>
+    ipcRenderer.invoke('unitReports:getByIncident', incidentId),
+
+  // Media
+  uploadMedia: (params: { incidentId: string; filePath: string; fileName: string; mediaType: 'photo' | 'video' }) =>
+    ipcRenderer.invoke('media:upload', params),
+  getMediaByIncident: (incidentId: string) =>
+    ipcRenderer.invoke('media:getByIncident', incidentId),
+  deleteMedia: (params: { mediaId: number; storagePath: string }) =>
+    ipcRenderer.invoke('media:delete', params),
+  openFileDialog: (options?: { filters?: any[] }) =>
+    ipcRenderer.invoke('dialog:openFile', options),
+
+  // Notifications
+  getNotificationsByUser: (userId: string) =>
+    ipcRenderer.invoke('notifications:getByUser', userId),
+  markNotificationAsRead: (notificationId: number) =>
+    ipcRenderer.invoke('notifications:markAsRead', notificationId),
+  markAllNotificationsAsRead: (userId: string) =>
+    ipcRenderer.invoke('notifications:markAllAsRead', userId),
+  getUnreadNotificationCount: (userId: string) =>
+    ipcRenderer.invoke('notifications:getUnreadCount', userId),
+
+  // Final Report Drafts
+  getFinalReportDraft: (incidentId: string) =>
+    ipcRenderer.invoke('finalReportDrafts:get', incidentId),
+  saveFinalReportDraft: (params: { incidentId: string; agencyType: string; draftDetails: any; status?: string; authorId: string }) =>
+    ipcRenderer.invoke('finalReportDrafts:save', params),
+  promoteFinalReportDraft: (params: { incidentId: string; authorId: string }) =>
+    ipcRenderer.invoke('finalReportDrafts:promote', params),
+  deleteFinalReportDraft: (incidentId: string) =>
+    ipcRenderer.invoke('finalReportDrafts:delete', incidentId),
+  listFinalReportDrafts: (filters?: { agencyType?: string; status?: string; stationId?: number }) =>
+    ipcRenderer.invoke('finalReportDrafts:list', filters),
+
   // Settings
   getSettings: () =>
     ipcRenderer.invoke('settings:get'),
@@ -149,7 +185,7 @@ export interface ElectronAPI {
   // Incidents
   getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number }) => Promise<any[]>;
   getIncident: (id: string) => Promise<any>;
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; stationId?: number; officerIds?: string[] }) => Promise<{ success: boolean }>;
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[] }) => Promise<{ success: boolean }>;
   getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => Promise<any>;
   getAuditLog: (incidentId: string) => Promise<any[]>;
   getAgencyStations: () => Promise<any[]>;
@@ -182,6 +218,28 @@ export interface ElectronAPI {
   // Final Reports
   createFinalReport: (params: { incidentId: string; reportDetails: any; completedBy: string }) => Promise<any>;
   getFinalReport: (incidentId: string) => Promise<any>;
+  
+  // Unit Reports
+  getUnitReportsByIncident: (incidentId: string) => Promise<any[]>;
+  
+  // Media
+  uploadMedia: (params: { incidentId: string; filePath: string; fileName: string; mediaType: 'photo' | 'video' }) => Promise<{ success: boolean; storagePath: string; publicUrl: string; mediaId?: number }>;
+  getMediaByIncident: (incidentId: string) => Promise<any[]>;
+  deleteMedia: (params: { mediaId: number; storagePath: string }) => Promise<{ success: boolean }>;
+  openFileDialog: (options?: { filters?: any[] }) => Promise<{ canceled: boolean; filePath?: string; error?: string }>;
+  
+  // Notifications
+  getNotificationsByUser: (userId: string) => Promise<any[]>;
+  markNotificationAsRead: (notificationId: number) => Promise<{ success: boolean }>;
+  markAllNotificationsAsRead: (userId: string) => Promise<{ success: boolean }>;
+  getUnreadNotificationCount: (userId: string) => Promise<number>;
+  
+  // Final Report Drafts
+  getFinalReportDraft: (incidentId: string) => Promise<any | null>;
+  saveFinalReportDraft: (params: { incidentId: string; agencyType: string; draftDetails: any; status?: string; authorId: string }) => Promise<{ success: boolean; draft: any }>;
+  promoteFinalReportDraft: (params: { incidentId: string; authorId: string }) => Promise<{ success: boolean }>;
+  deleteFinalReportDraft: (incidentId: string) => Promise<{ success: boolean }>;
+  listFinalReportDrafts: (filters?: { agencyType?: string; status?: string; stationId?: number }) => Promise<any[]>;
   
   // Security Logging
   logSecurityAction: (params: { action: string; details: any; userId?: string }) => Promise<{ success: boolean }>;

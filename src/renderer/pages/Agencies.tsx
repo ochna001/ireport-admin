@@ -18,6 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getSessionScope, isStationScoped } from '../utils/sessionScope';
 
 // Google Maps API Key from main process
 const GOOGLE_MAPS_API_KEY = 'AIzaSyBuylnOdkYntsIFYVDbsQFemeyqya1TaTc';
@@ -147,7 +148,11 @@ interface Resource {
 type TabType = 'agencies' | 'stations' | 'resources';
 
 function Agencies() {
-  const [activeTab, setActiveTab] = useState<TabType>('agencies');
+  const scope = getSessionScope();
+  const isAdmin = scope.role === 'Admin';
+  const stationScopeActive = isStationScoped(scope);
+  // Station-scoped users start on stations tab, admins start on agencies
+  const [activeTab, setActiveTab] = useState<TabType>(stationScopeActive ? 'stations' : 'agencies');
   const [agencies, setAgencies] = useState<Agency[]>([]);
   const [stations, setStations] = useState<Station[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
@@ -231,15 +236,33 @@ function Agencies() {
   };
 
   const filteredStations = stations.filter(station => {
+    // Scope filter
+    if (!isAdmin) {
+      if (scope.stationId && station.id !== scope.stationId) return false;
+      if (scope.agencyId && station.agency_id !== scope.agencyId) return false;
+    }
+
     const matchesSearch = station.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       station.address?.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesAgency = !agencyFilter || station.agency_id.toString() === agencyFilter;
     return matchesSearch && matchesAgency;
   });
 
+  const stationsForModal = stationScopeActive && scope.stationId
+    ? stations.filter((station) => station.id === scope.stationId)
+    : stations;
+
   const filteredResources = resources.filter(resource => {
     const station = stations.find(s => s.id === resource.station_id);
-    const matchesSearch = resource.name.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    // Scope filter
+    if (!isAdmin) {
+      if (scope.stationId && resource.station_id !== scope.stationId) return false;
+      if (scope.agencyId && station?.agency_id !== scope.agencyId) return false;
+    }
+
+    const matchesSearch = resource.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      resource.description?.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesAgency = !agencyFilter || station?.agency_id.toString() === agencyFilter;
     return matchesSearch && matchesAgency;
   });
@@ -392,12 +415,26 @@ function Agencies() {
         </div>
       )}
 
+      {/* Station Scope Info Banner */}
+      {stationScopeActive && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 dark:bg-blue-900/20 dark:border-blue-700 dark:text-blue-100">
+          <strong>Station view:</strong> {scope.stationName || `Station ${scope.stationId}`}
+          {scope.stationMunicipality && <span> • {scope.stationMunicipality}</span>}
+          <span className="block mt-1 text-blue-600 dark:text-blue-300">Showing only your station's information and resources.</span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Agency Management</h1>
+          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">
+            {stationScopeActive ? 'My Station' : 'Agency Management'}
+          </h1>
           <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            Manage agencies, stations, and resources
+            {stationScopeActive 
+              ? 'View your station information and resources'
+              : 'Manage agencies, stations, and resources'
+            }
           </p>
         </div>
         <button
@@ -411,19 +448,21 @@ function Agencies() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-gray-200 dark:border-gray-700">
-        <button
-          onClick={() => setActiveTab('agencies')}
-          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
-            activeTab === 'agencies'
-              ? 'text-blue-600 border-blue-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <Building2 className="w-4 h-4" />
-            Agencies
-          </div>
-        </button>
+        {!stationScopeActive && (
+          <button
+            onClick={() => setActiveTab('agencies')}
+            className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === 'agencies'
+                ? 'text-blue-600 border-blue-600'
+                : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4" />
+              Agencies
+            </div>
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('stations')}
           className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
@@ -455,7 +494,9 @@ function Agencies() {
       {/* Agencies Tab */}
       {activeTab === 'agencies' && (
         <div className="grid grid-cols-3 gap-6">
-          {agencies.map((agency) => {
+          {agencies
+            .filter(agency => !scope.agencyId || agency.id === scope.agencyId)
+            .map((agency) => {
             const stationCount = stations.filter(s => s.agency_id === agency.id).length;
             const resourceCount = resources.filter(r => {
               const station = stations.find(s => s.id === r.station_id);
@@ -528,23 +569,27 @@ function Agencies() {
                   />
                 </div>
               </div>
-              <select
-                value={agencyFilter}
-                onChange={(e) => setAgencyFilter(e.target.value)}
-                className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
-              >
-                <option value="">All Agencies</option>
-                {agencies.map(agency => (
-                  <option key={agency.id} value={agency.id}>{agency.short_name}</option>
-                ))}
-              </select>
-              <button
-                onClick={handleAddStation}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Station
-              </button>
+              {!stationScopeActive && (
+                <select
+                  value={agencyFilter}
+                  onChange={(e) => setAgencyFilter(e.target.value)}
+                  className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="">All Agencies</option>
+                  {agencies.map(agency => (
+                    <option key={agency.id} value={agency.id}>{agency.short_name}</option>
+                  ))}
+                </select>
+              )}
+              {!stationScopeActive && (
+                <button
+                  onClick={handleAddStation}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Station
+                </button>
+              )}
             </div>
           </div>
 
@@ -581,20 +626,22 @@ function Agencies() {
                           <span className="text-xs text-gray-500 dark:text-gray-400">{agency?.short_name}</span>
                         </div>
                       </div>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => handleEditStation(station)}
-                          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                        >
-                          <Edit className="w-4 h-4 text-gray-500" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteStation(station.id)}
-                          className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </button>
-                      </div>
+                      {!stationScopeActive && (
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => handleEditStation(station)}
+                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                          >
+                            <Edit className="w-4 h-4 text-gray-500" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteStation(station.id)}
+                            className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {station.address && (
@@ -646,16 +693,18 @@ function Agencies() {
                   />
                 </div>
               </div>
-              <select
-                value={agencyFilter}
-                onChange={(e) => setAgencyFilter(e.target.value)}
-                className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
-              >
-                <option value="">All Agencies</option>
-                {agencies.map(agency => (
-                  <option key={agency.id} value={agency.id}>{agency.short_name}</option>
-                ))}
-              </select>
+              {!stationScopeActive && (
+                <select
+                  value={agencyFilter}
+                  onChange={(e) => setAgencyFilter(e.target.value)}
+                  className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="">All Agencies</option>
+                  {agencies.map(agency => (
+                    <option key={agency.id} value={agency.id}>{agency.short_name}</option>
+                  ))}
+                </select>
+              )}
               <button
                 onClick={handleAddResource}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
@@ -816,8 +865,9 @@ function Agencies() {
       {showResourceModal && (
         <ResourceModal
           resource={editingResource}
-          stations={stations}
+          stations={stationsForModal}
           agencies={agencies}
+          defaultStationId={stationScopeActive ? scope.stationId : undefined}
           onClose={() => {
             setShowResourceModal(false);
             setEditingResource(null);
@@ -1401,12 +1451,14 @@ function ResourceModal({
   resource,
   stations,
   agencies,
+  defaultStationId,
   onClose,
   onSave
 }: {
   resource: Resource | null;
   stations: Station[];
   agencies: Agency[];
+  defaultStationId?: number;
   onClose: () => void;
   onSave: (data: Partial<Resource>) => void;
 }) {
@@ -1417,7 +1469,7 @@ function ResourceModal({
     status: 'available' | 'deployed' | 'maintenance';
     description: string;
   }>({
-    station_id: resource?.station_id?.toString() || '',
+    station_id: resource?.station_id?.toString() || defaultStationId?.toString() || '',
     name: resource?.name || '',
     type: resource?.type || 'vehicle',
     status: resource?.status || 'available',

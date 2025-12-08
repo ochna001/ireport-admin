@@ -39,7 +39,7 @@ function App() {
     <Routes>
       <Route path="/login" element={<Login onLogin={() => setIsAuthenticated(true)} />} />
       
-      <Route path="/" element={isAuthenticated ? <Layout /> : <Navigate to="/login" replace />}>
+      <Route path="/" element={isAuthenticated ? <Layout onLogout={() => setIsAuthenticated(false)} /> : <Navigate to="/login" replace />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="incidents" element={<Incidents />} />

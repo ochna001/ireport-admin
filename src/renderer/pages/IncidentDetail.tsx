@@ -1,6 +1,7 @@
 import {
     ArrowLeft,
     Clock,
+    Edit3,
     FileText,
     History,
     Image as ImageIcon,
@@ -8,11 +9,13 @@ import {
     Send,
     User,
     UserCheck,
+    Truck,
     X
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getSessionScope, isChiefScoped } from '../utils/sessionScope';
+import { getSessionScope, isStationScoped } from '../utils/sessionScope';
+import { FinalReportModal } from '../components/FinalReportModal';
 
 interface Incident {
   id: string;
@@ -20,6 +23,9 @@ interface Incident {
   reporter_id?: string;
   reporter_name: string;
   reporter_age: number;
+  reporter_phone?: string;
+  reporter_latitude?: number;
+  reporter_longitude?: number;
   description: string;
   status: string;
   latitude: number;
@@ -29,6 +35,7 @@ interface Incident {
   assigned_station_id?: number;
   assigned_officer_id?: string;
   assigned_officer_ids?: string[]; // Multiple officers
+  assigned_resource_ids?: number[];
   created_at: string;
   updated_at: string;
   resolved_at?: string;
@@ -65,6 +72,15 @@ interface Officer {
   role: string;
   phone_number?: string;
   station_id?: number | null;
+  status?: string;
+}
+
+interface AgencyResource {
+  id: number;
+  name: string;
+  type: string;
+  status: string;
+  station_id: number;
 }
 
 interface FinalReportData {
@@ -101,17 +117,23 @@ function IncidentDetail() {
   const [history, setHistory] = useState<StatusHistoryEntry[]>([]);
   const [stations, setStations] = useState<AgencyStation[]>([]);
   const [officers, setOfficers] = useState<Officer[]>([]);
+  const [resources, setResources] = useState<AgencyResource[]>([]);
+  const [unitReports, setUnitReports] = useState<any[]>([]);
+  const [finalReport, setFinalReport] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [newStatus, setNewStatus] = useState('');
   const [notes, setNotes] = useState('');
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
   const [selectedOfficerIds, setSelectedOfficerIds] = useState<string[]>([]);
-  const [initialOfficerIds, setInitialOfficerIds] = useState<string[]>([]); // Track initial state
+  const [selectedResourceIds, setSelectedResourceIds] = useState<number[]>([]);
+  const [initialOfficerIds, setInitialOfficerIds] = useState<string[]>([]);
+  const [initialResourceIds, setInitialResourceIds] = useState<number[]>([]);
+  const [initialStationId, setInitialStationId] = useState<number | null>(null);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateSuccess, setUpdateSuccess] = useState(false);
-  
-  // Final Report Modal State
+
+  // Final Report Modal State (legacy - for closing incidents)
   const [showFinalReportModal, setShowFinalReportModal] = useState(false);
   const [finalReportData, setFinalReportData] = useState<FinalReportData>({
     summary: '',
@@ -120,11 +142,19 @@ function IncidentDetail() {
     recommendations: '',
   });
   const [savingFinalReport, setSavingFinalReport] = useState(false);
+  
+  // Enhanced Final Report Modal (with drafts support)
+  const [showEnhancedReportModal, setShowEnhancedReportModal] = useState(false);
+
+  // Media Upload State
+  const [uploadingMedia, setUploadingMedia] = useState(false);
 
   useEffect(() => {
     if (id) {
       loadIncident();
       loadHistory();
+      loadUnitReports();
+      loadFinalReport();
     }
   }, [id]);
 
@@ -134,7 +164,8 @@ function IncidentDetail() {
       loadStations();
     }
     if (incident?.agency_type) {
-      loadOfficers();
+      loadOfficers(incident.agency_type);
+      loadResources();
     }
   }, [incident?.latitude, incident?.longitude, incident?.agency_type]);
 
@@ -145,18 +176,16 @@ function IncidentDetail() {
       console.log('[IncidentDetail] Location coords:', data?.latitude, data?.longitude);
       setIncident(data);
       setNewStatus(data?.status || '');
-      
-      // Pre-select already assigned officers
-      if (data?.assigned_officer_ids && data.assigned_officer_ids.length > 0) {
-        setSelectedOfficerIds(data.assigned_officer_ids);
-        setInitialOfficerIds(data.assigned_officer_ids);
-      } else if (data?.assigned_officer_id) {
-        // Fallback to single officer for backward compatibility
-        setSelectedOfficerIds([data.assigned_officer_id]);
-        setInitialOfficerIds([data.assigned_officer_id]);
-      } else {
-        setInitialOfficerIds([]);
-      }
+      setSelectedStationId(data?.assigned_station_id);
+      setInitialStationId(data?.assigned_station_id);
+
+      const officerIds = data?.assigned_officer_ids || [];
+      setSelectedOfficerIds(officerIds);
+      setInitialOfficerIds(officerIds);
+
+      const resourceIds = data?.assigned_resource_ids || [];
+      setSelectedResourceIds(resourceIds);
+      setInitialResourceIds(resourceIds);
     } catch (error) {
       console.error('Failed to load incident:', error);
     } finally {
@@ -173,14 +202,32 @@ function IncidentDetail() {
     }
   };
 
+  const loadUnitReports = async () => {
+    try {
+      const data = await window.api.getUnitReportsByIncident(id!);
+      setUnitReports(data);
+    } catch (error) {
+      console.error('Failed to load unit reports:', error);
+    }
+  };
+
+  const loadFinalReport = async () => {
+    try {
+      const data = await window.api.getFinalReport(id!);
+      setFinalReport(data);
+    } catch (error) {
+      console.error('Failed to load final report:', error);
+    }
+  };
+
   const loadStations = async () => {
     // Wait for incident to be loaded first
     if (!incident?.latitude || !incident?.longitude) return;
-    
+
     try {
       // First try database stations
       let data = await window.api.getAgencyStations();
-      
+
       // If no stations in DB, fetch from OpenStreetMap
       if (!data || data.length === 0) {
         console.log('[IncidentDetail] No stations in DB, fetching from OSM...');
@@ -190,40 +237,47 @@ function IncidentDetail() {
           radius: 15000 // 15km radius
         });
       }
-      
+
       setStations(data);
     } catch (error) {
       console.error('Failed to load stations:', error);
     }
   };
 
-  const loadOfficers = async () => {
-    if (!incident?.agency_type) return;
-    
+  const loadOfficers = async (agencyType: string) => {
     try {
-      const data = await window.api.getOfficersByAgency(incident.agency_type);
       const scope = getSessionScope();
+      let data = await window.api.getOfficersByAgency(agencyType);
 
+      // Filter based on scope if needed
       let filtered = data || [];
-      if (isChiefScoped(scope) && scope.stationId) {
+      if (isStationScoped(scope) && scope.stationId) {
         filtered = filtered.filter((officer: Officer) => !officer.station_id || officer.station_id === scope.stationId);
       }
-
       setOfficers(filtered);
     } catch (error) {
       console.error('Failed to load officers:', error);
     }
   };
 
+  const loadResources = async () => {
+    try {
+      const data = await window.api.getResources?.() || [];
+      setResources(data);
+    } catch (error) {
+      console.error('Failed to load resources:', error);
+    }
+  };
+
   const handleUpdateStatus = async () => {
     if (!newStatus) return;
-    
+
     // If changing to 'closed', show final report modal first
     if (newStatus === 'closed' && incident?.status !== 'closed') {
       setShowFinalReportModal(true);
       return;
     }
-    
+
     await performStatusUpdate();
   };
 
@@ -235,17 +289,26 @@ function IncidentDetail() {
     return sortedSelected.some((id, index) => id !== sortedInitial[index]);
   };
 
-  // Check if there are any changes to submit
-  const hasChanges = (): boolean => {
-    return newStatus !== incident?.status || 
-           hasOfficerChanges() || 
-           selectedStationId !== null ||
-           notes.trim() !== '';
+  const hasResourceChanges = () => {
+    if (selectedResourceIds.length !== initialResourceIds.length) return true;
+    const sortedSelected = [...selectedResourceIds].sort();
+    const sortedInitial = [...initialResourceIds].sort();
+    return JSON.stringify(sortedSelected) !== JSON.stringify(sortedInitial);
+  };
+
+  const hasChanges = () => {
+    return newStatus !== incident?.status ||
+           (selectedStationId !== initialStationId) ||
+           hasOfficerChanges() ||
+           hasResourceChanges() ||
+           (notes.trim().length > 0);
   };
 
   const performStatusUpdate = async () => {
+    if (!incident) return;
+    
     // Confirmation for critical status changes
-    if ((newStatus === 'resolved' || newStatus === 'closed') && 
+    if ((newStatus === 'resolved' || newStatus === 'closed') &&
         !confirm(`Are you sure you want to mark this incident as ${newStatus}? This action cannot be easily undone.`)) {
       return;
     }
@@ -255,13 +318,16 @@ function IncidentDetail() {
     setUpdateSuccess(false);
 
     try {
+      const scope = getSessionScope();
       await window.api.updateIncidentStatus({
-        id: id!,
+        id: incident.id,
         status: newStatus,
         notes: notes,
-        updatedBy: 'Admin',
-        stationId: selectedStationId || undefined,
-        officerIds: selectedOfficerIds.length > 0 ? selectedOfficerIds : undefined,
+        updatedBy: scope.role === 'Admin' ? 'Admin' : (scope.role || 'User'),
+        updatedById: scope.userId || undefined,
+        stationId: selectedStationId ?? undefined,
+        officerIds: selectedOfficerIds,
+        resourceIds: selectedResourceIds
       });
 
       // Log security action
@@ -299,6 +365,7 @@ function IncidentDetail() {
 
     setSavingFinalReport(true);
     try {
+      const scope = getSessionScope();
       // Create final report
       await window.api.createFinalReport({
         incidentId: id!,
@@ -310,7 +377,7 @@ function IncidentDetail() {
           reporter_name: incident?.reporter_name,
           created_at: new Date().toISOString(),
         },
-        completedBy: 'admin', // TODO: Use actual admin user ID when auth is implemented
+        completedBy: scope.userId || 'unknown',
       });
 
       // Log security action
@@ -322,6 +389,7 @@ function IncidentDetail() {
       // Close modal and proceed with status update
       setShowFinalReportModal(false);
       await performStatusUpdate();
+      await loadFinalReport(); // Reload to show the new final report
       
       // Reset form
       setFinalReportData({
@@ -335,6 +403,52 @@ function IncidentDetail() {
       alert('Failed to create final report. Please try again.');
     } finally {
       setSavingFinalReport(false);
+    }
+  };
+
+  const handleUploadMedia = async () => {
+    if (!id) return;
+    
+    setUploadingMedia(true);
+    try {
+      // Open file dialog
+      const result = await window.api.openFileDialog({
+        filters: [
+          { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] },
+          { name: 'Videos', extensions: ['mp4', 'mov', 'avi', 'mkv'] }
+        ]
+      });
+      
+      if (result.canceled || !result.filePath) {
+        setUploadingMedia(false);
+        return;
+      }
+      
+      // Determine media type from extension
+      const ext = result.filePath.split('.').pop()?.toLowerCase() || '';
+      const videoExts = ['mp4', 'mov', 'avi', 'mkv'];
+      const mediaType = videoExts.includes(ext) ? 'video' : 'photo';
+      
+      // Extract filename
+      const fileName = result.filePath.split(/[\\/]/).pop() || 'upload';
+      
+      // Upload to Supabase
+      await window.api.uploadMedia({
+        incidentId: id,
+        filePath: result.filePath,
+        fileName,
+        mediaType
+      });
+      
+      // Reload incident to show new media
+      await loadIncident();
+      
+      alert('Media uploaded successfully!');
+    } catch (error) {
+      console.error('Failed to upload media:', error);
+      alert('Failed to upload media. Please try again.');
+    } finally {
+      setUploadingMedia(false);
     }
   };
 
@@ -479,10 +593,81 @@ function IncidentDetail() {
       <div className="grid grid-cols-3 gap-6">
         {/* Main Content */}
         <div className="col-span-2 space-y-6">
-          {/* Description */}
+          {/* Initial Incident Report (from Reporter) */}
           <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-            <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Description</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <FileText size={20} />
+                Initial Incident Report
+              </h2>
+              <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
+                From Reporter
+              </span>
+            </div>
             <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{incident.description}</p>
+          </div>
+
+          {/* Final Report Section - with Edit/Create Draft button */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <FileText size={20} />
+                Final Report
+              </h2>
+              <button
+                onClick={() => setShowEnhancedReportModal(true)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm"
+              >
+                <Edit3 size={16} />
+                {finalReport ? 'Edit Report' : 'Create/Edit Draft'}
+              </button>
+            </div>
+            
+            {finalReport ? (
+              <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-lg p-4 border border-green-200 dark:border-green-800">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs px-2 py-1 bg-green-600 text-white rounded">
+                    Published
+                  </span>
+                  <button
+                    onClick={() => {/* TODO: Export PDF */}}
+                    className="px-3 py-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-600 text-sm flex items-center gap-1"
+                  >
+                    <FileText size={14} />
+                    Export PDF
+                  </button>
+                </div>
+                
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Summary</h3>
+                    <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{finalReport.report_details?.summary || finalReport.report_details?.narrative || 'N/A'}</p>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Actions Taken</h3>
+                    <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{finalReport.report_details?.actionsTaken || 'N/A'}</p>
+                  </div>
+                  
+                  {finalReport.report_details?.recommendations && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Recommendations</h3>
+                      <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{finalReport.report_details?.recommendations}</p>
+                    </div>
+                  )}
+                  
+                  <div className="pt-2 border-t border-green-200 dark:border-green-800 text-xs text-gray-500 dark:text-gray-400">
+                    Completed on {formatDate(finalReport.completed_at)}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                <FileText size={48} className="mx-auto mb-3 opacity-50" />
+                <p>No final report yet</p>
+                <p className="text-sm">Click "Create/Edit Draft" to start</p>
+              </div>
+            )}
           </div>
 
           {/* Location */}
@@ -554,12 +739,31 @@ function IncidentDetail() {
           </div>
 
           {/* Media */}
-          {mediaItems.length > 0 && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
                 <ImageIcon size={20} />
                 Media ({mediaItems.length})
               </h2>
+              <button
+                onClick={handleUploadMedia}
+                disabled={uploadingMedia}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-sm"
+              >
+                {uploadingMedia ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <ImageIcon size={16} />
+                    Upload Media
+                  </>
+                )}
+              </button>
+            </div>
+            {mediaItems.length > 0 ? (
               <div className="grid grid-cols-3 gap-4">
                 {mediaItems.map((item, index) => {
                   const isVideo = item.type === 'video';
@@ -622,8 +826,10 @@ function IncidentDetail() {
                   );
                 })}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">No media uploaded yet. Click "Upload Media" to add photos or videos.</p>
+            )}
+          </div>
 
           {/* Assigned Officers */}
           {(incident.assigned_officer_ids?.length || incident.assigned_officer_id) && (
@@ -664,6 +870,46 @@ function IncidentDetail() {
                 {officers.length === 0 && (
                   <p className="text-sm text-gray-500 dark:text-gray-400">Loading officer details...</p>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Unit Reports from Field Officers */}
+          {unitReports.length > 0 && (
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                <FileText size={20} />
+                Field Officer Reports ({unitReports.length})
+              </h2>
+              <div className="space-y-4">
+                {unitReports.map((report) => (
+                  <div key={report.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-gray-800 dark:text-white">{report.title}</span>
+                      <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
+                        {report.agency}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                      By: {report.profiles?.display_name || 'Unknown Officer'}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Submitted: {formatDate(report.created_at)}
+                    </p>
+                    {report.details && (
+                      <details className="mt-2">
+                        <summary className="text-sm text-blue-600 dark:text-blue-400 cursor-pointer hover:underline">
+                          View Details
+                        </summary>
+                        <div className="mt-2 p-3 bg-white dark:bg-gray-800 rounded text-sm">
+                          <pre className="whitespace-pre-wrap text-gray-700 dark:text-gray-300">
+                            {JSON.stringify(report.details, null, 2)}
+                          </pre>
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -721,6 +967,17 @@ function IncidentDetail() {
                   <p className="font-medium dark:text-white">{incident.reporter_age} years old</p>
                 </div>
               )}
+              {incident.reporter_phone && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Phone</p>
+                  <a 
+                    href={`tel:${incident.reporter_phone}`}
+                    className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {incident.reporter_phone}
+                  </a>
+                </div>
+              )}
               {incident.reporter?.email && (
                 <div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">Email</p>
@@ -734,12 +991,25 @@ function IncidentDetail() {
               )}
               {incident.reporter?.phone_number && (
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Contact</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Profile Contact</p>
                   <a 
                     href={`tel:${incident.reporter.phone_number}`}
                     className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
                   >
                     {incident.reporter.phone_number}
+                  </a>
+                </div>
+              )}
+              {incident.reporter_latitude && incident.reporter_longitude && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Reporter Location</p>
+                  <a 
+                    href={`https://www.google.com/maps?q=${incident.reporter_latitude},${incident.reporter_longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-blue-600 dark:text-blue-400 hover:underline text-sm"
+                  >
+                    {incident.reporter_latitude.toFixed(6)}, {incident.reporter_longitude.toFixed(6)} ↗
                   </a>
                 </div>
               )}
@@ -858,13 +1128,31 @@ function IncidentDetail() {
                   )}
                 </label>
                 <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-gray-700">
-                  {officers.length === 0 ? (
-                    <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                      No officers available for {incident.agency_type?.toUpperCase()}
-                    </p>
-                  ) : (
-                    officers.map((officer) => {
+                  {(() => {
+                    const visibleOfficers = officers.filter(officer => {
+                      const targetStationId = selectedStationId || incident.assigned_station_id;
+                      // If station is selected/assigned, only show officers from that station or with no station
+                      if (targetStationId) {
+                        return !officer.station_id || officer.station_id === targetStationId;
+                      }
+                      return true;
+                    });
+
+                    if (visibleOfficers.length === 0) {
+                      return (
+                        <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          No officers available {selectedStationId ? 'at selected station' : `for ${incident.agency_type?.toUpperCase()}`}
+                        </p>
+                      );
+                    }
+
+                    return visibleOfficers.map((officer) => {
                       const isCurrentlyAssigned = initialOfficerIds.includes(officer.id);
+                      const isAvailable = officer.status === 'available' || !officer.status;
+                      // Show busy indicator if not available and not currently assigned to THIS incident
+                      // If assigned to THIS incident, they are "busy" but valid to keep assigned
+                      const showBusy = !isAvailable && !isCurrentlyAssigned;
+
                       return (
                       <label
                         key={officer.id}
@@ -882,7 +1170,8 @@ function IncidentDetail() {
                               setSelectedOfficerIds(selectedOfficerIds.filter(id => id !== officer.id));
                             }
                           }}
-                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                          disabled={showBusy} // Disable if busy on another incident
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
                         />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-800 dark:text-white truncate flex items-center gap-2">
@@ -892,18 +1181,106 @@ function IncidentDetail() {
                                 Assigned
                               </span>
                             )}
+                            {showBusy && (
+                              <span className="text-xs px-1.5 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded">
+                                Busy
+                              </span>
+                            )}
                           </p>
                           <p className="text-xs text-gray-500 dark:text-gray-400">
                             {officer.role} {officer.phone_number && `• ${officer.phone_number}`}
                           </p>
                         </div>
                       </label>
-                    );})
-                  )}
+                    );});
+                  })()}
                 </div>
                 <p className="mt-1 text-xs text-gray-400">
                   Select one or more officers to respond to this incident
                 </p>
+              </div>
+
+              {/* Assign Resources */}
+              <div>
+                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  <span className="flex items-center gap-1">
+                    <Truck size={14} />
+                    Assign Resources
+                  </span>
+                  {selectedResourceIds.length > 0 && (
+                    <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">
+                      ({selectedResourceIds.length} selected{hasResourceChanges() ? ' - modified' : ''})
+                    </span>
+                  )}
+                </label>
+                <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-gray-700">
+                  {(() => {
+                    const visibleResources = resources.filter(res => {
+                      const targetStationId = selectedStationId || incident.assigned_station_id;
+                      // Filter by station (must match assigned station)
+                      if (targetStationId) {
+                        return res.station_id === targetStationId;
+                      }
+                      // If no station assigned, show all? Or none?
+                      // Usually resources belong to a station. If incident has no station, maybe show none until station selected.
+                      return false;
+                    });
+
+                    if (visibleResources.length === 0) {
+                      return (
+                        <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          {selectedStationId ? 'No resources available at selected station' : 'Select a station to see resources'}
+                        </p>
+                      );
+                    }
+
+                    return visibleResources.map((res) => {
+                      const isCurrentlyAssigned = initialResourceIds.includes(res.id);
+                      const isAvailable = res.status === 'available';
+                      const showBusy = !isAvailable && !isCurrentlyAssigned;
+
+                      return (
+                      <label
+                        key={res.id}
+                        className={`flex items-center gap-3 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer border-b border-gray-100 dark:border-gray-600 last:border-b-0 ${
+                          isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedResourceIds.includes(res.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedResourceIds([...selectedResourceIds, res.id]);
+                            } else {
+                              setSelectedResourceIds(selectedResourceIds.filter(id => id !== res.id));
+                            }
+                          }}
+                          disabled={showBusy}
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 dark:text-white truncate flex items-center gap-2">
+                            {res.name}
+                            {isCurrentlyAssigned && (
+                              <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded">
+                                Assigned
+                              </span>
+                            )}
+                            {showBusy && (
+                              <span className="text-xs px-1.5 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded capitalize">
+                                {res.status}
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">
+                            {res.type}
+                          </p>
+                        </div>
+                      </label>
+                    );});
+                  })()}
+                </div>
               </div>
 
               <div>
@@ -1151,6 +1528,18 @@ function IncidentDetail() {
           </div>
         </div>
       )}
+
+      {/* Enhanced Final Report Modal (with drafts) */}
+      <FinalReportModal
+        isOpen={showEnhancedReportModal}
+        onClose={() => setShowEnhancedReportModal(false)}
+        incident={incident}
+        existingFinalReport={finalReport}
+        onReportPublished={() => {
+          loadFinalReport();
+          loadIncident();
+        }}
+      />
     </div>
   );
 }

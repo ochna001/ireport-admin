@@ -69,6 +69,8 @@ interface StationOption {
 }
 
 function Settings() {
+  const { role } = getSessionScope();
+  const isAdmin = role === 'Admin';
   const [settings, setSettings] = useState<AppSettings>({
     notifications: { enabled: true, sound: true, desktop: true },
     display: { theme: 'light', compactMode: false, autoRefresh: true, refreshInterval: 30 },
@@ -585,6 +587,7 @@ function Settings() {
         </section>
 
         {/* Security Section */}
+        {isAdmin && (
         <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
             <div className="flex items-center gap-3">
@@ -698,13 +701,13 @@ function Settings() {
                       console.error('Failed to set debug mode:', err);
                     }
                   }}
-                  className={`relative w-12 h-6 rounded-full transition-colors ${
-                    settings.security.debugMode ? 'bg-orange-500' : 'bg-gray-300 dark:bg-gray-600'
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    settings.security.debugMode ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-700'
                   }`}
                 >
                   <span
-                    className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                      settings.security.debugMode ? 'left-7' : 'left-1'
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      settings.security.debugMode ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
@@ -741,6 +744,7 @@ function Settings() {
             </div>
           </div>
         </section>
+        )}
 
         {/* About Section */}
         <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">

@@ -22,6 +22,7 @@ interface Stats {
     status: string;
     changed_by: string;
     changed_at: string;
+    agency_type?: string | null;
   }>;
   avgResponseTime?: number | null;
   avgResolutionTime?: number | null;
@@ -33,6 +34,7 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionScope, setSessionScope] = useState<SessionScope>({});
+  const [activityVisibleCount, setActivityVisibleCount] = useState(5);
 
   useEffect(() => {
     if (!window.api) {
@@ -88,8 +90,11 @@ function Dashboard() {
       setSessionScope(scope);
 
       const filters: any = {};
-      if (isChiefScoped(scope)) {
-        filters.stationId = scope.stationId;
+      // Filter for any non-admin user if they have station/agency scope
+      if (scope.role !== 'Admin') {
+        if (scope.stationId) {
+          filters.stationId = scope.stationId;
+        }
         if (scope.agencyShortName) {
           filters.agency = scope.agencyShortName.toLowerCase();
         }
@@ -97,6 +102,7 @@ function Dashboard() {
 
       const data = await window.api.getStats(Object.keys(filters).length ? filters : undefined);
       setStats(data);
+      setActivityVisibleCount(5); // Reset to default when data refreshes
       setError(null);
     } catch (err: any) {
       const errorMsg = err?.message || String(err);
@@ -127,6 +133,25 @@ function Dashboard() {
       default: return 'bg-gray-400';
     }
   };
+
+  const getAgencyBadgeColor = (agency?: string | null) => {
+    switch (agency?.toLowerCase()) {
+      case 'pnp':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200';
+      case 'bfp':
+        return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200';
+      case 'pdrrmo':
+        return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-200';
+      default:
+        return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300';
+    }
+  };
+
+  const displayedActivity = stats?.recentActivity
+    ? stats.recentActivity.slice(0, activityVisibleCount)
+    : [];
+
+  const canShowMore = (stats?.recentActivity?.length || 0) > displayedActivity.length;
 
   if (loading) {
     return (
@@ -251,14 +276,21 @@ function Dashboard() {
       {/* Recent Activity */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
         <div className="p-4 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Recent Activity</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Recent Activity</h2>
+            {stats?.recentActivity?.length ? (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                Showing {Math.min(displayedActivity.length, stats.recentActivity.length)} of {stats.recentActivity.length}
+              </span>
+            ) : null}
+          </div>
         </div>
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
-          {stats?.recentActivity && stats.recentActivity.length > 0 ? (
-            stats.recentActivity.map((activity, index) => (
-              <div 
-                key={index} 
-                className="p-4 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+          {displayedActivity.length > 0 ? (
+            displayedActivity.map((activity, index) => (
+              <div
+                key={`${activity.incident_id}-${activity.changed_at}-${index}`}
+                className="p-4 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors"
                 onClick={() => navigate(`/incidents/${activity.incident_id}`)}
               >
                 <div className="flex items-center justify-between">
@@ -267,12 +299,22 @@ function Dashboard() {
                       {activity.status.toUpperCase().replace('_', ' ')}
                     </span>
                     <span className="text-sm text-gray-600 dark:text-gray-400">
-                      by {activity.changed_by}
+                      by {activity.changed_by || 'System'}
                     </span>
                   </div>
-                  <span className="text-sm text-gray-400">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
                     {formatTime(activity.changed_at)}
                   </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                  <span className="font-semibold text-gray-800 dark:text-white">
+                    Incident #{activity.incident_id?.slice(0, 8)?.toUpperCase()}
+                  </span>
+                  {activity.agency_type && (
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getAgencyBadgeColor(activity.agency_type)}`}>
+                      {activity.agency_type.toUpperCase()}
+                    </span>
+                  )}
                 </div>
               </div>
             ))
@@ -282,6 +324,28 @@ function Dashboard() {
             </div>
           )}
         </div>
+        {stats?.recentActivity && stats.recentActivity.length > 5 && (
+          <div className="p-4 border-t border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-center gap-3">
+              {canShowMore && (
+                <button
+                  onClick={() => setActivityVisibleCount(prev => prev + 5)}
+                  className="px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+                >
+                  Load more
+                </button>
+              )}
+              {activityVisibleCount > 5 && (
+                <button
+                  onClick={() => setActivityVisibleCount(5)}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-white"
+                >
+                  Show less
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

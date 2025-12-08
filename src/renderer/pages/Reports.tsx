@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { barangaysByMunicipality, municipalities } from '../data/camarinesNorteLocations';
-import { getSessionScope, isChiefScoped, SessionScope } from '../utils/sessionScope';
+import { getSessionScope, isStationScoped, SessionScope } from '../utils/sessionScope';
 
 interface ReportStats {
   total: number;
@@ -94,7 +94,7 @@ function Reports() {
     format: 'csv',
     groupBy: 'none',
   });
-  const chiefScopeActive = isChiefScoped(sessionScope);
+  const stationScopeActive = isStationScoped(sessionScope);
 
   const barangayOptions = useMemo(
     () => (reportConfig.municipality ? barangaysByMunicipality[reportConfig.municipality] || [] : []),
@@ -106,7 +106,7 @@ function Reports() {
   }, [dateRange, selectedAgency, customStart, customEnd]);
 
   useEffect(() => {
-    if (chiefScopeActive && sessionScope.agencyShortName) {
+    if (stationScopeActive && sessionScope.agencyShortName) {
       const scopedAgency = sessionScope.agencyShortName.toUpperCase();
       setReportConfig(prev => ({
         ...prev,
@@ -114,7 +114,7 @@ function Reports() {
       }));
       setSelectedAgency(sessionScope.agencyShortName.toLowerCase());
     }
-  }, [chiefScopeActive, sessionScope.agencyShortName]);
+  }, [stationScopeActive, sessionScope.agencyShortName]);
 
   const loadStats = async (skipCache = false) => {
     if (skipCache) setSkipCacheNext(true);
@@ -163,11 +163,13 @@ function Reports() {
       const scope = getSessionScope();
       setSessionScope(scope);
 
-      if (isChiefScoped(scope)) {
+      if (isStationScoped(scope)) {
         payload.stationId = scope.stationId;
         if (scope.agencyShortName) {
           payload.agency = scope.agencyShortName.toLowerCase();
         }
+      } else if (selectedAgency !== 'all') {
+        payload.agency = selectedAgency;
       }
 
       if (skipCacheNext || skipCache) {
@@ -231,7 +233,7 @@ function Reports() {
   };
 
   const toggleAgency = (agency: string) => {
-    if (chiefScopeActive) return;
+    if (stationScopeActive) return;
     setReportConfig(prev => ({
       ...prev,
       agencies: prev.agencies.includes(agency)
@@ -334,18 +336,21 @@ function Reports() {
 
       const scope = getSessionScope();
       setSessionScope(scope);
-      if (isChiefScoped(scope)) {
+      if (isStationScoped(scope)) {
         filters.stationId = scope.stationId;
         filters.agency = scope.agencyShortName?.toLowerCase();
       }
 
-      const incidents = await window.api.getIncidents(filters);
+      // Use high limit to get all incidents for report generation
+      const response: any = await window.api.getIncidents({ ...filters, limit: 10000 });
+      // Handle both paginated response and legacy array response
+      const incidents = Array.isArray(response) ? response : (response.data || []);
       
       // Filter by date range
       let filteredIncidents = incidents;
       const now = new Date();
 
-      if (isChiefScoped(scope) && scope.stationId) {
+      if (isStationScoped(scope) && scope.stationId) {
         filteredIncidents = filteredIncidents.filter((i: any) => i.assigned_station_id === scope.stationId);
       }
       
@@ -659,7 +664,7 @@ function Reports() {
         </div>
       </div>
 
-      {chiefScopeActive && (
+      {stationScopeActive && (
         <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 dark:bg-purple-900/20 dark:border-purple-700 dark:text-purple-100">
           Reports are limited to Station {sessionScope.stationName || sessionScope.stationId} ({sessionScope.agencyShortName || 'Agency'} • Chief). Agency selection is locked to your station.
         </div>
@@ -734,7 +739,7 @@ function Reports() {
                     <button
                       key={agency}
                       onClick={() => toggleAgency(agency)}
-                      disabled={chiefScopeActive}
+                      disabled={stationScopeActive}
                       className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
                         reportConfig.agencies.includes(agency)
                           ? agency === 'PNP' ? 'bg-blue-600 text-white' 
@@ -742,7 +747,7 @@ function Reports() {
                             : 'bg-teal-600 text-white'
                           : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                       } ${
-                        chiefScopeActive ? 'opacity-60 cursor-not-allowed' : ''
+                        stationScopeActive ? 'opacity-60 cursor-not-allowed' : ''
                       }`}
                     >
                       {agency}
@@ -1177,7 +1182,9 @@ function Reports() {
             {stats?.avgResolutionTime != null ? (
               <p className="text-xs text-gray-500 dark:text-gray-400">Time to resolve incident</p>
             ) : (
-              <p className="text-xs text-gray-400 italic">No resolution data yet</p>
+              <p className="text-xs text-gray-400 italic">
+                {stats?.resolved === 0 ? 'No resolved incidents in this period' : 'No resolution data yet'}
+              </p>
             )}
           </div>
 

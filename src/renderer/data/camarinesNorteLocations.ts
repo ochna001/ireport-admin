@@ -309,3 +309,42 @@ export const barangaysByMunicipality: Record<string, string[]> = {
 
 export const municipalities = Object.keys(barangaysByMunicipality);
 
+// Approximate bounding boxes for each municipality in Camarines Norte
+// Format: { minLat, maxLat, minLng, maxLng }
+export const municipalityBounds: Record<string, { minLat: number; maxLat: number; minLng: number; maxLng: number }> = {
+  Basud: { minLat: 14.02, maxLat: 14.15, minLng: 122.85, maxLng: 123.02 },
+  Capalonga: { minLat: 14.28, maxLat: 14.42, minLng: 122.42, maxLng: 122.58 },
+  Daet: { minLat: 14.08, maxLat: 14.18, minLng: 122.92, maxLng: 123.02 },
+  'Jose Panganiban': { minLat: 14.25, maxLat: 14.35, minLng: 122.65, maxLng: 122.78 },
+  Labo: { minLat: 14.12, maxLat: 14.28, minLng: 122.72, maxLng: 122.92 },
+  Mercedes: { minLat: 14.08, maxLat: 14.18, minLng: 123.00, maxLng: 123.15 },
+  Paracale: { minLat: 14.22, maxLat: 14.32, minLng: 122.72, maxLng: 122.85 },
+  'San Lorenzo Ruiz': { minLat: 14.05, maxLat: 14.12, minLng: 122.82, maxLng: 122.92 },
+  'San Vicente': { minLat: 14.05, maxLat: 14.12, minLng: 122.72, maxLng: 122.82 },
+  'Santa Elena': { minLat: 14.15, maxLat: 14.25, minLng: 122.38, maxLng: 122.52 },
+  Talisay: { minLat: 14.08, maxLat: 14.15, minLng: 122.82, maxLng: 122.92 },
+  Vinzons: { minLat: 14.15, maxLat: 14.25, minLng: 122.88, maxLng: 123.00 },
+};
+
+// Get municipality from coordinates
+export const getMunicipalityFromCoordinates = (lat: number, lng: number): string | null => {
+  for (const [municipality, bounds] of Object.entries(municipalityBounds)) {
+    if (lat >= bounds.minLat && lat <= bounds.maxLat && lng >= bounds.minLng && lng <= bounds.maxLng) {
+      return municipality;
+    }
+  }
+  return null;
+};
+
+// Extract municipality from address string
+export const extractMunicipalityFromAddress = (address: string): string | null => {
+  if (!address) return null;
+  const addressLower = address.toLowerCase();
+  for (const municipality of municipalities) {
+    if (addressLower.includes(municipality.toLowerCase())) {
+      return municipality;
+    }
+  }
+  return null;
+};
+

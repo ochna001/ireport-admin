@@ -8,10 +8,15 @@ import {
     Settings,
     Users,
     Wifi,
-    WifiOff
+    WifiOff,
+    LogOut,
+    UserCircle,
+    MapPin,
+    Shield
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import { Notifications } from './Notifications';
 
 interface SyncStatus {
   connected: boolean;
@@ -20,13 +25,29 @@ interface SyncStatus {
   syncing: boolean;
 }
 
-function Layout() {
+interface LayoutProps {
+  onLogout: () => void;
+}
+
+function Layout({ onLogout }: LayoutProps) {
+  const [user, setUser] = useState<any>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     connected: false,
     lastSync: null,
     pending: 0,
     syncing: false,
   });
+
+  useEffect(() => {
+    const userStr = localStorage.getItem('ireport_admin_current_user');
+    if (userStr) {
+      try {
+        setUser(JSON.parse(userStr));
+      } catch (e) {
+        console.error('Failed to parse user', e);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     // Check if API is available
@@ -59,11 +80,42 @@ function Layout() {
     }
   };
 
+  const handleLogout = async () => {
+    if (window.confirm('Are you sure you want to logout?')) {
+      // Clear backend caches
+      try {
+        await window.api.logout?.();
+      } catch (e) {
+        console.error('Logout error:', e);
+      }
+      
+      // Clear local storage
+      localStorage.removeItem('ireport_admin_auth');
+      localStorage.removeItem('ireport_admin_current_user');
+      
+      // Reload the window to reset all state and fix input focus issues
+      window.location.reload();
+    }
+  };
+
   const formatLastSync = (dateStr: string | null) => {
     if (!dateStr) return 'Never';
     const date = new Date(dateStr);
     return date.toLocaleTimeString();
   };
+
+  const getAgencyTheme = (shortName?: string) => {
+    switch (shortName?.toUpperCase()) {
+      case 'PNP': return 'blue';
+      case 'BFP': return 'red';
+      case 'PDRRMO': return 'orange';
+      default: return 'blue';
+    }
+  };
+
+  const themeColor = getAgencyTheme(user?.agencyShortName || user?.agencies?.short_name);
+  const activeClass = `bg-${themeColor}-600 text-white`;
+  const logoBgClass = `bg-${themeColor}-600`;
 
   return (
     <div className="flex h-screen bg-gray-100 dark:bg-gray-950">
@@ -71,9 +123,41 @@ function Layout() {
       <aside className="w-64 bg-gray-900 dark:bg-gray-900 text-white flex flex-col">
         {/* Logo */}
         <div className="p-4 border-b border-gray-700">
-          <h1 className="text-xl font-bold">iReport Admin</h1>
-          <p className="text-xs text-gray-400 mt-1">Camarines Norte LGU</p>
+          <div className="flex items-center gap-3 mb-1">
+             <div className={`w-8 h-8 ${logoBgClass} rounded-lg flex items-center justify-center transition-colors duration-300`}>
+                <Shield size={18} className="text-white" />
+             </div>
+             <h1 className="text-lg font-bold">{user?.role === 'Admin' ? 'iReport Admin' : 'iReport Mgmt'}</h1>
+          </div>
+          <p className="text-xs text-gray-400">Camarines Norte LGU</p>
         </div>
+
+        {/* User Profile Summary (Sidebar) */}
+        {user && user.role !== 'Admin' && (
+            <div className="px-4 py-3 bg-gray-800/50 border-b border-gray-700">
+                <div className="flex items-center gap-3 mb-2">
+                    <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center">
+                        <UserCircle size={20} className="text-gray-400" />
+                    </div>
+                    <div className="overflow-hidden">
+                        <p className="text-sm font-medium truncate">{user.display_name || user.email}</p>
+                        <p className="text-xs text-gray-400 truncate">{user.role}</p>
+                    </div>
+                </div>
+                {(user.agencyShortName || user.agencies?.short_name) && (
+                    <div className="flex items-center gap-2 text-xs text-gray-400 mt-1">
+                        <Shield size={10} />
+                        <span>{user.agencyShortName || user.agencies?.short_name}</span>
+                        {user.stationName && (
+                            <>
+                                <span className="text-gray-600">•</span>
+                                <span className="truncate">{user.stationName}</span>
+                            </>
+                        )}
+                    </div>
+                )}
+            </div>
+        )}
 
         {/* Navigation */}
         <nav className="flex-1 p-4">
@@ -84,7 +168,7 @@ function Layout() {
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
                     isActive
-                      ? 'bg-blue-600 text-white'
+                      ? activeClass
                       : 'text-gray-300 hover:bg-gray-800'
                   }`
                 }
@@ -171,6 +255,17 @@ function Layout() {
           </ul>
         </nav>
 
+        {/* Logout */}
+        <div className="px-4 pb-2">
+            <button
+                onClick={handleLogout}
+                className="flex items-center gap-3 px-4 py-3 rounded-lg text-red-400 hover:bg-gray-800 hover:text-red-300 transition-colors w-full"
+            >
+                <LogOut size={20} />
+                <span>Logout</span>
+            </button>
+        </div>
+
         {/* Sync Status */}
         <div className="p-4 border-t border-gray-700">
           <div className="flex items-center justify-between mb-2">
@@ -208,8 +303,16 @@ function Layout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto">
-        <Outlet />
+      <main className="flex-1 overflow-auto flex flex-col">
+        {/* Top Bar with Notifications */}
+        <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex items-center justify-end">
+          <Notifications />
+        </div>
+        
+        {/* Page Content */}
+        <div className="flex-1 overflow-auto">
+          <Outlet />
+        </div>
       </main>
     </div>
   );

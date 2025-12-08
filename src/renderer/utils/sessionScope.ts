@@ -4,6 +4,8 @@ export interface SessionScope {
   agencyShortName?: string;
   stationId?: number;
   stationName?: string;
+  stationAddress?: string;
+  stationMunicipality?: string;
   userId?: string;
 }
 
@@ -21,6 +23,8 @@ export const getSessionScope = (): SessionScope => {
         agencyShortName: user?.agencyShortName || user?.agencies?.short_name,
         stationId: user?.station_id ?? user?.stationId,
         stationName: user?.stationName,
+        stationAddress: user?.stationAddress,
+        stationMunicipality: user?.stationMunicipality,
         userId: user?.id,
       };
     }
@@ -38,5 +42,13 @@ export const getSessionScope = (): SessionScope => {
 
 export const isChiefScoped = (scope: SessionScope): boolean => {
   return scope.role === 'Chief' && !!scope.stationId;
+};
+
+export const isDeskOfficerScoped = (scope: SessionScope): boolean => {
+  return scope.role === 'Desk Officer' && !!scope.stationId;
+};
+
+export const isStationScoped = (scope: SessionScope): boolean => {
+  return (scope.role === 'Chief' || scope.role === 'Desk Officer') && !!scope.stationId;
 };
 
