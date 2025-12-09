@@ -472,8 +472,8 @@ function IncidentDetail() {
     }
 
     if (Array.isArray(content)) {
-      // Handle array of PDRRMO patients
-      if (content.length > 0 && content[0].name && (content[0].age || content[0].sex || content[0].chiefComplaint)) {
+      // Handle array of PDRRMO patients (check for 'name' field which is unique to patients)
+      if (content.length > 0 && content[0].name !== undefined && typeof content[0].name === 'string') {
         return (
           <div className="space-y-3 mt-1">
             {content.map((patient: any, idx: number) => (
@@ -572,8 +572,8 @@ function IncidentDetail() {
       } catch {}
 
       let valueHtml = '';
-      // Handle PDRRMO patients
-      if (Array.isArray(content) && content.length > 0 && content[0].name && (content[0].age || content[0].sex)) {
+      // Handle PDRRMO patients (check for 'name' field which is unique to patients)
+      if (Array.isArray(content) && content.length > 0 && content[0].name !== undefined && typeof content[0].name === 'string') {
          valueHtml = content.map((p: any, idx: number) => `
            <div style="margin-bottom: 12px; padding: 12px; background: #ecfeff; border: 1px solid #06b6d4; border-radius: 6px;">
              <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">

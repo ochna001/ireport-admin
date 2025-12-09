@@ -54,7 +54,7 @@ interface ReportConfig {
 }
 
 const AGENCIES = ['PNP', 'BFP', 'PDRRMO'];
-const STATUSES = ['pending', 'assigned', 'responding', 'resolved'];
+const STATUSES = ['pending', 'assigned', 'responding', 'resolved', 'closed'];
 
 function Reports() {
   const initialScope = getSessionScope();
@@ -783,6 +783,8 @@ function Reports() {
                           ? status === 'pending' ? 'bg-yellow-500 text-white'
                             : status === 'assigned' ? 'bg-blue-500 text-white'
                             : status === 'responding' ? 'bg-orange-500 text-white'
+                            : status === 'resolved' ? 'bg-green-500 text-white'
+                            : status === 'closed' ? 'bg-gray-800 text-white'
                             : 'bg-green-500 text-white'
                           : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                       }`}

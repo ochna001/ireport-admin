@@ -263,6 +263,7 @@ function Incidents() {
             <option value="assigned">Assigned</option>
             <option value="in_progress">In Progress</option>
             <option value="resolved">Resolved</option>
+            <option value="closed">Closed</option>
           </select>
 
           {/* Municipality Filter - locked for station-scoped users */}

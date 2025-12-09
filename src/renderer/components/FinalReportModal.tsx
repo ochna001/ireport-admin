@@ -399,7 +399,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         // Pre-fill both forms just in case
         setPdrrmoForm(prev => ({ ...prev, incidentLocation: prev.incidentLocation || incident.location_address }));
         setMdrrmoDisasterForm(prev => ({ ...prev, affectedArea: prev.affectedArea || incident.location_address }));
-      } else if (agencyType === 'mdrrmo_disaster') {
+      } else if (agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') {
         setMdrrmoDisasterForm(prev => ({ ...prev, affectedArea: prev.affectedArea || incident.location_address }));
       }
     }
@@ -606,7 +606,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         patientsCount: patients.length || parseInt(details.patients_count || details.patientsCount || '0') || 0,
         patients: patients
       });
-    } else if (agencyType === 'mdrrmo_disaster') {
+    } else if (agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') {
+      // MDRRMO can be stored as either 'mdrrmo' or 'mdrrmo_disaster'
       setMdrrmoDisasterForm({
         disasterType: details.disaster_type || details.disasterType || '',
         disasterTypeOther: details.disaster_type_other || details.disasterTypeOther || '',
@@ -665,7 +666,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           newErrors.narrative = 'Narrative report is required';
         }
       }
-    } else if (agencyType === 'mdrrmo_disaster') {
+    } else if (agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') {
       if (!mdrrmoDisasterForm.disasterType) {
         newErrors.disasterType = 'Disaster type is required';
       }
@@ -775,8 +776,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           timestamp
         };
       }
-    } else {
-      // mdrrmo_disaster
+    } else if (agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') {
+      // mdrrmo_disaster or mdrrmo
       const finalDisasterType = mdrrmoDisasterForm.disasterType === 'Other' 
         ? mdrrmoDisasterForm.disasterTypeOther 
         : mdrrmoDisasterForm.disasterType;
@@ -797,6 +798,13 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         timestamp
       };
     }
+    
+    // Fallback - should not reach here
+    return {
+      narrative: '',
+      media_urls: mediaUrls,
+      timestamp
+    };
   };
 
   const handleSaveDraft = async (status: 'draft' | 'ready_for_review' = 'draft') => {
@@ -1127,7 +1135,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
                   )}
                 </div>
               )}
-              {agencyType === 'mdrrmo_disaster' && (
+              {(agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') && (
                 <MdrrmoDisasterForm form={mdrrmoDisasterForm} setForm={setMdrrmoDisasterForm} errors={errors} setErrors={setErrors} />
               )}
             </div>
