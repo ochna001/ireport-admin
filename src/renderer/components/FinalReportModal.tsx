@@ -72,52 +72,135 @@ interface PdrrmoFormData {
 
 interface PdrrmoPatientEntry {
   id: string;
+  // Basic Info
   name: string;
   age: string;
   sex: string;
   address: string;
   nextOfKin: string;
+  // Primary Survey
   chiefComplaint: string;
-  condition: string;
-  medications: string;
+  cSpine: string;
+  airway: string;
+  breathing: string;
+  pulse: string;
+  skin: string;
+  loc: string;
+  consciousness: string;
+  capRefill: string;
+  // SAMPLE History
+  signs: string;
   allergies: string;
+  medications: string;
+  history: string;
+  oral: string;
+  events: string;
+  // Vital Signs (t1 values)
   vitals: {
+    obsTime: string;
     bp: string;
-    pulse: string;
-    resp: string;
+    pulseRate: string;
+    respRate: string;
     temp: string;
     spo2: string;
+    capVital: string;
+    pain: string;
+    glucose: string;
   };
+  // GCS
+  gcsEye: string;
+  gcsVerbal: string;
+  gcsMotor: string;
+  gcsTotal: string;
+  // Management
+  manageAirway: string;
+  manageCirc: string;
+  manageWound: string;
+  manageImmob: string;
+  manageOther: string;
+  // Injury Details
+  injuryType: string;
+  affectedBodyParts: string;
+  patientNarrative: string;
 }
 
 const createEmptyPdrrmoPatient = (): PdrrmoPatientEntry => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  // Basic Info
   name: '',
   age: '',
   sex: '',
   address: '',
   nextOfKin: '',
+  // Primary Survey
   chiefComplaint: '',
-  condition: '',
-  medications: '',
+  cSpine: '',
+  airway: '',
+  breathing: '',
+  pulse: '',
+  skin: '',
+  loc: '',
+  consciousness: '',
+  capRefill: '',
+  // SAMPLE History
+  signs: '',
   allergies: '',
+  medications: '',
+  history: '',
+  oral: '',
+  events: '',
+  // Vital Signs
   vitals: {
+    obsTime: '',
     bp: '',
-    pulse: '',
-    resp: '',
+    pulseRate: '',
+    respRate: '',
     temp: '',
-    spo2: ''
-  }
+    spo2: '',
+    capVital: '',
+    pain: '',
+    glucose: ''
+  },
+  // GCS
+  gcsEye: '',
+  gcsVerbal: '',
+  gcsMotor: '',
+  gcsTotal: '',
+  // Management
+  manageAirway: '',
+  manageCirc: '',
+  manageWound: '',
+  manageImmob: '',
+  manageOther: '',
+  // Injury Details
+  injuryType: '',
+  affectedBodyParts: '',
+  patientNarrative: ''
 });
 
 const parsePdrrmoPatients = (raw: any): PdrrmoPatientEntry[] => {
   if (!raw) return [];
   let parsed: any[] = [];
+  
+  // Handle string input (possibly double-escaped JSON)
   if (typeof raw === 'string') {
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      console.warn('Failed to parse PDRRMO patients JSON', e);
+    let data = raw;
+    // Keep parsing while it's still a string that looks like JSON
+    let maxAttempts = 3; // Prevent infinite loop
+    while (typeof data === 'string' && maxAttempts > 0) {
+      try {
+        data = JSON.parse(data);
+        maxAttempts--;
+      } catch (e) {
+        console.warn('Failed to parse PDRRMO patients JSON', e, 'raw:', raw);
+        return [];
+      }
+    }
+    
+    if (Array.isArray(data)) {
+      parsed = data;
+    } else {
+      console.warn('Parsed PDRRMO patients is not an array:', data);
       return [];
     }
   } else if (Array.isArray(raw)) {
@@ -125,8 +208,11 @@ const parsePdrrmoPatients = (raw: any): PdrrmoPatientEntry[] => {
   } else if (raw?.patients && Array.isArray(raw.patients)) {
     parsed = raw.patients;
   } else {
+    console.warn('Unknown PDRRMO patients format:', raw);
     return [];
   }
+  
+  console.log('Parsed PDRRMO patients:', parsed);
 
   // Helper to extract vital value from nested object with t1/t2/t3 structure
   const extractVital = (vitalObj: any): string => {
@@ -141,22 +227,56 @@ const parsePdrrmoPatients = (raw: any): PdrrmoPatientEntry[] => {
 
   return parsed.map((patient, index) => ({
     id: patient?.id || `patient-${index}-${Date.now()}`,
+    // Basic Info
     name: patient?.name || '',
     age: patient?.age?.toString?.() || patient?.age || '',
     sex: patient?.sex || '',
     address: patient?.address || '',
     nextOfKin: patient?.nextOfKin || patient?.next_of_kin || '',
-    chiefComplaint: patient?.chiefComplaint || patient?.chief_complaint || patient?.chiefComplaint || '',
-    condition: patient?.condition || patient?.patient_narrative || '',
-    medications: patient?.medications || patient?.meds || '',
+    // Primary Survey
+    chiefComplaint: patient?.chiefComplaint || patient?.chief_complaint || '',
+    cSpine: patient?.cSpine || patient?.c_spine || '',
+    airway: patient?.airway || '',
+    breathing: patient?.breathing || '',
+    pulse: patient?.pulse || '',
+    skin: patient?.skin || '',
+    loc: patient?.loc || '',
+    consciousness: patient?.consciousness || '',
+    capRefill: patient?.capRefill || patient?.cap_refill || '',
+    // SAMPLE History
+    signs: patient?.signs || '',
     allergies: patient?.allergies || '',
+    medications: patient?.medications || patient?.meds || '',
+    history: patient?.history || '',
+    oral: patient?.oral || '',
+    events: patient?.events || '',
+    // Vital Signs
     vitals: {
+      obsTime: extractVital(patient?.vitals?.obsTime || patient?.obs_time),
       bp: extractVital(patient?.vitals?.bp || patient?.bp),
-      pulse: extractVital(patient?.vitals?.pulse || patient?.pulse || patient?.pulse_rate),
-      resp: extractVital(patient?.vitals?.resp || patient?.resp || patient?.resp_rate),
+      pulseRate: extractVital(patient?.vitals?.pulseRate || patient?.pulse_rate),
+      respRate: extractVital(patient?.vitals?.respRate || patient?.resp_rate),
       temp: extractVital(patient?.vitals?.temp || patient?.temp),
-      spo2: extractVital(patient?.vitals?.spo2 || patient?.spo2)
-    }
+      spo2: extractVital(patient?.vitals?.spo2 || patient?.spo2),
+      capVital: extractVital(patient?.vitals?.capVital || patient?.cap_vital),
+      pain: extractVital(patient?.vitals?.pain || patient?.pain),
+      glucose: extractVital(patient?.vitals?.glucose || patient?.glucose)
+    },
+    // GCS
+    gcsEye: patient?.gcsEye || patient?.gcs_eye || '',
+    gcsVerbal: patient?.gcsVerbal || patient?.gcs_verbal || '',
+    gcsMotor: patient?.gcsMotor || patient?.gcs_motor || '',
+    gcsTotal: patient?.gcsTotal || patient?.gcs_total || '',
+    // Management
+    manageAirway: patient?.manageAirway || patient?.manage_airway || '',
+    manageCirc: patient?.manageCirc || patient?.manage_circ || '',
+    manageWound: patient?.manageWound || patient?.manage_wound || '',
+    manageImmob: patient?.manageImmob || patient?.manage_immob || '',
+    manageOther: patient?.manageOther || patient?.manage_other || '',
+    // Injury Details
+    injuryType: patient?.injuryType || patient?.injury_type || '',
+    affectedBodyParts: patient?.affectedBodyParts || patient?.affected_body_parts || '',
+    patientNarrative: patient?.patientNarrative || patient?.patient_narrative || ''
   }));
 };
 
@@ -295,7 +415,35 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       if (draftData) {
         setDraft(draftData);
         setDraftStatus(draftData.status as any);
-        const details = draftData.draft_details;
+        let details = draftData.draft_details;
+        
+        // For PDRRMO, if draft doesn't have patients but unit report does, merge them
+        if (agencyType === 'pdrrmo' && latestUnitReport?.details) {
+          let unitDetails = latestUnitReport.details;
+          if (typeof unitDetails === 'string') {
+            try {
+              unitDetails = JSON.parse(unitDetails);
+            } catch (e) {
+              console.error('Failed to parse unit report details for merge', e);
+              unitDetails = null;
+            }
+          }
+          
+          // If draft has no patients (or empty array) but unit report does, use unit report's patients
+          const draftHasPatients = details.patients?.length > 0 || details.patients_data?.length > 0 || 
+            (typeof details.patients === 'string' && details.patients.length > 2) ||
+            (typeof details.patients_data === 'string' && details.patients_data.length > 2);
+          const unitHasPatients = unitDetails?.patients || unitDetails?.patients_data;
+          
+          if (unitDetails && !draftHasPatients && unitHasPatients) {
+            console.log('Merging patients from unit report into draft');
+            details = {
+              ...details,
+              patients: unitDetails.patients,
+              patients_data: unitDetails.patients_data
+            };
+          }
+        }
         
         populateFormFromDetails(details);
         
@@ -350,41 +498,69 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     }
   };
 
+  // Helper to parse person data from various formats (JSON array, semicolon-separated string, or simple name)
+  const parsePersonList = (data: any): PersonEntry[] => {
+    if (!data) return [];
+    
+    // If already an array
+    if (Array.isArray(data)) {
+      return data.map((p: any) => ({
+        firstName: p.firstName || p.first_name || p.name?.split(' ')[0] || '',
+        middleName: p.middleName || p.middle_name || '',
+        lastName: p.lastName || p.last_name || p.name?.split(' ').slice(1).join(' ') || '',
+        address: p.address || '',
+        occupation: p.occupation || '',
+        status: p.status || ''
+      }));
+    }
+    
+    // If it's a string
+    if (typeof data === 'string') {
+      const trimmed = data.trim();
+      if (!trimmed) return [];
+      
+      // Try JSON parse first
+      if (trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          return parsePersonList(parsed);
+        } catch (e) {
+          console.warn('Failed to parse as JSON:', e);
+        }
+      }
+      
+      // Handle semicolon-separated names (e.g., "Walter White; John Doe;")
+      const names = trimmed.split(';').map(n => n.trim()).filter(n => n.length > 0);
+      return names.map(name => {
+        const parts = name.split(' ');
+        return {
+          firstName: parts[0] || '',
+          middleName: parts.length > 2 ? parts.slice(1, -1).join(' ') : '',
+          lastName: parts.length > 1 ? parts[parts.length - 1] : '',
+          address: '',
+          occupation: '',
+          status: ''
+        };
+      });
+    }
+    
+    return [];
+  };
+
   const populateFormFromDetails = (details: any) => {
     if (!details) return;
     
     if (agencyType === 'pnp') {
       // Parse suspects/victims from stored format
-      let parseSuspects = details.suspects_data || details.suspects || [];
-      let parseVictims = details.victims_data || details.victims || [];
-
-      // Handle stringified JSON if necessary (legacy/edge case)
-      if (typeof parseSuspects === 'string') {
-        try {
-          if (parseSuspects.trim().startsWith('[')) {
-            parseSuspects = JSON.parse(parseSuspects);
-          } else {
-             // Fallback for simple string (e.g. "Name 1; Name 2") - don't try to parse as objects
-             parseSuspects = [];
-          }
-        } catch (e) {
-          console.error('Failed to parse suspects JSON:', e);
-          parseSuspects = [];
-        }
-      }
-
-      if (typeof parseVictims === 'string') {
-        try {
-          if (parseVictims.trim().startsWith('[')) {
-            parseVictims = JSON.parse(parseVictims);
-          } else {
-            parseVictims = [];
-          }
-        } catch (e) {
-          console.error('Failed to parse victims JSON:', e);
-          parseVictims = [];
-        }
-      }
+      console.log('PNP details:', details);
+      console.log('PNP suspects raw:', details.suspects_data, details.suspects);
+      console.log('PNP victims raw:', details.victims_data, details.victims);
+      
+      const parseSuspects = parsePersonList(details.suspects_data || details.suspects);
+      const parseVictims = parsePersonList(details.victims_data || details.victims);
+      
+      console.log('PNP suspects parsed:', parseSuspects);
+      console.log('PNP victims parsed:', parseVictims);
       
       setPnpForm({
         narrative: details.narrative || '',
@@ -407,7 +583,10 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         estimatedDamage: details.estimatedDamage || details.estimated_damage || ''
       });
     } else if (agencyType === 'pdrrmo') {
+      console.log('PDRRMO details:', details);
+      console.log('PDRRMO patients raw:', details.patients, 'patients_data:', details.patients_data);
       const patients = parsePdrrmoPatients(details.patients || details.patients_data);
+      console.log('PDRRMO patients parsed:', patients);
       setPdrrmoForm({
         natureOfCall: details.natureOfCall || details.nature_of_call || '',
         emergencyType: details.emergencyType || details.emergency_type || '',
@@ -1562,120 +1741,54 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
         </div>
       </div>
 
-      {/* Patients Section */}
-      {form.patients.length > 0 && (
-        <div className="bg-cyan-50 dark:bg-cyan-900/20 rounded-lg p-4 border border-cyan-200 dark:border-cyan-800">
-          <h4 className="font-medium text-cyan-800 dark:text-cyan-200 mb-3">
+      {/* Patients Section - Editable */}
+      <div className="bg-cyan-50 dark:bg-cyan-900/20 rounded-lg p-4 border border-cyan-200 dark:border-cyan-800">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="font-medium text-cyan-800 dark:text-cyan-200">
             Patient Details ({form.patients.length} patient{form.patients.length !== 1 ? 's' : ''})
           </h4>
+          <button
+            type="button"
+            onClick={() => setForm(prev => ({ ...prev, patients: [...prev.patients, createEmptyPdrrmoPatient()] }))}
+            className="px-3 py-1 text-sm bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg flex items-center gap-1"
+          >
+            <Plus size={14} /> Add Patient
+          </button>
+        </div>
+        
+        {form.patients.length === 0 ? (
+          <p className="text-gray-500 dark:text-gray-400 text-sm text-center py-4">No patients added yet. Click "Add Patient" to add one.</p>
+        ) : (
           <div className="space-y-4">
             {form.patients.map((patient, index) => (
-              <div key={patient.id} className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-cyan-300 dark:border-cyan-700">
-                <h5 className="font-semibold text-cyan-700 dark:text-cyan-300 mb-3">Patient {index + 1}</h5>
-                
-                {/* Basic Info */}
-                <div className="grid grid-cols-4 gap-3 mb-3">
-                  <div>
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Name</label>
-                    <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.name || 'N/A'}</div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Age</label>
-                    <div className="text-sm text-gray-900 dark:text-white">{patient.age || 'N/A'}</div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Sex</label>
-                    <div className="text-sm text-gray-900 dark:text-white">{patient.sex || 'N/A'}</div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Next of Kin</label>
-                    <div className="text-sm text-gray-900 dark:text-white">{patient.nextOfKin || 'N/A'}</div>
-                  </div>
-                </div>
-
-                {/* Address */}
-                {patient.address && (
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Address</label>
-                    <div className="text-sm text-gray-900 dark:text-white">{patient.address}</div>
-                  </div>
-                )}
-
-                {/* Chief Complaint */}
-                {patient.chiefComplaint && (
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Chief Complaint</label>
-                    <div className="text-sm text-gray-900 dark:text-white">{patient.chiefComplaint}</div>
-                  </div>
-                )}
-
-                {/* Vitals */}
-                {(patient.vitals.bp || patient.vitals.pulse || patient.vitals.resp || patient.vitals.temp || patient.vitals.spo2) && (
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-2">Vital Signs</label>
-                    <div className="grid grid-cols-5 gap-2">
-                      {patient.vitals.bp && (
-                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
-                          <div className="text-xs text-gray-500 dark:text-gray-400">BP</div>
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.bp}</div>
-                        </div>
-                      )}
-                      {patient.vitals.pulse && (
-                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
-                          <div className="text-xs text-gray-500 dark:text-gray-400">Pulse</div>
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.pulse}</div>
-                        </div>
-                      )}
-                      {patient.vitals.resp && (
-                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
-                          <div className="text-xs text-gray-500 dark:text-gray-400">Resp</div>
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.resp}</div>
-                        </div>
-                      )}
-                      {patient.vitals.temp && (
-                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
-                          <div className="text-xs text-gray-500 dark:text-gray-400">Temp</div>
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.temp}</div>
-                        </div>
-                      )}
-                      {patient.vitals.spo2 && (
-                        <div className="bg-gray-50 dark:bg-gray-700 rounded px-2 py-1">
-                          <div className="text-xs text-gray-500 dark:text-gray-400">SpO2</div>
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">{patient.vitals.spo2}</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Medications & Allergies */}
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  {patient.medications && (
-                    <div>
-                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Medications</label>
-                      <div className="text-sm text-gray-900 dark:text-white">{patient.medications}</div>
-                    </div>
-                  )}
-                  {patient.allergies && (
-                    <div>
-                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Allergies</label>
-                      <div className="text-sm text-gray-900 dark:text-white">{patient.allergies}</div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Condition/Narrative */}
-                {patient.condition && (
-                  <div>
-                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Patient Narrative</label>
-                    <div className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap">{patient.condition}</div>
-                  </div>
-                )}
-              </div>
+              <PdrrmoPatientCard
+                key={patient.id}
+                patient={patient}
+                index={index}
+                onUpdate={(field, value) => {
+                  setForm(prev => ({
+                    ...prev,
+                    patients: prev.patients.map((p, i) => i === index ? { ...p, [field]: value } : p)
+                  }));
+                }}
+                onUpdateVitals={(field, value) => {
+                  setForm(prev => ({
+                    ...prev,
+                    patients: prev.patients.map((p, i) => i === index ? { ...p, vitals: { ...p.vitals, [field]: value } } : p)
+                  }));
+                }}
+                onRemove={() => {
+                  setForm(prev => ({
+                    ...prev,
+                    patients: prev.patients.filter((_, i) => i !== index)
+                  }));
+                }}
+                canRemove={form.patients.length > 0}
+              />
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Narrative */}
       <div>
@@ -1690,6 +1803,358 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
           placeholder="Detailed narrative of the emergency response..."
         />
       </div>
+    </div>
+  );
+}
+
+// ============================================
+// PDRRMO PATIENT CARD COMPONENT (Editable)
+// ============================================
+function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove, canRemove }: {
+  patient: PdrrmoPatientEntry;
+  index: number;
+  onUpdate: (field: keyof PdrrmoPatientEntry, value: string) => void;
+  onUpdateVitals: (field: keyof PdrrmoPatientEntry['vitals'], value: string) => void;
+  onRemove: () => void;
+  canRemove: boolean;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  
+  const inputClass = "w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
+  const selectClass = "w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
+  const labelClass = "block text-xs text-gray-600 dark:text-gray-400 mb-1";
+  
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-cyan-300 dark:border-cyan-700 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 bg-cyan-100 dark:bg-cyan-900/40 border-b border-cyan-200 dark:border-cyan-700">
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 text-cyan-800 dark:text-cyan-200 font-medium"
+        >
+          <span className={`transform transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+          Patient {index + 1}: {patient.name || '(No name)'}
+        </button>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="p-1 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
+      </div>
+      
+      {expanded && (
+        <div className="p-4 space-y-4">
+          {/* Basic Info */}
+          <div>
+            <h6 className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 uppercase mb-2">Basic Information</h6>
+            <div className="grid grid-cols-5 gap-2">
+              <div>
+                <label className={labelClass}>Name</label>
+                <input type="text" value={patient.name} onChange={(e) => onUpdate('name', e.target.value)} className={inputClass} placeholder="Patient name" />
+              </div>
+              <div>
+                <label className={labelClass}>Age</label>
+                <input type="text" value={patient.age} onChange={(e) => onUpdate('age', e.target.value)} className={inputClass} placeholder="Age" />
+              </div>
+              <div>
+                <label className={labelClass}>Sex</label>
+                <select value={patient.sex} onChange={(e) => onUpdate('sex', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="M">Male</option>
+                  <option value="F">Female</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className={labelClass}>Address</label>
+                <input type="text" value={patient.address} onChange={(e) => onUpdate('address', e.target.value)} className={inputClass} placeholder="Address" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <div>
+                <label className={labelClass}>Next of Kin</label>
+                <input type="text" value={patient.nextOfKin} onChange={(e) => onUpdate('nextOfKin', e.target.value)} className={inputClass} placeholder="Next of kin" />
+              </div>
+              <div>
+                <label className={labelClass}>Chief Complaint</label>
+                <input type="text" value={patient.chiefComplaint} onChange={(e) => onUpdate('chiefComplaint', e.target.value)} className={inputClass} placeholder="Chief complaint" />
+              </div>
+            </div>
+          </div>
+
+          {/* Primary Survey */}
+          <div>
+            <h6 className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 uppercase mb-2">Primary Survey</h6>
+            <div className="grid grid-cols-5 gap-2">
+              <div>
+                <label className={labelClass}>C-Spine</label>
+                <select value={patient.cSpine} onChange={(e) => onUpdate('cSpine', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="Not Indicated">Not Indicated</option>
+                  <option value="Indicated">Indicated</option>
+                  <option value="Applied">Applied</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Airway</label>
+                <select value={patient.airway} onChange={(e) => onUpdate('airway', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="Clear">Clear</option>
+                  <option value="Obstructed">Obstructed</option>
+                  <option value="Partial">Partial</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Breathing</label>
+                <select value={patient.breathing} onChange={(e) => onUpdate('breathing', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="Normal">Normal</option>
+                  <option value="Labored">Labored</option>
+                  <option value="Shallow">Shallow</option>
+                  <option value="Absent">Absent</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Pulse</label>
+                <select value={patient.pulse} onChange={(e) => onUpdate('pulse', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="Present">Present</option>
+                  <option value="Absent">Absent</option>
+                  <option value="Weak">Weak</option>
+                  <option value="Strong">Strong</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Skin</label>
+                <select value={patient.skin} onChange={(e) => onUpdate('skin', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="Normal">Normal</option>
+                  <option value="Pale">Pale</option>
+                  <option value="Cyanotic">Cyanotic</option>
+                  <option value="Flushed">Flushed</option>
+                  <option value="Diaphoretic">Diaphoretic</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-4 gap-2 mt-2">
+              <div>
+                <label className={labelClass}>LOC</label>
+                <select value={patient.loc} onChange={(e) => onUpdate('loc', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="Yes">Yes</option>
+                  <option value="No">No</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Consciousness</label>
+                <select value={patient.consciousness} onChange={(e) => onUpdate('consciousness', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="Alert">Alert</option>
+                  <option value="Verbal">Verbal</option>
+                  <option value="Pain">Pain</option>
+                  <option value="Unresponsive">Unresponsive</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Cap Refill</label>
+                <select value={patient.capRefill} onChange={(e) => onUpdate('capRefill', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="&lt; 2 Seconds">&lt; 2 Seconds</option>
+                  <option value="&gt; 2 Seconds">&gt; 2 Seconds</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* SAMPLE History */}
+          <div>
+            <h6 className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 uppercase mb-2">SAMPLE History</h6>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className={labelClass}>Signs/Symptoms</label>
+                <input type="text" value={patient.signs} onChange={(e) => onUpdate('signs', e.target.value)} className={inputClass} placeholder="Signs/Symptoms" />
+              </div>
+              <div>
+                <label className={labelClass}>Allergies</label>
+                <input type="text" value={patient.allergies} onChange={(e) => onUpdate('allergies', e.target.value)} className={inputClass} placeholder="Allergies" />
+              </div>
+              <div>
+                <label className={labelClass}>Medications</label>
+                <input type="text" value={patient.medications} onChange={(e) => onUpdate('medications', e.target.value)} className={inputClass} placeholder="Medications" />
+              </div>
+              <div>
+                <label className={labelClass}>Past History</label>
+                <input type="text" value={patient.history} onChange={(e) => onUpdate('history', e.target.value)} className={inputClass} placeholder="Past medical history" />
+              </div>
+              <div>
+                <label className={labelClass}>Last Oral Intake</label>
+                <input type="text" value={patient.oral} onChange={(e) => onUpdate('oral', e.target.value)} className={inputClass} placeholder="Last oral intake" />
+              </div>
+              <div>
+                <label className={labelClass}>Events Leading</label>
+                <input type="text" value={patient.events} onChange={(e) => onUpdate('events', e.target.value)} className={inputClass} placeholder="Events leading to incident" />
+              </div>
+            </div>
+          </div>
+
+          {/* Vital Signs */}
+          <div>
+            <h6 className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 uppercase mb-2">Vital Signs</h6>
+            <div className="grid grid-cols-5 gap-2">
+              <div>
+                <label className={labelClass}>BP</label>
+                <input type="text" value={patient.vitals.bp} onChange={(e) => onUpdateVitals('bp', e.target.value)} className={inputClass} placeholder="120/80" />
+              </div>
+              <div>
+                <label className={labelClass}>Pulse Rate</label>
+                <input type="text" value={patient.vitals.pulseRate} onChange={(e) => onUpdateVitals('pulseRate', e.target.value)} className={inputClass} placeholder="bpm" />
+              </div>
+              <div>
+                <label className={labelClass}>Resp Rate</label>
+                <input type="text" value={patient.vitals.respRate} onChange={(e) => onUpdateVitals('respRate', e.target.value)} className={inputClass} placeholder="/min" />
+              </div>
+              <div>
+                <label className={labelClass}>Temp</label>
+                <input type="text" value={patient.vitals.temp} onChange={(e) => onUpdateVitals('temp', e.target.value)} className={inputClass} placeholder="°C" />
+              </div>
+              <div>
+                <label className={labelClass}>SpO2</label>
+                <input type="text" value={patient.vitals.spo2} onChange={(e) => onUpdateVitals('spo2', e.target.value)} className={inputClass} placeholder="%" />
+              </div>
+            </div>
+            <div className="grid grid-cols-4 gap-2 mt-2">
+              <div>
+                <label className={labelClass}>Pain (0-10)</label>
+                <input type="text" value={patient.vitals.pain} onChange={(e) => onUpdateVitals('pain', e.target.value)} className={inputClass} placeholder="0-10" />
+              </div>
+              <div>
+                <label className={labelClass}>Glucose</label>
+                <input type="text" value={patient.vitals.glucose} onChange={(e) => onUpdateVitals('glucose', e.target.value)} className={inputClass} placeholder="mg/dL" />
+              </div>
+              <div>
+                <label className={labelClass}>Cap Refill</label>
+                <input type="text" value={patient.vitals.capVital} onChange={(e) => onUpdateVitals('capVital', e.target.value)} className={inputClass} placeholder="seconds" />
+              </div>
+              <div>
+                <label className={labelClass}>Obs Time</label>
+                <input type="text" value={patient.vitals.obsTime} onChange={(e) => onUpdateVitals('obsTime', e.target.value)} className={inputClass} placeholder="HH:MM" />
+              </div>
+            </div>
+          </div>
+
+          {/* GCS */}
+          <div>
+            <h6 className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 uppercase mb-2">Glasgow Coma Scale (GCS)</h6>
+            <div className="grid grid-cols-4 gap-2">
+              <div>
+                <label className={labelClass}>Eye (1-4)</label>
+                <input type="text" value={patient.gcsEye} onChange={(e) => onUpdate('gcsEye', e.target.value)} className={inputClass} placeholder="1-4" />
+              </div>
+              <div>
+                <label className={labelClass}>Verbal (1-5)</label>
+                <input type="text" value={patient.gcsVerbal} onChange={(e) => onUpdate('gcsVerbal', e.target.value)} className={inputClass} placeholder="1-5" />
+              </div>
+              <div>
+                <label className={labelClass}>Motor (1-6)</label>
+                <input type="text" value={patient.gcsMotor} onChange={(e) => onUpdate('gcsMotor', e.target.value)} className={inputClass} placeholder="1-6" />
+              </div>
+              <div>
+                <label className={labelClass}>Total (3-15)</label>
+                <input type="text" value={patient.gcsTotal} onChange={(e) => onUpdate('gcsTotal', e.target.value)} className={inputClass} placeholder="3-15" />
+              </div>
+            </div>
+          </div>
+
+          {/* Management */}
+          <div>
+            <h6 className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 uppercase mb-2">Management</h6>
+            <div className="grid grid-cols-5 gap-2">
+              <div>
+                <label className={labelClass}>Airway Mgmt</label>
+                <select value={patient.manageAirway} onChange={(e) => onUpdate('manageAirway', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="None">None</option>
+                  <option value="Suction">Suction</option>
+                  <option value="OPA">OPA</option>
+                  <option value="NPA">NPA</option>
+                  <option value="BVM">BVM</option>
+                  <option value="Intubation">Intubation</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Circulation</label>
+                <select value={patient.manageCirc} onChange={(e) => onUpdate('manageCirc', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="None">None</option>
+                  <option value="IV Access">IV Access</option>
+                  <option value="CPR">CPR</option>
+                  <option value="AED">AED</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Wound Care</label>
+                <select value={patient.manageWound} onChange={(e) => onUpdate('manageWound', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="None">None</option>
+                  <option value="Bandage">Bandage</option>
+                  <option value="Pressure">Pressure</option>
+                  <option value="Tourniquet">Tourniquet</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Immobilization</label>
+                <select value={patient.manageImmob} onChange={(e) => onUpdate('manageImmob', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="None">None</option>
+                  <option value="C-Collar">C-Collar</option>
+                  <option value="Splint">Splint</option>
+                  <option value="Backboard">Backboard</option>
+                  <option value="KED">KED</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Other</label>
+                <select value={patient.manageOther} onChange={(e) => onUpdate('manageOther', e.target.value)} className={selectClass}>
+                  <option value="">Select...</option>
+                  <option value="None">None</option>
+                  <option value="O2 Therapy">O2 Therapy</option>
+                  <option value="Medication">Medication</option>
+                  <option value="Monitoring">Monitoring</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Injury Details */}
+          <div>
+            <h6 className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 uppercase mb-2">Injury Details</h6>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className={labelClass}>Injury Type</label>
+                <input type="text" value={patient.injuryType} onChange={(e) => onUpdate('injuryType', e.target.value)} className={inputClass} placeholder="Type of injury" />
+              </div>
+              <div>
+                <label className={labelClass}>Affected Body Parts</label>
+                <input type="text" value={patient.affectedBodyParts} onChange={(e) => onUpdate('affectedBodyParts', e.target.value)} className={inputClass} placeholder="Body parts affected" />
+              </div>
+            </div>
+            <div className="mt-2">
+              <label className={labelClass}>Patient Narrative</label>
+              <textarea
+                value={patient.patientNarrative}
+                onChange={(e) => onUpdate('patientNarrative', e.target.value)}
+                rows={2}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500"
+                placeholder="Additional notes about this patient..."
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
