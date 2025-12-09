@@ -166,6 +166,10 @@ contextBridge.exposeInMainWorld('api', {
   
   getDebugMode: () =>
     ipcRenderer.invoke('app:getDebugMode'),
+  
+  // Window Focus
+  focusWindow: () =>
+    ipcRenderer.invoke('app:focusWindow'),
 
   // Event listeners
   onSyncStatus: (callback: (status: any) => void) => {
@@ -270,6 +274,9 @@ export interface ElectronAPI {
   // Debug Mode
   setDebugMode: (enabled: boolean) => Promise<{ success: boolean; debugMode: boolean }>;
   getDebugMode: () => Promise<{ debugMode: boolean }>;
+  
+  // Window Focus
+  focusWindow: () => Promise<{ success: boolean }>;
   
   // Events
   onSyncStatus: (callback: (status: any) => void) => void;

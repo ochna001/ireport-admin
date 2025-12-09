@@ -402,6 +402,50 @@ function IncidentDetail() {
     }
   };
 
+  // Format field name to readable label
+  const formatFieldLabel = (key: string): string => {
+    // Custom labels for specific fields
+    const customLabels: Record<string, string> = {
+      'media_urls': 'Media URLs',
+      'fire_origin': 'Fire Origin',
+      'estimated_damage': 'Estimated Damage',
+      'casualties': 'Casualties',
+      'class_of_fire': 'Class of Fire',
+      'fire_location': 'Fire Location',
+      'area_ownership': 'Area Ownership',
+      'evidence_count': 'Evidence Count',
+      'case_number': 'Case Number',
+      'suspects': 'Suspects',
+      'victims': 'Victims',
+      'suspects_count': 'Suspects Count',
+      'victims_count': 'Victims Count',
+      'narrative': 'Narrative',
+      'nature_of_call': 'Nature of Call',
+      'emergency_type': 'Emergency Type',
+      'patients': 'Patients',
+      'patients_count': 'Patients Count',
+      'disaster_type': 'Disaster Type',
+      'affected_area': 'Affected Area',
+      'casualties_dead': 'Casualties (Dead)',
+      'casualties_injured': 'Casualties (Injured)',
+      'casualties_missing': 'Casualties (Missing)',
+      'families_affected': 'Families Affected',
+      'individuals_affected': 'Individuals Affected',
+      'damage_level': 'Damage Level',
+      'damage_details': 'Damage Details'
+    };
+    
+    // Check for custom label first
+    if (customLabels[key]) {
+      return customLabels[key];
+    }
+    
+    // Convert snake_case to Title Case
+    return key
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
   // Format details for display (Shared logic with FinalReportModal)
   const formatReportDetails = (details: any) => {
     if (!details) return null;
@@ -428,6 +472,45 @@ function IncidentDetail() {
     }
 
     if (Array.isArray(content)) {
+      // Handle array of PDRRMO patients
+      if (content.length > 0 && content[0].name && (content[0].age || content[0].sex || content[0].chiefComplaint)) {
+        return (
+          <div className="space-y-3 mt-1">
+            {content.map((patient: any, idx: number) => (
+              <div key={idx} className="bg-cyan-50 dark:bg-cyan-900/20 p-3 rounded border border-cyan-200 dark:border-cyan-700">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-semibold text-cyan-800 dark:text-cyan-200">Patient {idx + 1}</p>
+                  <p className="text-xs text-cyan-600 dark:text-cyan-400">
+                    {patient.age && `${patient.age} years old`} {patient.sex && `• ${patient.sex}`}
+                  </p>
+                </div>
+                <p className="font-medium text-gray-900 dark:text-white mb-2">{patient.name}</p>
+                {patient.address && <p className="text-sm text-gray-600 dark:text-gray-400">📍 {patient.address}</p>}
+                {patient.chiefComplaint && (
+                  <p className="text-sm text-gray-700 dark:text-gray-300 mt-2">
+                    <span className="font-medium">Chief Complaint:</span> {patient.chiefComplaint}
+                  </p>
+                )}
+                {patient.condition && (
+                  <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
+                    <span className="font-medium">Condition:</span> {patient.condition}
+                  </p>
+                )}
+                {(patient.vitals?.bp || patient.vitals?.pulse || patient.vitals?.spo2) && (
+                  <div className="mt-2 pt-2 border-t border-cyan-200 dark:border-cyan-700">
+                    <p className="text-xs font-medium text-cyan-700 dark:text-cyan-300 mb-1">Vitals:</p>
+                    <div className="grid grid-cols-3 gap-2 text-xs text-gray-600 dark:text-gray-400">
+                      {patient.vitals.bp && <span>BP: {patient.vitals.bp}</span>}
+                      {patient.vitals.pulse && <span>Pulse: {patient.vitals.pulse}</span>}
+                      {patient.vitals.spo2 && <span>SpO2: {patient.vitals.spo2}%</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      }
       // Handle array of persons (suspects/victims)
       if (content.length > 0 && (content[0].firstName || content[0].lastName)) {
         return (
@@ -489,7 +572,33 @@ function IncidentDetail() {
       } catch {}
 
       let valueHtml = '';
-      if (Array.isArray(content) && content.length > 0 && (content[0].firstName || content[0].lastName)) {
+      // Handle PDRRMO patients
+      if (Array.isArray(content) && content.length > 0 && content[0].name && (content[0].age || content[0].sex)) {
+         valueHtml = content.map((p: any, idx: number) => `
+           <div style="margin-bottom: 12px; padding: 12px; background: #ecfeff; border: 1px solid #06b6d4; border-radius: 6px;">
+             <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+               <strong style="color: #0e7490;">Patient ${idx + 1}</strong>
+               <span style="font-size: 0.85em; color: #0891b2;">${p.age ? p.age + ' years old' : ''} ${p.sex ? '• ' + p.sex : ''}</span>
+             </div>
+             <div style="font-weight: 600; margin-bottom: 6px;">${p.name}</div>
+             ${p.address ? `<div style="color: #666; font-size: 0.9em; margin-bottom: 6px;">📍 ${p.address}</div>` : ''}
+             ${p.chiefComplaint ? `<div style="margin-top: 8px; font-size: 0.9em;"><strong>Chief Complaint:</strong> ${p.chiefComplaint}</div>` : ''}
+             ${p.condition ? `<div style="font-size: 0.9em;"><strong>Condition:</strong> ${p.condition}</div>` : ''}
+             ${(p.vitals?.bp || p.vitals?.pulse || p.vitals?.spo2) ? `
+               <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #06b6d4;">
+                 <div style="font-size: 0.85em; font-weight: 600; color: #0e7490; margin-bottom: 4px;">Vitals:</div>
+                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 0.85em; color: #666;">
+                   ${p.vitals.bp ? `<span>BP: ${p.vitals.bp}</span>` : ''}
+                   ${p.vitals.pulse ? `<span>Pulse: ${p.vitals.pulse}</span>` : ''}
+                   ${p.vitals.spo2 ? `<span>SpO2: ${p.vitals.spo2}%</span>` : ''}
+                 </div>
+               </div>
+             ` : ''}
+           </div>
+         `).join('');
+      }
+      // Handle PNP suspects/victims
+      else if (Array.isArray(content) && content.length > 0 && (content[0].firstName || content[0].lastName)) {
          valueHtml = content.map((p: any) => `
            <div style="margin-bottom: 8px; padding: 8px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;">
              <strong>${p.firstName} ${p.middleName || ''} ${p.lastName}</strong>
@@ -505,7 +614,7 @@ function IncidentDetail() {
       return `
         <div style="margin-bottom: 16px;">
           <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #6b7280; margin-bottom: 4px;">
-            ${key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
+            ${formatFieldLabel(key)}
           </div>
           ${valueHtml}
         </div>
@@ -870,7 +979,7 @@ function IncidentDetail() {
                   {formatReportDetails(finalReport.report_details)?.map(([key, value]) => (
                     <div key={key}>
                       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 uppercase text-xs">
-                        {key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
+                        {formatFieldLabel(key)}
                       </h3>
                       {renderReportValue(key, value)}
                     </div>
@@ -900,7 +1009,7 @@ function IncidentDetail() {
                   {formatReportDetails(draftReport.draft_details)?.slice(0, 3).map(([key, value]) => (
                     <div key={key}>
                       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 uppercase text-xs">
-                        {key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
+                        {formatFieldLabel(key)}
                       </h3>
                       <div className="line-clamp-2 text-sm">
                         {renderReportValue(key, value)}

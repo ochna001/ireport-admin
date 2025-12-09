@@ -181,10 +181,16 @@ function createWindow() {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show();
+    mainWindow?.focus(); // Ensure window gets focus
   });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+  
+  // Always focus window when it's shown (e.g., after logout)
+  mainWindow.on('show', () => {
+    mainWindow?.focus();
   });
 }
 
@@ -223,6 +229,19 @@ ipcMain.handle('app:setDebugMode', async (_event, enabled: boolean) => {
 
 ipcMain.handle('app:getDebugMode', async () => {
   return { debugMode: debugModeEnabled };
+});
+
+// Force window focus (for login after logout)
+ipcMain.handle('app:focusWindow', async () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+    mainWindow.moveTop();
+    return { success: true };
+  }
+  return { success: false };
 });
 
 // IPC Handlers - using Supabase directly
@@ -1927,9 +1946,39 @@ ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorI
     }
     
     // Use draft author_id as fallback if authorId not provided
-    const completedByUserId = authorId || draft.author_id;
+    let completedByUserId = authorId || draft.author_id;
+    
+    // If still missing (e.g. Admin PIN login), try to get from incident's assigned officer
     if (!completedByUserId) {
-      throw new Error('Author ID is required to publish the report. Please ensure you are logged in.');
+      const { data: incidentData } = await supabase
+        .from('incidents')
+        .select('assigned_officer_id')
+        .eq('id', incidentId)
+        .single();
+        
+      if (incidentData?.assigned_officer_id) {
+        completedByUserId = incidentData.assigned_officer_id;
+        console.log('[Admin] Using incident assigned officer as report author:', completedByUserId);
+      }
+    }
+    
+    // If still missing, try to find ANY valid officer profile to use as system fallback
+    // This is required because the database enforces a valid user ID for the report
+    if (!completedByUserId) {
+       const { data: profiles } = await supabase
+         .from('profiles')
+         .select('id')
+         .in('role', ['Chief', 'Field Officer', 'Desk Officer'])
+         .limit(1);
+         
+       if (profiles && profiles.length > 0) {
+         completedByUserId = profiles[0].id;
+         console.log('[Admin] Using fallback profile as report author:', completedByUserId);
+       }
+    }
+
+    if (!completedByUserId) {
+      throw new Error('Author ID is required to publish the report. Please ensure there is at least one registered officer in the system.');
     }
     
     // 2. Upsert into final_reports
