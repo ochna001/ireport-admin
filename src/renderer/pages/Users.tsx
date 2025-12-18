@@ -643,13 +643,17 @@ function Users() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => handleEditUser(user)}
-                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                        title="Edit User"
-                      >
-                        <Edit className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                      </button>
+                      {/* Desk Officers can only edit Residents, not other officers/chiefs */}
+                      {(initialScope.role === 'Admin' || initialScope.role === 'Chief' || 
+                        (initialScope.role === 'Desk Officer' && user.role === 'Resident')) && (
+                        <button
+                          onClick={() => handleEditUser(user)}
+                          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                          title="Edit User"
+                        >
+                          <Edit className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                        </button>
+                      )}
                       {initialScope.role === 'Admin' && (
                         <>
                           <button
@@ -672,6 +676,16 @@ function Users() {
                             </button>
                           )}
                         </>
+                      )}
+                      {/* Show disabled state for Desk Officers trying to edit officers */}
+                      {initialScope.role === 'Desk Officer' && user.role !== 'Resident' && (
+                        <button
+                          disabled
+                          className="p-2 rounded-lg opacity-30 cursor-not-allowed"
+                          title="You can only edit Residents"
+                        >
+                          <Edit className="w-4 h-4 text-gray-400" />
+                        </button>
                       )}
                     </div>
                   </td>

@@ -18,76 +18,8 @@ function Login({ onLogin }: { onLogin: () => void }) {
 
   const navigate = useNavigate();
 
-  // Handle focus when switching views or component mounts
   useEffect(() => {
-    if (view === 'login') {
-      // Force window and input focus
-      const focusInput = async () => {
-        try {
-          // Force Electron window to focus
-          if (window.api?.focusWindow) {
-            await window.api.focusWindow();
-          }
-          
-          window.focus();
-          
-          // Then focus the appropriate input
-          if (selectedRole === 'admin') {
-            pinInputRef.current?.focus();
-          } else if (selectedRole) {
-            emailInputRef.current?.focus();
-          }
-        } catch (e) {
-          console.warn('Focus error:', e);
-        }
-      };
-      
-      // Immediate focus
-      focusInput();
-      
-      // Delayed focus to ensure DOM is ready
-      const timer1 = setTimeout(focusInput, 100);
-      const timer2 = setTimeout(focusInput, 300);
-      
-      return () => {
-        clearTimeout(timer1);
-        clearTimeout(timer2);
-      };
-    }
-  }, [view, selectedRole]);
-
-  // Handle window focus events
-  useEffect(() => {
-    const handleWindowFocus = () => {
-      if (view === 'login') {
-        setTimeout(() => {
-          if (selectedRole === 'admin') {
-            pinInputRef.current?.focus();
-          } else if (selectedRole) {
-            emailInputRef.current?.focus();
-          }
-        }, 50);
-      }
-    };
-
-    const handleClick = () => {
-      if (view === 'login') {
-        // Re-enable inputs on any click
-        if (selectedRole === 'admin') {
-          pinInputRef.current?.removeAttribute('readonly');
-        } else if (selectedRole) {
-          emailInputRef.current?.removeAttribute('readonly');
-        }
-      }
-    };
-
-    window.addEventListener('focus', handleWindowFocus);
-    document.addEventListener('click', handleClick);
-    
-    return () => {
-      window.removeEventListener('focus', handleWindowFocus);
-      document.removeEventListener('click', handleClick);
-    };
+    window.api.focusWindow?.().catch(() => {});
   }, [view, selectedRole]);
 
   const handleRoleSelect = (role: Role) => {
@@ -295,7 +227,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                     Email Address
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
                     <input
                       ref={emailInputRef}
                       type="email"
@@ -306,7 +238,6 @@ function Login({ onLogin }: { onLogin: () => void }) {
                       }}
                       onFocus={(e) => e.currentTarget.select()}
                       autoFocus
-                      tabIndex={0}
                       className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors ${
                         errorMessage 
                           ? 'border-red-300 focus:ring-red-200 focus:border-red-500' 
@@ -322,7 +253,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                     Password
                   </label>
                   <div className="relative">
-                    <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
                     <input
                       type="password"
                       value={password}
@@ -331,7 +262,6 @@ function Login({ onLogin }: { onLogin: () => void }) {
                         setErrorMessage('');
                       }}
                       onFocus={(e) => e.currentTarget.select()}
-                      tabIndex={0}
                       className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors ${
                         errorMessage 
                           ? 'border-red-300 focus:ring-red-200 focus:border-red-500' 
@@ -348,7 +278,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                   Enter Access PIN
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
                   <input
                     ref={pinInputRef}
                     type="password"
@@ -356,7 +286,6 @@ function Login({ onLogin }: { onLogin: () => void }) {
                     onChange={handlePinChange}
                     onFocus={(e) => e.currentTarget.select()}
                     autoFocus
-                    tabIndex={0}
                     maxLength={6}
                     className="w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors border-gray-200 focus:ring-blue-200 focus:border-blue-500"
                     placeholder="••••"

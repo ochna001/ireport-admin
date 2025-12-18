@@ -33,6 +33,7 @@ interface PnpFormData {
   victims: PersonEntry[];
   evidenceCount: number;
   caseNumber: string;
+  casualtiesCount: number;
 }
 
 // ============================================
@@ -45,6 +46,7 @@ interface BfpFormData {
   rootCause: string;
   peopleInjured: string;
   estimatedDamage: string;
+  casualtiesCount: number;
 }
 
 // ============================================
@@ -68,6 +70,7 @@ interface PdrrmoFormData {
   timeBase: string;
   patientsCount: number;
   patients: PdrrmoPatientEntry[];
+  casualtiesCount: number;
 }
 
 interface PdrrmoPatientEntry {
@@ -295,6 +298,7 @@ interface MdrrmoDisasterFormData {
   damageLevel: string;
   damageDetails: string;
   narrative: string;
+  casualtiesCount: number;
 }
 
 // Validation errors interface
@@ -316,7 +320,8 @@ const defaultPnpForm: PnpFormData = {
   suspects: [{ ...emptyPerson }],
   victims: [{ ...emptyPerson }],
   evidenceCount: 0,
-  caseNumber: ''
+  caseNumber: '',
+  casualtiesCount: 0
 };
 
 const defaultBfpForm: BfpFormData = {
@@ -325,7 +330,8 @@ const defaultBfpForm: BfpFormData = {
   classOfFire: '',
   rootCause: '',
   peopleInjured: '',
-  estimatedDamage: ''
+  estimatedDamage: '',
+  casualtiesCount: 0
 };
 
 const buildDefaultPdrrmoForm = (): PdrrmoFormData => ({
@@ -345,7 +351,8 @@ const buildDefaultPdrrmoForm = (): PdrrmoFormData => ({
   timeClear: '',
   timeBase: '',
   patientsCount: 0,
-  patients: []
+  patients: [],
+  casualtiesCount: 0
 });
 
 const defaultPdrrmoForm = buildDefaultPdrrmoForm();
@@ -361,7 +368,8 @@ const defaultMdrrmoDisasterForm: MdrrmoDisasterFormData = {
   individualsAffected: 0,
   damageLevel: '',
   damageDetails: '',
-  narrative: ''
+  narrative: '',
+  casualtiesCount: 0
 };
 
 export function FinalReportModal({ isOpen, onClose, incident, existingFinalReport, onReportPublished, onDraftSaved, latestUnitReport }: FinalReportModalProps) {
@@ -571,7 +579,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           ? parseVictims 
           : [{ ...emptyPerson }],
         evidenceCount: parseInt(details.evidence_count || '0') || 0,
-        caseNumber: details.caseNumber || details.case_number || ''
+        caseNumber: details.caseNumber || details.case_number || '',
+        casualtiesCount: parseInt(details.casualties_count || '0') || 0
       });
     } else if (agencyType === 'bfp') {
       setBfpForm({
@@ -580,7 +589,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         classOfFire: details.classOfFire || details.class_of_fire || '',
         rootCause: details.rootCause || details.root_cause || '',
         peopleInjured: details.peopleInjured || details.people_injured || '',
-        estimatedDamage: details.estimatedDamage || details.estimated_damage || ''
+        estimatedDamage: details.estimatedDamage || details.estimated_damage || '',
+        casualtiesCount: parseInt(details.casualties_count || '0') || 0
       });
     } else if (agencyType === 'pdrrmo') {
       console.log('PDRRMO details:', details);
@@ -604,7 +614,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         timeClear: details.time_clear || details.timeClear || '',
         timeBase: details.time_base || details.timeBase || '',
         patientsCount: patients.length || parseInt(details.patients_count || details.patientsCount || '0') || 0,
-        patients: patients
+        patients: patients,
+        casualtiesCount: parseInt(details.casualties_count || '0') || 0
       });
     } else if (agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') {
       // MDRRMO can be stored as either 'mdrrmo' or 'mdrrmo_disaster'
@@ -619,7 +630,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         individualsAffected: parseInt(details.individuals_affected || details.individualsAffected || '0') || 0,
         damageLevel: details.damage_level || details.damageLevel || '',
         damageDetails: details.damage_details || details.damageDetails || '',
-        narrative: details.narrative || ''
+        narrative: details.narrative || '',
+        casualtiesCount: parseInt(details.casualties_count || '0') || 0
       });
     }
   };
@@ -715,6 +727,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         suspects_count: validSuspects.length.toString(),
         victims_count: validVictims.length.toString(),
         evidence_count: pnpForm.evidenceCount.toString(),
+        casualties_count: pnpForm.casualtiesCount.toString(),
         caseNumber: pnpForm.caseNumber,
         media_urls: mediaUrls,
         timestamp
@@ -727,6 +740,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         rootCause: bfpForm.rootCause,
         peopleInjured: bfpForm.peopleInjured,
         estimatedDamage: bfpForm.estimatedDamage,
+        casualties_count: bfpForm.casualtiesCount.toString(),
         media_urls: mediaUrls,
         timestamp
       };
@@ -751,6 +765,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           patients_count: pdrrmoForm.patients.length.toString(),
           patients: pdrrmoForm.patients,
           patients_data: pdrrmoForm.patients,
+          casualties_count: pdrrmoForm.casualtiesCount.toString(),
           media_urls: mediaUrls,
           timestamp
         };
@@ -772,6 +787,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           damage_level: mdrrmoDisasterForm.damageLevel,
           damage_details: mdrrmoDisasterForm.damageDetails,
           narrative: mdrrmoDisasterForm.narrative,
+          casualties_count: mdrrmoDisasterForm.casualtiesCount.toString(),
           media_urls: mediaUrls,
           timestamp
         };
@@ -794,6 +810,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         damage_level: mdrrmoDisasterForm.damageLevel,
         damage_details: mdrrmoDisasterForm.damageDetails,
         narrative: mdrrmoDisasterForm.narrative,
+        casualties_count: mdrrmoDisasterForm.casualtiesCount.toString(),
         media_urls: mediaUrls,
         timestamp
       };
@@ -1357,18 +1374,32 @@ function PnpForm({ form, setForm, errors, setErrors }: {
         </div>
       </div>
 
-      {/* Evidence Count */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Evidence Count
-        </label>
-        <input
-          type="number"
-          min="0"
-          value={form.evidenceCount}
-          onChange={(e) => setForm(prev => ({ ...prev, evidenceCount: parseInt(e.target.value) || 0 }))}
-          className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        />
+      {/* Evidence Count and Casualties Count */}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Evidence Count
+          </label>
+          <input
+            type="number"
+            min="0"
+            value={form.evidenceCount}
+            onChange={(e) => setForm(prev => ({ ...prev, evidenceCount: parseInt(e.target.value) || 0 }))}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Actual Casualties Count
+          </label>
+          <input
+            type="number"
+            min="0"
+            value={form.casualtiesCount}
+            onChange={(e) => setForm(prev => ({ ...prev, casualtiesCount: parseInt(e.target.value) || 0 }))}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
       </div>
     </div>
   );
@@ -1587,6 +1618,21 @@ function BfpForm({ form, setForm, errors, setErrors }: {
             placeholder="e.g., 500,000"
           />
         </div>
+      </div>
+
+      {/* Actual Casualties Count */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Actual Casualties Count
+        </label>
+        <input
+          type="number"
+          min="0"
+          value={form.casualtiesCount}
+          onChange={(e) => setForm(prev => ({ ...prev, casualtiesCount: parseInt(e.target.value) || 0 }))}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
+          placeholder="Actual number of casualties/victims"
+        />
       </div>
     </div>
   );
@@ -2349,6 +2395,21 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors }: {
             placeholder="Describe infrastructure, property, or agricultural damage..."
           />
         </div>
+      </div>
+
+      {/* Actual Casualties Count */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Actual Casualties Count
+        </label>
+        <input
+          type="number"
+          min="0"
+          value={form.casualtiesCount}
+          onChange={(e) => setForm(prev => ({ ...prev, casualtiesCount: parseInt(e.target.value) || 0 }))}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+          placeholder="Actual number of casualties/victims"
+        />
       </div>
 
       {/* Narrative */}

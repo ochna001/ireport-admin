@@ -2,6 +2,7 @@ import {
   AlertCircle,
   Building2,
   CheckCircle,
+  Download,
   Edit,
   Flame,
   Loader2,
@@ -13,12 +14,14 @@ import {
   Shield,
   Trash2,
   Truck,
+  Upload,
   Users,
   Waves,
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSessionScope, isStationScoped } from '../utils/sessionScope';
+import { parseResourcesCSV, generateResourcesCSVTemplate, downloadFile } from '../utils/exportUtils';
 
 // Google Maps API Key from main process
 const GOOGLE_MAPS_API_KEY = 'AIzaSyBuylnOdkYntsIFYVDbsQFemeyqya1TaTc';
@@ -165,6 +168,9 @@ function Agencies() {
   const [showResourceModal, setShowResourceModal] = useState(false);
   const [editingStation, setEditingStation] = useState<Station | null>(null);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  const [showBatchImportModal, setShowBatchImportModal] = useState(false);
+  const [importingResources, setImportingResources] = useState(false);
+  const [importPreview, setImportPreview] = useState<any[]>([]);
   
   // Toast notification state
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -363,6 +369,83 @@ function Agencies() {
     } catch (error: any) {
       console.error('Failed to delete resource:', error);
       showToast('error', error.message || 'Failed to delete resource');
+    }
+  };
+
+  // Batch import handlers
+  const handleDownloadTemplate = () => {
+    const template = generateResourcesCSVTemplate();
+    downloadFile(template, 'resources_template.csv', 'text/csv');
+    showToast('success', 'Template downloaded successfully');
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = await parseResourcesCSV(text);
+      
+      if (parsed.length === 0) {
+        showToast('error', 'No valid resources found in CSV');
+        return;
+      }
+
+      setImportPreview(parsed);
+      setShowBatchImportModal(true);
+    } catch (error: any) {
+      console.error('Failed to parse CSV:', error);
+      showToast('error', 'Failed to parse CSV file. Please check the format.');
+    }
+    
+    event.target.value = '';
+  };
+
+  const handleBatchImport = async () => {
+    if (importPreview.length === 0) return;
+    
+    if (!agencyFilter) {
+      showToast('error', 'Please select an agency filter first');
+      return;
+    }
+
+    const selectedStation = stations.find(s => s.agency_id === parseInt(agencyFilter));
+    if (!selectedStation) {
+      showToast('error', 'No station found for selected agency');
+      return;
+    }
+
+    try {
+      setImportingResources(true);
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const resource of importPreview) {
+        try {
+          await window.api.createResource({
+            station_id: selectedStation.id,
+            name: resource.name,
+            type: resource.type || 'equipment',
+            status: resource.status || 'available',
+            description: resource.description || ''
+          });
+          successCount++;
+        } catch (error) {
+          console.error('Failed to import resource:', resource.name, error);
+          errorCount++;
+        }
+      }
+
+      showToast('success', `Imported ${successCount} resources successfully${errorCount > 0 ? ` (${errorCount} failed)` : ''}`);
+      setShowBatchImportModal(false);
+      setImportPreview([]);
+      loadData();
+    } catch (error: any) {
+      console.error('Batch import failed:', error);
+      showToast('error', 'Batch import failed');
+    } finally {
+      setImportingResources(false);
     }
   };
 
@@ -705,13 +788,32 @@ function Agencies() {
                   ))}
                 </select>
               )}
-              <button
-                onClick={handleAddResource}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Resource
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDownloadTemplate}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  CSV Template
+                </button>
+                <label className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors cursor-pointer">
+                  <Upload className="w-4 h-4" />
+                  Batch Import
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  onClick={handleAddResource}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Resource
+                </button>
+              </div>
             </div>
           </div>
 
@@ -875,6 +977,18 @@ function Agencies() {
           onSave={handleSaveResource}
         />
       )}
+
+      {/* Batch Import Modal */}
+      <BatchImportModal
+        isOpen={showBatchImportModal}
+        onClose={() => {
+          setShowBatchImportModal(false);
+          setImportPreview([]);
+        }}
+        resources={importPreview}
+        onImport={handleBatchImport}
+        importing={importingResources}
+      />
     </div>
   );
 }
@@ -1673,6 +1787,99 @@ function ResourceModal({
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function BatchImportModal({ 
+  isOpen, 
+  onClose, 
+  resources, 
+  onImport, 
+  importing 
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  resources: any[]; 
+  onImport: () => void;
+  importing: boolean;
+}) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
+          <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+            Batch Import Resources
+          </h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1">
+          <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p className="text-sm text-blue-800 dark:text-blue-200">
+              <strong>{resources.length} resources</strong> will be imported. Review the list below and click Import to proceed.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {resources.map((resource, index) => (
+              <div 
+                key={index}
+                className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="font-medium text-gray-800 dark:text-white">
+                      {resource.name}
+                    </div>
+                    <div className="text-sm text-gray-500 dark:text-gray-400 flex gap-3 mt-1">
+                      <span>Type: {resource.type || 'equipment'}</span>
+                      <span>Status: {resource.status || 'available'}</span>
+                    </div>
+                    {resource.description && (
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        {resource.description}
+                      </div>
+                    )}
+                  </div>
+                  <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 ml-3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-3 p-6 border-t border-gray-100 dark:border-gray-700">
+          <button
+            onClick={onClose}
+            disabled={importing}
+            className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onImport}
+            disabled={importing}
+            className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {importing ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Importing...
+              </>
+            ) : (
+              <>
+                <Upload className="w-4 h-4" />
+                Import {resources.length} Resources
+              </>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

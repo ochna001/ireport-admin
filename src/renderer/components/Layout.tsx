@@ -15,7 +15,7 @@ import {
     Shield
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Notifications } from './Notifications';
 
 interface SyncStatus {
@@ -30,6 +30,7 @@ interface LayoutProps {
 }
 
 function Layout({ onLogout }: LayoutProps) {
+  const navigate = useNavigate();
   const [user, setUser] = useState<any>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     connected: false,
@@ -81,20 +82,45 @@ function Layout({ onLogout }: LayoutProps) {
   };
 
   const handleLogout = async () => {
-    if (window.confirm('Are you sure you want to logout?')) {
+    if (!window.api?.confirm) {
+      console.error('[LOGOUT] window.api.confirm not available');
+      return;
+    }
+
+    const confirmed = (await window.api.confirm({
+      message: 'Are you sure you want to logout?',
+      detail: 'You will need to sign in again to continue.'
+    })).confirmed;
+
+    if (confirmed) {
+      console.log('[LOGOUT] ========== LOGOUT INITIATED ==========');
+      console.log('[LOGOUT] Current user:', user);
+      console.log('[LOGOUT] localStorage auth:', localStorage.getItem('ireport_admin_auth'));
+      
       // Clear backend caches
       try {
+        console.log('[LOGOUT] Calling window.api.logout()');
         await window.api.logout?.();
+        console.log('[LOGOUT] Backend logout complete');
       } catch (e) {
-        console.error('Logout error:', e);
+        console.error('[LOGOUT] Backend logout error:', e);
       }
       
       // Clear local storage
+      console.log('[LOGOUT] Clearing localStorage');
       localStorage.removeItem('ireport_admin_auth');
       localStorage.removeItem('ireport_admin_current_user');
+      console.log('[LOGOUT] localStorage cleared');
       
-      // Reload the window to reset all state and fix input focus issues
-      window.location.reload();
+      // Call parent onLogout to update auth state
+      console.log('[LOGOUT] Calling onLogout callback');
+      onLogout();
+      
+      // Navigate to login page instead of reloading
+      console.log('[LOGOUT] Navigating to /login');
+      navigate('/login', { replace: true });
+    } else {
+      console.log('[LOGOUT] Logout cancelled by user');
     }
   };
 
@@ -127,7 +153,7 @@ function Layout({ onLogout }: LayoutProps) {
              <div className={`w-8 h-8 ${logoBgClass} rounded-lg flex items-center justify-center transition-colors duration-300`}>
                 <Shield size={18} className="text-white" />
              </div>
-             <h1 className="text-lg font-bold">{user?.role === 'Admin' ? 'iReport Admin' : 'iReport Mgmt'}</h1>
+             <h1 className="text-lg font-bold">{user?.role === 'Admin' ? 'iReport Control Center' : 'iReport Stations'}</h1>
           </div>
           <p className="text-xs text-gray-400">Camarines Norte LGU</p>
         </div>

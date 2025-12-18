@@ -17,6 +17,7 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -129,6 +130,9 @@ public class MdrrmoReportFormActivity extends AppCompatActivity {
         // Pre-fill incident location from intent
         if (incidentAddress != null && !incidentAddress.isEmpty()) {
             editIncidentLocation.setText(incidentAddress);
+        } else {
+            // Try to load from incident details if not passed via intent
+            loadIncidentBasicInfo();
         }
 
         boolean isEditMode = getIntent().getBooleanExtra("IS_EDIT_MODE", false);
@@ -694,22 +698,22 @@ public class MdrrmoReportFormActivity extends AppCompatActivity {
             return;
         }
         
-        // Validate nature of call
-        if (spinnerNatureOfCall.getSelectedItemPosition() == 0) {
+        // Validate nature of call (skip position 0 which is the prompt)
+        if (spinnerNatureOfCall.getSelectedItemPosition() <= 0) {
             Toast.makeText(this, "Please select the nature of call", Toast.LENGTH_SHORT).show();
             spinnerNatureOfCall.requestFocus();
             return;
         }
         
-        // Validate emergency type
-        if (spinnerEmergencyType.getSelectedItemPosition() == 0) {
+        // Validate emergency type (skip position 0 which is the prompt)
+        if (spinnerEmergencyType.getSelectedItemPosition() <= 0) {
             Toast.makeText(this, "Please select the type of emergency", Toast.LENGTH_SHORT).show();
             spinnerEmergencyType.requestFocus();
             return;
         }
         
-        // Validate area type
-        if (spinnerAreaType.getSelectedItemPosition() == 0) {
+        // Validate area type (skip position 0 which is the prompt)
+        if (spinnerAreaType.getSelectedItemPosition() <= 0) {
             Toast.makeText(this, "Please select the area type", Toast.LENGTH_SHORT).show();
             spinnerAreaType.requestFocus();
             return;
@@ -1082,16 +1086,27 @@ public class MdrrmoReportFormActivity extends AppCompatActivity {
                                 }
                             }
                             updateMediaCount();
-                            
-                            String patientCount = details.optString("patients_count", "");
-                            if (!patientCount.isEmpty()) {
-                                containerPatients.removeAllViews();
+
+                            // Restore patient details in read-only mode
+                            containerPatients.removeAllViews();
+                            String patientsStr = details.optString("patients", "[]");
+                            JSONArray patientsArray = new JSONArray(patientsStr);
+                            if (patientsArray.length() > 0) {
+                                for (int i = 0; i < patientsArray.length(); i++) {
+                                    addPatientCard();
+                                    View patientView = containerPatients.getChildAt(i);
+                                    JSONObject patientData = patientsArray.getJSONObject(i);
+                                    restorePatientData(patientView, patientData);
+                                    setPatientViewReadOnly(patientView);
+                                }
+                            } else {
                                 TextView tv = new TextView(MdrrmoReportFormActivity.this);
-                                tv.setText(patientCount + " patient(s) recorded");
+                                tv.setText("No patient data recorded");
                                 tv.setPadding(16, 16, 16, 16);
                                 tv.setTextSize(16);
                                 containerPatients.addView(tv);
                             }
+
                         } catch (Exception e) {
                             Log.e(TAG, "Error parsing report details: " + e.getMessage());
                             Toast.makeText(this, "Error loading report data", Toast.LENGTH_SHORT).show();
@@ -1120,12 +1135,22 @@ public class MdrrmoReportFormActivity extends AppCompatActivity {
         }
     }
     
-    private String extractJsonValue(String json, String key) {
-        try {
-            org.json.JSONObject obj = new org.json.JSONObject(json);
-            return obj.optString(key, "");
-        } catch (Exception e) {
-            return "";
+    // Disable all inputs inside a patient card for read-only display
+    private void setPatientViewReadOnly(View parent) {
+        if (parent == null) return;
+        // Hide remove button
+        View removeBtn = parent.findViewById(R.id.btnRemoveEntry);
+        if (removeBtn != null) removeBtn.setVisibility(View.GONE);
+        disableViewAndChildren(parent);
+    }
+
+    private void disableViewAndChildren(View view) {
+        view.setEnabled(false);
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                disableViewAndChildren(group.getChildAt(i));
+            }
         }
     }
 }

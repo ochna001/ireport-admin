@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   getIncident: (id: string) => 
     ipcRenderer.invoke('db:getIncident', id),
   
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[] }) => 
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => 
     ipcRenderer.invoke('db:updateIncidentStatus', params),
   
   getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => 
@@ -141,6 +141,20 @@ contextBridge.exposeInMainWorld('api', {
   getUnreadNotificationCount: (userId: string) =>
     ipcRenderer.invoke('notifications:getUnreadCount', userId),
 
+  // Incident Agencies (Multi-Agency Coordination)
+  getIncidentAgencies: (incidentId: string) =>
+    ipcRenderer.invoke('incidentAgencies:get', incidentId),
+  addIncidentAgency: (params: { incidentId: string; agencyId: number; role: 'primary' | 'lead' | 'supporting' }) =>
+    ipcRenderer.invoke('incidentAgencies:add', params),
+  updateIncidentAgencyRole: (params: { id: number; role: 'primary' | 'lead' | 'supporting' }) =>
+    ipcRenderer.invoke('incidentAgencies:updateRole', params),
+  acknowledgeIncidentAgency: (id: number) =>
+    ipcRenderer.invoke('incidentAgencies:acknowledge', id),
+  removeIncidentAgency: (id: number) =>
+    ipcRenderer.invoke('incidentAgencies:remove', id),
+  getAvailableAgencies: (incidentId: string) =>
+    ipcRenderer.invoke('incidentAgencies:getAvailable', incidentId),
+
   // Final Report Drafts
   getFinalReportDraft: (incidentId: string) =>
     ipcRenderer.invoke('finalReportDrafts:get', incidentId),
@@ -171,6 +185,9 @@ contextBridge.exposeInMainWorld('api', {
   focusWindow: () =>
     ipcRenderer.invoke('app:focusWindow'),
 
+  confirm: (params: { message: string; detail?: string; title?: string }) =>
+    ipcRenderer.invoke('app:confirm', params),
+
   // Event listeners
   onSyncStatus: (callback: (status: any) => void) => {
     ipcRenderer.on('sync-status', (_, status) => callback(status));
@@ -191,7 +208,7 @@ export interface ElectronAPI {
   // Incidents
   getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number }) => Promise<any[]>;
   getIncident: (id: string) => Promise<any>;
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[] }) => Promise<{ success: boolean }>;
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => Promise<{ success: boolean }>;
   getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => Promise<any>;
   getAuditLog: (incidentId: string) => Promise<any[]>;
   getAgencyStations: () => Promise<any[]>;
@@ -240,6 +257,14 @@ export interface ElectronAPI {
   markAllNotificationsAsRead: (userId: string) => Promise<{ success: boolean }>;
   getUnreadNotificationCount: (userId: string) => Promise<number>;
   
+  // Incident Agencies (Multi-Agency Coordination)
+  getIncidentAgencies: (incidentId: string) => Promise<any[]>;
+  addIncidentAgency: (params: { incidentId: string; agencyId: number; role: 'primary' | 'lead' | 'supporting' }) => Promise<any>;
+  updateIncidentAgencyRole: (params: { id: number; role: 'primary' | 'lead' | 'supporting' }) => Promise<{ success: boolean }>;
+  acknowledgeIncidentAgency: (id: number) => Promise<{ success: boolean }>;
+  removeIncidentAgency: (id: number) => Promise<{ success: boolean }>;
+  getAvailableAgencies: (incidentId: string) => Promise<any[]>;
+
   // Final Report Drafts
   getFinalReportDraft: (incidentId: string) => Promise<any | null>;
   saveFinalReportDraft: (params: { incidentId: string; agencyType: string; draftDetails: any; status?: string; authorId?: string }) => Promise<{ success: boolean; draft: any }>;
@@ -277,6 +302,8 @@ export interface ElectronAPI {
   
   // Window Focus
   focusWindow: () => Promise<{ success: boolean }>;
+
+  confirm: (params: { message: string; detail?: string; title?: string }) => Promise<{ confirmed: boolean }>;
   
   // Events
   onSyncStatus: (callback: (status: any) => void) => void;

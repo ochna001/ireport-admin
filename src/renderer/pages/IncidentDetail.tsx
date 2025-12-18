@@ -1,21 +1,26 @@
 import {
     ArrowLeft,
+    Building2,
+    Check,
     Clock,
     Edit3,
     FileText,
     History,
     Image as ImageIcon,
     MapPin,
+    Plus,
     RefreshCcw,
     Send,
     User,
     UserCheck,
+    Users,
     Truck,
     X
 } from 'lucide-react';
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getSessionScope, isStationScoped } from '../utils/sessionScope';
+import { exportFinalReportToPDF } from '../utils/exportUtils';
 import { FinalReportModal } from '../components/FinalReportModal';
 import { RouteMap } from '../components/RouteMap';
 
@@ -42,6 +47,8 @@ interface Incident {
   updated_at: string;
   resolved_at?: string;
   updated_by?: string;
+  casualties_category?: string;
+  casualties_count?: number;
   // Joined from profiles table via reporter_id
   reporter?: {
     email?: string;
@@ -55,6 +62,9 @@ interface StatusHistoryEntry {
   notes: string;
   changed_by: string;
   changed_at: string;
+  profiles?: {
+    display_name: string;
+  };
 }
 
 interface AgencyStation {
@@ -74,6 +84,7 @@ interface Officer {
   role: string;
   phone_number?: string;
   station_id?: number | null;
+  agency_id?: number | null;
   status?: string;
 }
 
@@ -159,6 +170,14 @@ function IncidentDetail() {
   const [showRoute, setShowRoute] = useState(false);
   const [routeInfo, setRouteInfo] = useState<{ distance: number; duration: number } | null>(null);
 
+  // Multi-Agency Coordination State
+  const [incidentAgencies, setIncidentAgencies] = useState<any[]>([]);
+  const [availableAgencies, setAvailableAgencies] = useState<any[]>([]);
+  const [showAddAgencyModal, setShowAddAgencyModal] = useState(false);
+  const [selectedAgencyToAdd, setSelectedAgencyToAdd] = useState<number | null>(null);
+  const [selectedAgencyRole, setSelectedAgencyRole] = useState<'supporting' | 'lead'>('supporting');
+  const [addingAgency, setAddingAgency] = useState(false);
+
   // Callback for when route is loaded from RouteMap component
   const handleRouteLoaded = useCallback((distance: number, duration: number) => {
     setRouteInfo({ distance, duration });
@@ -171,6 +190,7 @@ function IncidentDetail() {
       loadUnitReports();
       loadFinalReport();
       loadDraft();
+      loadIncidentAgencies();
     }
   }, [id]);
 
@@ -212,6 +232,7 @@ function IncidentDetail() {
   const loadHistory = async () => {
     try {
       const data = await window.api.getAuditLog(id!);
+      console.log('[IncidentDetail] History data received:', JSON.stringify(data, null, 2));
       setHistory(data);
     } catch (error) {
       console.error('Failed to load history:', error);
@@ -265,6 +286,67 @@ function IncidentDetail() {
     }
   };
 
+  const loadIncidentAgencies = async () => {
+    try {
+      const data = await window.api.getIncidentAgencies(id!);
+      setIncidentAgencies(data);
+    } catch (error) {
+      console.error('Failed to load incident agencies:', error);
+    }
+  };
+
+  const loadAvailableAgencies = async () => {
+    try {
+      const data = await window.api.getAvailableAgencies(id!);
+      setAvailableAgencies(data);
+    } catch (error) {
+      console.error('Failed to load available agencies:', error);
+    }
+  };
+
+  const handleAddAgency = async () => {
+    if (!selectedAgencyToAdd) return;
+    
+    setAddingAgency(true);
+    try {
+      await window.api.addIncidentAgency({
+        incidentId: id!,
+        agencyId: selectedAgencyToAdd,
+        role: selectedAgencyRole
+      });
+      await loadIncidentAgencies();
+      setShowAddAgencyModal(false);
+      setSelectedAgencyToAdd(null);
+      setSelectedAgencyRole('supporting');
+    } catch (error: any) {
+      console.error('Failed to add agency:', error);
+      alert(error.message || 'Failed to add agency');
+    } finally {
+      setAddingAgency(false);
+    }
+  };
+
+  const handleRemoveAgency = async (agencyRecordId: number) => {
+    if (!confirm('Remove this agency from the incident?')) return;
+    
+    try {
+      await window.api.removeIncidentAgency(agencyRecordId);
+      await loadIncidentAgencies();
+    } catch (error: any) {
+      console.error('Failed to remove agency:', error);
+      alert(error.message || 'Failed to remove agency');
+    }
+  };
+
+  const handleAcknowledgeAgency = async (agencyRecordId: number) => {
+    try {
+      await window.api.acknowledgeIncidentAgency(agencyRecordId);
+      await loadIncidentAgencies();
+    } catch (error: any) {
+      console.error('Failed to acknowledge:', error);
+    }
+  };
+
   const loadStations = async () => {
     // Wait for incident to be loaded first
     if (!incident?.latitude || !incident?.longitude) return;
@@ -294,11 +376,36 @@ function IncidentDetail() {
       const scope = getSessionScope();
       let data = await window.api.getOfficersByAgency(agencyType);
 
+      // DEBUG: Log all officers returned from API
+      console.log('[IncidentDetail] Officers loaded for agency:', agencyType);
+      console.log('[IncidentDetail] Total officers from API:', data?.length || 0);
+      console.log('[IncidentDetail] All officers data:', JSON.stringify(data, null, 2));
+      
+      // Log each officer's key fields
+      if (data && data.length > 0) {
+        data.forEach((officer: Officer, idx: number) => {
+          console.log(`[IncidentDetail] Officer ${idx + 1}:`, {
+            id: officer.id,
+            name: officer.display_name,
+            email: officer.email,
+            role: officer.role,
+            agency_id: officer.agency_id,
+            station_id: officer.station_id,
+            status: officer.status
+          });
+        });
+      } else {
+        console.warn('[IncidentDetail] ⚠️ No officers returned from API for agency:', agencyType);
+      }
+
       // Filter based on scope if needed
       let filtered = data || [];
       if (isStationScoped(scope) && scope.stationId) {
         filtered = filtered.filter((officer: Officer) => !officer.station_id || officer.station_id === scope.stationId);
+        console.log('[IncidentDetail] Filtered to station', scope.stationId, ':', filtered.length, 'officers');
       }
+      
+      console.log('[IncidentDetail] Final officers list:', filtered.length, 'officers');
       setOfficers(filtered);
     } catch (error) {
       console.error('Failed to load officers:', error);
@@ -471,6 +578,61 @@ function IncidentDetail() {
       }
     }
 
+    // Handle media_urls specially - render as clickable thumbnails
+    if (key === 'media_urls' || key === 'mediaUrls') {
+      let urls: string[] = [];
+      if (Array.isArray(content)) {
+        urls = content.filter((u: any) => typeof u === 'string' && u.startsWith('http'));
+      } else if (typeof content === 'string') {
+        // Try to extract URLs from string
+        const urlMatches = content.match(/https?:\/\/[^\s"\\,\]]+/g);
+        if (urlMatches) urls = urlMatches;
+      }
+      
+      if (urls.length > 0) {
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
+            {urls.map((url, idx) => {
+              const isVideo = url.toLowerCase().includes('.mp4') || url.toLowerCase().includes('.mov') || url.toLowerCase().includes('.webm');
+              return (
+                <a
+                  key={idx}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="relative group aspect-square rounded-lg overflow-hidden bg-gray-200 dark:bg-gray-600 hover:ring-2 hover:ring-blue-500 transition-all"
+                >
+                  {isVideo ? (
+                    <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                      <video src={url} className="w-full h-full object-cover" muted preload="metadata" />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                        <div className="w-10 h-10 rounded-full bg-white/80 flex items-center justify-center">
+                          <div className="w-0 h-0 border-t-6 border-t-transparent border-l-10 border-l-gray-800 border-b-6 border-b-transparent ml-1"></div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <img
+                      src={url}
+                      alt={`Media ${idx + 1}`}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23999"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>';
+                      }}
+                    />
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="text-xs text-white">{isVideo ? '🎬 Video' : '📷 Photo'}</span>
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        );
+      }
+      return <p className="mt-1 text-gray-500 italic">No media attached</p>;
+    }
+
     if (Array.isArray(content)) {
       // Handle array of PDRRMO patients (check for 'name' field which is unique to patients)
       if (content.length > 0 && content[0].name !== undefined && typeof content[0].name === 'string') {
@@ -552,6 +714,14 @@ function IncidentDetail() {
   };
 
   const handleExportPDF = () => {
+    if (!finalReport || !incident) return;
+    
+    const doc = exportFinalReportToPDF(incident, finalReport, incident.agency_type);
+    const filename = `Final_Report_${incident.agency_type.toUpperCase()}_${incident.id.substring(0, 8)}_${new Date().toISOString().split('T')[0]}.pdf`;
+    doc.save(filename);
+  };
+
+  const handleExportPDFOld = () => {
     if (!finalReport) return;
     
     // Create a printable window
@@ -942,6 +1112,34 @@ function IncidentDetail() {
               </span>
             </div>
             <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{incident.description}</p>
+            
+            {/* Casualties Information */}
+            {(incident.casualties_category || incident.casualties_count) && (
+              <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+                <h3 className="text-sm font-medium text-red-800 dark:text-red-200 mb-2 flex items-center gap-2">
+                  <Users size={16} />
+                  Casualties/Affected Persons
+                </h3>
+                <div className="space-y-2">
+                  {incident.casualties_category && (
+                    <div>
+                      <span className="text-xs text-red-600 dark:text-red-400">Category: </span>
+                      <span className="text-sm font-medium text-red-700 dark:text-red-300">
+                        {incident.casualties_category}
+                      </span>
+                    </div>
+                  )}
+                  {incident.casualties_count && (
+                    <div>
+                      <span className="text-xs text-red-600 dark:text-red-400">Specific Count: </span>
+                      <span className="text-sm font-medium text-red-700 dark:text-red-300">
+                        {incident.casualties_count} person{incident.casualties_count !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Final Report Section - with Edit/Create Draft button */}
@@ -1091,24 +1289,29 @@ function IncidentDetail() {
                   
                   {/* Map Actions */}
                   <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 px-3 py-2 border-t border-gray-200 dark:border-gray-600">
-                    <a
-                      href={`https://www.openstreetmap.org/?mlat=${incident.latitude}&mlon=${incident.longitude}#map=16/${incident.latitude}/${incident.longitude}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-blue-600 hover:underline"
+                    <button
+                      onClick={() => {
+                        const url = `https://www.openstreetmap.org/?mlat=${incident.latitude}&mlon=${incident.longitude}#map=16/${incident.latitude}/${incident.longitude}`;
+                        window.api.openExternal(url);
+                      }}
+                      className="text-sm text-blue-600 hover:underline cursor-pointer"
                     >
                       View larger map ↗
-                    </a>
+                    </button>
                     {showRoute && getAssignedStation() && (
-                      <a
-                        href={`https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${getAssignedStation()!.latitude}%2C${getAssignedStation()!.longitude}%3B${incident.latitude}%2C${incident.longitude}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-green-600 hover:underline flex items-center gap-1"
+                      <button
+                        onClick={() => {
+                          const station = getAssignedStation();
+                          if (station) {
+                            const url = `https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${station.latitude}%2C${station.longitude}%3B${incident.latitude}%2C${incident.longitude}`;
+                            window.api.openExternal(url);
+                          }
+                        }}
+                        className="text-sm text-green-600 hover:underline flex items-center gap-1 cursor-pointer"
                       >
                         <Truck size={14} />
                         Open directions ↗
-                      </a>
+                      </button>
                     )}
                   </div>
                 </div>
@@ -1487,7 +1690,9 @@ function IncidentDetail() {
                           {formatDate(entry.changed_at)}
                         </span>
                       </div>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">by {entry.changed_by}</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        by {entry.profiles?.display_name || entry.changed_by}
+                      </p>
                       {entry.notes && (
                         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 italic">"{entry.notes}"</p>
                       )}
@@ -1585,6 +1790,97 @@ function IncidentDetail() {
                 <p className="font-medium dark:text-white">{formatDate(incident.updated_at || incident.created_at)}</p>
               </div>
             </div>
+          </div>
+
+          {/* Multi-Agency Coordination */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <Users size={20} />
+                Agency Coordination
+              </h2>
+              <button
+                onClick={() => {
+                  loadAvailableAgencies();
+                  setShowAddAgencyModal(true);
+                }}
+                className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                title="Request Support"
+              >
+                <Plus size={18} />
+              </button>
+            </div>
+
+            {/* Primary Agency */}
+            <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="flex items-center gap-2">
+                <Building2 size={16} className="text-blue-600 dark:text-blue-400" />
+                <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
+                  {incident.agency_type?.toUpperCase()}
+                </span>
+                <span className="text-xs px-1.5 py-0.5 bg-blue-600 text-white rounded">Primary</span>
+              </div>
+            </div>
+
+            {/* Supporting Agencies */}
+            {incidentAgencies.length > 0 ? (
+              <div className="space-y-2">
+                {incidentAgencies.map((ia) => (
+                  <div
+                    key={ia.id}
+                    className={`p-3 rounded-lg border ${
+                      ia.acknowledged_at
+                        ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                        : 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Building2 size={16} className={ia.acknowledged_at ? 'text-green-600' : 'text-yellow-600'} />
+                        <span className="text-sm font-medium dark:text-white">
+                          {ia.agencies?.short_name || ia.agencies?.name}
+                        </span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded capitalize ${
+                          ia.role === 'lead' 
+                            ? 'bg-purple-600 text-white' 
+                            : 'bg-gray-500 text-white'
+                        }`}>
+                          {ia.role}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {!ia.acknowledged_at && (
+                          <button
+                            onClick={() => handleAcknowledgeAgency(ia.id)}
+                            className="p-1 text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 rounded"
+                            title="Acknowledge"
+                          >
+                            <Check size={14} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleRemoveAgency(ia.id)}
+                          className="p-1 text-red-600 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+                          title="Remove"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      {ia.acknowledged_at 
+                        ? `Acknowledged ${formatDate(ia.acknowledged_at)}`
+                        : `Requested ${formatDate(ia.requested_at)}`
+                      }
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                No other agencies involved. Click + to request support.
+              </p>
+            )}
           </div>
 
           {/* Update Status */}
@@ -2097,6 +2393,117 @@ function IncidentDetail() {
           loadDraft();
         }}
       />
+
+      {/* Add Agency Modal */}
+      {showAddAgencyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full">
+            <div className="border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <Users size={20} />
+                Request Agency Support
+              </h2>
+              <button
+                onClick={() => {
+                  setShowAddAgencyModal(false);
+                  setSelectedAgencyToAdd(null);
+                }}
+                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Select Agency
+                </label>
+                <select
+                  value={selectedAgencyToAdd || ''}
+                  onChange={(e) => setSelectedAgencyToAdd(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="">Choose an agency...</option>
+                  {availableAgencies.map((agency) => (
+                    <option key={agency.id} value={agency.id}>
+                      {agency.short_name} - {agency.name}
+                    </option>
+                  ))}
+                </select>
+                {availableAgencies.length === 0 && (
+                  <p className="text-sm text-gray-500 mt-1">All agencies are already involved in this incident.</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Role
+                </label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="agencyRole"
+                      value="supporting"
+                      checked={selectedAgencyRole === 'supporting'}
+                      onChange={() => setSelectedAgencyRole('supporting')}
+                      className="w-4 h-4 text-blue-600"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Supporting</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="agencyRole"
+                      value="lead"
+                      checked={selectedAgencyRole === 'lead'}
+                      onChange={() => setSelectedAgencyRole('lead')}
+                      className="w-4 h-4 text-purple-600"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Lead Coordinator</span>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  {selectedAgencyRole === 'lead' 
+                    ? 'This agency will coordinate the multi-agency response.'
+                    : 'This agency will provide support to the primary agency.'
+                  }
+                </p>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowAddAgencyModal(false);
+                  setSelectedAgencyToAdd(null);
+                }}
+                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddAgency}
+                disabled={!selectedAgencyToAdd || addingAgency}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+              >
+                {addingAgency ? (
+                  <>
+                    <RefreshCcw size={16} className="animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  <>
+                    <Plus size={16} />
+                    Request Support
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

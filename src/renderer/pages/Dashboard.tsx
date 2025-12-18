@@ -180,59 +180,62 @@ function Dashboard() {
         </div>
       )}
       
-      {/* Stats Cards */}
-      <div className="grid grid-cols-4 gap-6 mb-8">
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Total Incidents</p>
-              <p className="text-3xl font-bold text-gray-800 dark:text-white">{stats?.total || 0}</p>
+      {/* Stats Cards - Hide for Desk Officer, show simplified for others */}
+      {sessionScope.role !== 'Desk Officer' && (
+        <div className="grid grid-cols-4 gap-6 mb-8">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Total Incidents</p>
+                <p className="text-3xl font-bold text-gray-800 dark:text-white">{stats?.total || 0}</p>
+              </div>
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                <TrendingUp className="text-blue-600" size={24} />
+              </div>
             </div>
-            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-              <TrendingUp className="text-blue-600" size={24} />
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Pending</p>
+                <p className="text-3xl font-bold text-yellow-600">{stats?.pending || 0}</p>
+              </div>
+              <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+                <Clock className="text-yellow-600" size={24} />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">In Progress</p>
+                <p className="text-3xl font-bold text-orange-600">{stats?.responding || 0}</p>
+              </div>
+              <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
+                <AlertTriangle className="text-orange-600" size={24} />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Resolved / Closed</p>
+                <p className="text-3xl font-bold text-green-600">{stats?.resolved || 0}</p>
+              </div>
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                <CheckCircle className="text-green-600" size={24} />
+              </div>
             </div>
           </div>
         </div>
+      )}
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Pending</p>
-              <p className="text-3xl font-bold text-yellow-600">{stats?.pending || 0}</p>
-            </div>
-            <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
-              <Clock className="text-yellow-600" size={24} />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">In Progress</p>
-              <p className="text-3xl font-bold text-orange-600">{stats?.responding || 0}</p>
-            </div>
-            <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
-              <AlertTriangle className="text-orange-600" size={24} />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Resolved / Closed</p>
-              <p className="text-3xl font-bold text-green-600">{stats?.resolved || 0}</p>
-            </div>
-            <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-              <CheckCircle className="text-green-600" size={24} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Agency Breakdown - Show only user's agency for station-scoped users */}
-      <div className={`grid ${isStationScoped(sessionScope) ? 'grid-cols-1 max-w-md' : 'grid-cols-3'} gap-6 mb-8`}>
+      {/* Agency Breakdown - Hide for Desk Officer */}
+      {sessionScope.role !== 'Desk Officer' && (
+        <div className={`grid ${isStationScoped(sessionScope) ? 'grid-cols-1 max-w-md' : 'grid-cols-3'} gap-6 mb-8`}>
         {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'pnp') && (
           <div 
             className="bg-blue-600 rounded-xl p-6 text-white cursor-pointer hover:bg-blue-700 transition-colors"
@@ -277,7 +280,8 @@ function Dashboard() {
             </div>
           </div>
         )}
-      </div>
+        </div>
+      )}
 
       {/* Recent Activity */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">

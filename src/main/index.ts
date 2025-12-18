@@ -237,11 +237,32 @@ ipcMain.handle('app:focusWindow', async () => {
     if (mainWindow.isMinimized()) {
       mainWindow.restore();
     }
+    mainWindow.show();
     mainWindow.focus();
+    mainWindow.webContents.focus();
     mainWindow.moveTop();
     return { success: true };
   }
   return { success: false };
+});
+
+ipcMain.handle('app:confirm', async (_event, params: { message: string; detail?: string; title?: string }) => {
+  const options = {
+    type: 'question' as const,
+    buttons: ['Cancel', 'Confirm'],
+    defaultId: 1,
+    cancelId: 0,
+    title: params.title || 'Confirm',
+    message: params.message,
+    detail: params.detail,
+    normalizeAccessKeys: true,
+  };
+
+  const result = mainWindow
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+
+  return { confirmed: result.response === 1 };
 });
 
 // IPC Handlers - using Supabase directly
@@ -428,7 +449,7 @@ ipcMain.handle('db:getIncident', async (_event, id: string) => {
   }
 });
 
-ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, stationId, officerIds, resourceIds }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[] }) => {
+ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, stationId, officerIds, resourceIds, casualtiesCategory, casualtiesCount }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => {
   const now = new Date().toISOString();
 
   try {
@@ -445,6 +466,14 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       updated_at: now,
       updated_by: updatedBy  // Sync with incident_status_history
     };
+
+    // Handle casualties fields
+    if (casualtiesCategory !== undefined) {
+      updateData.casualties_category = casualtiesCategory || null;
+    }
+    if (casualtiesCount !== undefined) {
+      updateData.casualties_count = casualtiesCount || null;
+    }
 
     // Handle officer assignment (multiple officers supported)
     // Store as array - primary officer is first in list
@@ -518,23 +547,37 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
     if (stationId) {
       // Explicit station assignment provided by admin
       updateData.assigned_station_id = stationId;
+      console.log('[Admin] Explicit station assignment:', stationId);
     } else if (!currentIncident?.assigned_station_id && status !== 'pending') {
       // Auto-assign to CLOSEST station of matching agency if not already assigned
+      console.log('[Admin] Attempting auto-assignment for incident:', id);
+      console.log('[Admin] Current incident agency:', currentIncident?.agency_type);
+      console.log('[Admin] Status:', status);
+      
       const agencyNameMap: Record<string, string> = {
         'pnp': 'PNP',
         'bfp': 'BFP', 
-        'pdrrmo': 'PDRRMO'
+        'pdrrmo': 'PDRRMO',
+        'mdrrmo': 'MDRRMO'
       };
       const agencyShortName = agencyNameMap[currentIncident?.agency_type?.toLowerCase()] || currentIncident?.agency_type?.toUpperCase();
       
-      // Find agency by short_name (matches agency_type)
-      const { data: agency } = await supabase
+      console.log('[Admin] Looking for agency with short_name:', agencyShortName);
+      
+      // Find agency by short_name (matches agency_type) - case insensitive
+      const { data: agency, error: agencyError } = await supabase
         .from('agencies')
         .select('id')
-        .eq('short_name', agencyShortName)
+        .ilike('short_name', agencyShortName)
         .single();
       
+      if (agencyError) {
+        console.error('[Admin] Agency lookup failed:', agencyError);
+      }
+      
       if (agency) {
+        console.log('[Admin] Found agency:', agency);
+        
         // Get incident coordinates for distance calculation
         const { data: incident } = await supabase
           .from('incidents')
@@ -542,12 +585,16 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
           .eq('id', id)
           .single();
         
+        console.log('[Admin] Incident coordinates:', incident?.latitude, incident?.longitude);
+        
         if (incident?.latitude && incident?.longitude) {
           // Get all stations for this agency
           const { data: stations } = await supabase
             .from('agency_stations')
-            .select('id, latitude, longitude')
+            .select('id, name, latitude, longitude')
             .eq('agency_id', agency.id);
+          
+          console.log('[Admin] Found', stations?.length || 0, 'stations for agency');
           
           if (stations && stations.length > 0) {
             // Calculate distance to each station and find closest
@@ -577,10 +624,20 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
             }
             
             updateData.assigned_station_id = closestStation.id;
-            console.log(`[Admin] Auto-assigned to closest station ${closestStation.id} (${minDistance.toFixed(2)}km away)`);
+            console.log(`[Admin] ✅ Auto-assigned to closest station: ${closestStation.name || closestStation.id} (${minDistance.toFixed(2)}km away)`);
+          } else {
+            console.warn('[Admin] ⚠️ No stations found for agency');
           }
+        } else {
+          console.warn('[Admin] ⚠️ Incident missing coordinates - cannot auto-assign');
         }
+      } else {
+        console.warn('[Admin] ⚠️ Agency not found - cannot auto-assign');
       }
+    } else if (currentIncident?.assigned_station_id) {
+      console.log('[Admin] Station already assigned:', currentIncident.assigned_station_id);
+    } else if (status === 'pending') {
+      console.log('[Admin] Status is pending - skipping auto-assignment');
     }
 
     // Update incident
@@ -601,7 +658,7 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
         incident_id: id,
         status: status,
         notes: notes || null,
-        changed_by: updatedBy,
+        changed_by: updatedById || updatedBy,
         changed_at: now
       });
 
@@ -723,7 +780,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     // Get incidents for stats including location_address for area aggregation and created_at for trends
     let query = supabase
       .from('incidents')
-      .select('id, status, agency_type, location_address, latitude, longitude, created_at, first_response_at, resolved_at, assigned_station_id', { count: 'exact' });
+      .select('id, status, agency_type, location_address, latitude, longitude, created_at, first_response_at, resolved_at, assigned_station_id, casualties_category, casualties_count', { count: 'exact' });
 
     if (filters?.from) {
       query = query.gte('created_at', filters.from);
@@ -832,12 +889,42 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
         const { data: historyData, error: historyError } = await historyQuery;
         
         if (!historyError && historyData) {
+          // Fetch profiles for UUIDs in changed_by
+          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          const userIds = [...new Set(
+            historyData
+              .map(h => String(h.changed_by).trim())
+              .filter(id => uuidRegex.test(id))
+          )];
+
+          let profileMap = new Map<string, string>();
+          if (userIds.length > 0) {
+            const { data: profilesData } = await supabase
+              .from('profiles')
+              .select('id, display_name')
+              .in('id', userIds);
+
+            if (profilesData) {
+              profileMap = new Map(
+                profilesData.map(p => [String(p.id).toLowerCase(), p.display_name])
+              );
+            }
+          }
+
           recentActivity = historyData.map(h => {
             const incidentMeta = incidentMetaMap.get(h.incident_id);
+            const changedBy = String(h.changed_by || 'System').trim();
+            const changedByLower = changedBy.toLowerCase();
+            
+            // Use display name if UUID found in profiles, otherwise use the value as-is
+            const displayName = uuidRegex.test(changedBy) && profileMap.has(changedByLower)
+              ? profileMap.get(changedByLower)
+              : changedBy;
+
             return {
               incident_id: h.incident_id,
               status: h.status,
-              changed_by: h.changed_by || 'System',
+              changed_by: displayName,
               changed_at: h.changed_at,
               agency_type: incidentMeta?.agency_type || null,
             };
@@ -1000,18 +1087,72 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
 
 ipcMain.handle('db:getAuditLog', async (_event, incidentId: string) => {
   try {
-    const { data, error } = await supabase
+    const { data: historyData, error: historyError } = await supabase
       .from('incident_status_history')
       .select('id, status, notes, changed_by, changed_at')
       .eq('incident_id', incidentId)
       .order('changed_at', { ascending: false });
 
-    if (error) {
-      console.error('[Admin] Failed to fetch audit log:', error);
+    if (historyError) {
+      console.error('[Admin] Failed to fetch audit log:', historyError);
       return [];
     }
 
-    return data || [];
+    if (!historyData || historyData.length === 0) {
+      return [];
+    }
+
+    // Check if changed_by values are UUIDs or display names
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const userIds = [...new Set(
+      historyData
+        .map(h => String(h.changed_by).trim())
+        .filter(id => uuidRegex.test(id))
+    )];
+
+    console.log('[Admin] Found UUIDs in history:', userIds);
+
+    // Only fetch profiles if we have valid UUIDs
+    let profileMap = new Map<string, string>();
+    if (userIds.length > 0) {
+      // Cast UUIDs explicitly for Supabase
+      const { data: profilesData, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, display_name')
+        .in('id', userIds);
+
+      console.log('[Admin] Profiles query error:', profilesError);
+      console.log('[Admin] Profiles data:', profilesData);
+
+      if (!profilesError && profilesData) {
+        profileMap = new Map(
+          profilesData.map(p => [String(p.id).toLowerCase(), p.display_name])
+        );
+      }
+    }
+
+    // Merge the data
+    const enrichedHistory = historyData.map(entry => {
+      const changedBy = String(entry.changed_by).trim();
+      const changedByLower = changedBy.toLowerCase();
+      
+      // If changed_by is a UUID and we have a profile, use the display_name
+      if (uuidRegex.test(changedBy) && profileMap.has(changedByLower)) {
+        return {
+          ...entry,
+          profiles: { display_name: profileMap.get(changedByLower)! }
+        };
+      }
+      // If changed_by is already a display name (legacy data), use it directly
+      return {
+        ...entry,
+        profiles: { display_name: changedBy }
+      };
+    });
+
+    console.log('[Admin] Profile map:', Array.from(profileMap.entries()));
+    console.log('[Admin] Enriched history sample:', enrichedHistory[0]);
+    return enrichedHistory;
   } catch (err) {
     console.error('[Admin] Error in getAuditLog:', err);
     return [];
@@ -1692,28 +1833,57 @@ ipcMain.handle('officers:getByAgency', async (_event, agencyType: string) => {
     const agencyMap: Record<string, string> = {
       'pnp': 'PNP',
       'bfp': 'BFP',
-      'pdrrmo': 'PDRRMO'
+      'pdrrmo': 'PDRRMO',
+      'mdrrmo': 'MDRRMO'
     };
     const shortName = agencyMap[agencyType?.toLowerCase()] || agencyType?.toUpperCase();
     
-    // Get agency ID first
-    const { data: agency } = await supabase
+    console.log('[Main] Loading officers for agency type:', agencyType, '→ short_name:', shortName);
+    
+    // Get agency ID first (case-insensitive match)
+    const { data: agency, error: agencyError } = await supabase
       .from('agencies')
-      .select('id')
-      .eq('short_name', shortName)
+      .select('id, name, short_name')
+      .ilike('short_name', shortName)
       .single();
     
-    if (!agency) return [];
+    if (agencyError) {
+      console.error('[Main] Agency lookup error:', agencyError);
+      return [];
+    }
+    
+    if (!agency) {
+      console.warn('[Main] ⚠️ No agency found for short_name:', shortName);
+      return [];
+    }
+    
+    console.log('[Main] Found agency:', agency);
     
     // Get officers (Desk Officer, Field Officer, or Chief) for this agency
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, display_name, email, role, phone_number, station_id')
+      .select('id, display_name, email, role, phone_number, station_id, agency_id')
       .eq('agency_id', agency.id)
       .in('role', ['Desk Officer', 'Field Officer', 'Chief'])
       .order('display_name');
     
-    if (error) throw error;
+    if (error) {
+      console.error('[Main] Officers query error:', error);
+      throw error;
+    }
+    
+    console.log('[Main] Found', data?.length || 0, 'officers for agency', shortName);
+    if (data && data.length > 0) {
+      console.log('[Main] Officers:', data.map(o => ({
+        name: o.display_name,
+        role: o.role,
+        station_id: o.station_id,
+        agency_id: o.agency_id
+      })));
+    } else {
+      console.warn('[Main] ⚠️ No officers found with roles [Desk Officer, Field Officer, Chief] for agency_id:', agency.id);
+    }
+    
     return data || [];
   } catch (error) {
     console.error('[Admin] Failed to get officers:', error);
@@ -2398,7 +2568,7 @@ ipcMain.handle('users:delete', async (_event, userId: string) => {
     // 2. Update profile role to 'Disabled'
     const { error: profileError } = await supabase
       .from('profiles')
-      .update({ role: 'Disabled', updated_at: new Date().toISOString() })
+      .update({ role: 'Disabled' })
       .eq('id', userId);
     
     if (profileError) throw profileError;
@@ -2475,5 +2645,198 @@ ipcMain.handle('report:save-pdf', async (_event, { html, filename }) => {
   } catch (error) {
     console.error('[Admin] Failed to save PDF:', error);
     throw error;
+  }
+});
+
+// ============================================
+// INCIDENT AGENCIES (Multi-Agency Coordination)
+// ============================================
+
+ipcMain.handle('incidentAgencies:get', async (_event, incidentId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('incident_agencies')
+      .select(`
+        *,
+        agencies:agency_id (id, name, short_name)
+      `)
+      .eq('incident_id', incidentId)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error: any) {
+    console.error('[Admin] Failed to get incident agencies:', error);
+    throw new Error(error.message || 'Failed to get incident agencies');
+  }
+});
+
+ipcMain.handle('incidentAgencies:add', async (_event, { incidentId, agencyId, role }: { incidentId: string; agencyId: number; role: 'primary' | 'lead' | 'supporting' }) => {
+  try {
+    const now = new Date().toISOString();
+    
+    // Check if this agency is already added to this incident
+    const { data: existing } = await supabase
+      .from('incident_agencies')
+      .select('id')
+      .eq('incident_id', incidentId)
+      .eq('agency_id', agencyId)
+      .single();
+
+    if (existing) {
+      throw new Error('This agency is already involved in this incident');
+    }
+
+    // If adding as 'lead', remove lead role from any other agency
+    if (role === 'lead') {
+      await supabase
+        .from('incident_agencies')
+        .update({ role: 'supporting' })
+        .eq('incident_id', incidentId)
+        .eq('role', 'lead');
+    }
+
+    // Add the agency
+    const { data, error } = await supabase
+      .from('incident_agencies')
+      .insert({
+        incident_id: incidentId,
+        agency_id: agencyId,
+        role: role,
+        requested_at: now,
+        created_at: now
+      })
+      .select(`
+        *,
+        agencies:agency_id (id, name, short_name)
+      `)
+      .single();
+
+    if (error) throw error;
+
+    // Create notifications for all officers of the requested agency
+    const { data: agency } = await supabase
+      .from('agencies')
+      .select('short_name')
+      .eq('id', agencyId)
+      .single();
+
+    if (agency) {
+      // Get all officers (Desk Officer, Field Officer, Chief) from this agency
+      const { data: officers } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('agency_id', agencyId)
+        .in('role', ['Desk Officer', 'Field Officer', 'Chief']);
+
+      if (officers && officers.length > 0) {
+        const notifications = officers.map(officer => ({
+          recipient_id: officer.id,
+          incident_id: incidentId,
+          title: 'Multi-Agency Support Request',
+          body: `Your agency (${agency.short_name}) has been requested to support incident #${incidentId.slice(0, 8).toUpperCase()}`,
+          is_read: false,
+          created_at: now
+        }));
+
+        await supabase.from('notifications').insert(notifications);
+        console.log(`[Admin] Created ${notifications.length} notifications for agency ${agency.short_name}`);
+      }
+    }
+
+    return data;
+  } catch (error: any) {
+    console.error('[Admin] Failed to add incident agency:', error);
+    throw new Error(error.message || 'Failed to add agency to incident');
+  }
+});
+
+ipcMain.handle('incidentAgencies:updateRole', async (_event, { id, role }: { id: number; role: 'primary' | 'lead' | 'supporting' }) => {
+  try {
+    // If setting as lead, first get the incident_id
+    const { data: current } = await supabase
+      .from('incident_agencies')
+      .select('incident_id')
+      .eq('id', id)
+      .single();
+
+    if (current && role === 'lead') {
+      // Remove lead from other agencies in this incident
+      await supabase
+        .from('incident_agencies')
+        .update({ role: 'supporting' })
+        .eq('incident_id', current.incident_id)
+        .eq('role', 'lead');
+    }
+
+    const { error } = await supabase
+      .from('incident_agencies')
+      .update({ role })
+      .eq('id', id);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) {
+    console.error('[Admin] Failed to update incident agency role:', error);
+    throw new Error(error.message || 'Failed to update agency role');
+  }
+});
+
+ipcMain.handle('incidentAgencies:acknowledge', async (_event, id: number) => {
+  try {
+    const { error } = await supabase
+      .from('incident_agencies')
+      .update({ acknowledged_at: new Date().toISOString() })
+      .eq('id', id);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) {
+    console.error('[Admin] Failed to acknowledge incident agency:', error);
+    throw new Error(error.message || 'Failed to acknowledge');
+  }
+});
+
+ipcMain.handle('incidentAgencies:remove', async (_event, id: number) => {
+  try {
+    const { error } = await supabase
+      .from('incident_agencies')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) {
+    console.error('[Admin] Failed to remove incident agency:', error);
+    throw new Error(error.message || 'Failed to remove agency from incident');
+  }
+});
+
+// Get all agencies for multi-agency selection (excludes already added ones)
+ipcMain.handle('incidentAgencies:getAvailable', async (_event, incidentId: string) => {
+  try {
+    // Get all agencies
+    const { data: allAgencies, error: agenciesError } = await supabase
+      .from('agencies')
+      .select('id, name, short_name')
+      .order('name');
+
+    if (agenciesError) throw agenciesError;
+
+    // Get already added agencies for this incident
+    const { data: addedAgencies } = await supabase
+      .from('incident_agencies')
+      .select('agency_id')
+      .eq('incident_id', incidentId);
+
+    const addedIds = new Set((addedAgencies || []).map(a => a.agency_id));
+
+    // Filter out already added agencies
+    const available = (allAgencies || []).filter(a => !addedIds.has(a.id));
+
+    return available;
+  } catch (error: any) {
+    console.error('[Admin] Failed to get available agencies:', error);
+    throw new Error(error.message || 'Failed to get available agencies');
   }
 });

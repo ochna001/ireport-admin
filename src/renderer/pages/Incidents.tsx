@@ -1,8 +1,9 @@
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download, Filter, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { barangaysByMunicipality, municipalities } from '../data/camarinesNorteLocations';
 import { getSessionScope, isStationScoped, SessionScope } from '../utils/sessionScope';
+import { exportIncidentsToPDF } from '../utils/exportUtils';
 
 interface Incident {
   id: string;
@@ -12,6 +13,8 @@ interface Incident {
   status: string;
   location_address: string;
   created_at: string;
+  casualties_category?: string;
+  casualties_count?: number;
 }
 
 interface PaginatedResponse {
@@ -111,10 +114,20 @@ function Incidents() {
         }
       }
 
-      const response: PaginatedResponse = await window.api.getIncidents(filters);
-      setIncidents(response.data);
-      setTotalPages(response.totalPages);
-      setTotalItems(response.total);
+      const response = await window.api.getIncidents(filters) as any;
+      
+      // Handle both paginated and non-paginated responses
+      if (Array.isArray(response)) {
+        // Non-paginated response (legacy)
+        setIncidents(response);
+        setTotalPages(1);
+        setTotalItems(response.length);
+      } else {
+        // Paginated response
+        setIncidents(response.data || []);
+        setTotalPages(response.totalPages || 1);
+        setTotalItems(response.total || 0);
+      }
     } catch (error: any) {
       console.error('Failed to load incidents:', error?.message || error);
     } finally {
@@ -204,13 +217,37 @@ function Incidents() {
     });
   };
 
+  const handleExportPDF = () => {
+    const filters = {
+      agency: filterAgency,
+      status: filterStatus,
+      municipality: filterMunicipality,
+      barangay: filterBarangay,
+      search: debouncedSearch
+    };
+    
+    const doc = exportIncidentsToPDF(incidents, filters);
+    const filename = `Incident_Reports_${new Date().toISOString().split('T')[0]}.pdf`;
+    doc.save(filename);
+  };
+
   return (
     <div className="p-6 dark:bg-gray-950">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Incidents</h1>
-        <span className="text-sm text-gray-500 dark:text-gray-400">
-          {totalItems} incidents
-        </span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleExportPDF}
+            disabled={incidents.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+          >
+            <Download size={18} />
+            Export PDF
+          </button>
+          <span className="text-sm text-gray-500 dark:text-gray-400">
+            {totalItems} incidents
+          </span>
+        </div>
       </div>
 
       {stationScopeActive && (
