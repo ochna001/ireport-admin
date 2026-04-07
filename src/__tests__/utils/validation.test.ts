@@ -267,10 +267,10 @@ describe('Age Calculation', () => {
     const dob25 = `${year - 25}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     expect(calculateAge(dob25)).toBe(25);
     
-    // Someone born 30 years ago, 6 months ago
-    const month6Ago = new Date(today);
-    month6Ago.setMonth(month6Ago.getMonth() - 6);
-    const dob30 = `${year - 30}-${String(month6Ago.getMonth() + 1).padStart(2, '0')}-${String(month6Ago.getDate()).padStart(2, '0')}`;
+    // Someone born exactly 30 years and 1 day ago (definitely 30)
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const dob30 = `${year - 30}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
     expect(calculateAge(dob30)).toBe(30);
   });
 
