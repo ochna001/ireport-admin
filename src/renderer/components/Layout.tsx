@@ -12,7 +12,8 @@ import {
     LogOut,
     UserCircle,
     MapPin,
-    Shield
+    Shield,
+    Bell
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
@@ -32,6 +33,7 @@ interface LayoutProps {
 function Layout({ onLogout }: LayoutProps) {
   const navigate = useNavigate();
   const [user, setUser] = useState<any>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     connected: false,
     lastSync: null,
@@ -60,13 +62,37 @@ function Layout({ onLogout }: LayoutProps) {
     // Get initial sync status
     window.api.getSyncStatus().then(setSyncStatus).catch(console.error);
 
+    // Get initial sync status
+    window.api.getSyncStatus().then(setSyncStatus).catch(console.error);
+
     // Listen for sync status updates
     window.api.onSyncStatus((status) => {
       setSyncStatus(status);
     });
 
+    // Get initial unread count
+    const loadUnread = async () => {
+      const userStr = localStorage.getItem('ireport_admin_current_user');
+      if (userStr) {
+        const u = JSON.parse(userStr);
+        if (u.id || u.userId) {
+          try {
+            const count = await window.api.getUnreadNotificationCount(u.id || u.userId);
+            setUnreadCount(count);
+          } catch (e) {
+            console.error('Failed to load unread count', e);
+          }
+        }
+      }
+    };
+    loadUnread();
+
+    // Poll for unread count every 30s
+    const pollInterval = setInterval(loadUnread, 30000);
+
     return () => {
       window.api?.removeAllListeners('sync-status');
+      clearInterval(pollInterval);
     };
   }, []);
 
@@ -205,6 +231,28 @@ function Layout({ onLogout }: LayoutProps) {
             </li>
             <li>
               <NavLink
+                to="/notifications"
+                className={({ isActive }) =>
+                  `flex items-center justify-between px-4 py-3 rounded-lg transition-colors ${
+                    isActive
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-300 hover:bg-gray-800'
+                  }`
+                }
+              >
+                <div className="flex items-center gap-3">
+                   <Bell size={20} />
+                   Notifications
+                </div>
+                {unreadCount > 0 && (
+                  <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </NavLink>
+            </li>
+            <li>
+              <NavLink
                 to="/incidents"
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
@@ -330,11 +378,6 @@ function Layout({ onLogout }: LayoutProps) {
 
       {/* Main Content */}
       <main className="flex-1 overflow-auto flex flex-col">
-        {/* Top Bar with Notifications */}
-        <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex items-center justify-end">
-          <Notifications />
-        </div>
-        
         {/* Page Content */}
         <div className="flex-1 overflow-auto">
           <Outlet />

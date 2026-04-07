@@ -754,18 +754,30 @@ function Settings() {
               <h2 className="font-semibold text-gray-800 dark:text-white">About</h2>
             </div>
           </div>
-          <div className="p-4">
-            <div className="flex items-center justify-between">
+          <div className="p-6">
+            <div className="space-y-4">
               <div>
-                <h3 className="font-semibold text-gray-800 dark:text-white">iReport Admin Dashboard</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Version 1.0.0</p>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">iReport Admin Dashboard</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Version 1.2.5</p>
+              </div>
+              
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <p className="text-sm text-gray-600 dark:text-gray-300">
                   Incident reporting and management system for Camarines Norte LGU
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-xs text-gray-400">Built with Electron + React</p>
-                <p className="text-xs text-gray-400">© 2024 Camarines Norte LGU</p>
+
+              <div className="flex items-center justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Built with Electron + React</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Multi-agency incident coordination platform
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-400">© 2025</p>
+                  <p className="text-xs text-gray-400">Camarines Norte LGU</p>
+                </div>
               </div>
             </div>
           </div>

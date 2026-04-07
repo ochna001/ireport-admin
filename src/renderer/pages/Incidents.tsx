@@ -7,6 +7,8 @@ import { exportIncidentsToPDF } from '../utils/exportUtils';
 
 interface Incident {
   id: string;
+  short_code?: string;
+  short_id?: number;
   agency_type: string;
   reporter_name: string;
   description: string;
@@ -15,6 +17,8 @@ interface Incident {
   created_at: string;
   casualties_category?: string;
   casualties_count?: number;
+  is_multi_agency?: boolean;
+  agencies_count?: number;
 }
 
 interface PaginatedResponse {
@@ -43,6 +47,7 @@ function Incidents() {
       : searchParams.get('agency') || ''
   );
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterMultiAgency, setFilterMultiAgency] = useState(false);
   // Station-scoped users have locked municipality based on their station
   const [filterMunicipality, setFilterMunicipality] = useState(''); // Default to all to allow cross-municipality assignments
   const [filterBarangay, setFilterBarangay] = useState('');
@@ -59,6 +64,14 @@ function Incidents() {
     [filterMunicipality]
   );
 
+  // Sync filter with URL parameter
+  useEffect(() => {
+    const agencyParam = searchParams.get('agency');
+    if (agencyParam && !stationScopeActive) {
+      setFilterAgency(agencyParam);
+    }
+  }, [searchParams, stationScopeActive]);
+
   // Debounce search input
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -71,7 +84,7 @@ function Incidents() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterAgency, filterStatus, filterMunicipality, filterBarangay]);
+  }, [filterAgency, filterStatus, filterMultiAgency, filterMunicipality, filterBarangay]);
 
   useEffect(() => {
     loadIncidents();
@@ -143,16 +156,24 @@ function Incidents() {
     setSortConfig({ key, direction });
   };
 
-  // Client-side sorting (server already handles filtering/pagination)
-  const sortedIncidents = [...incidents].sort((a, b) => {
-    if (!sortConfig) return 0;
-    const aValue = a[sortConfig.key] || '';
-    const bValue = b[sortConfig.key] || '';
-    
-    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
-    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
-    return 0;
-  });
+  // Client-side sorting and filtering (server already handles filtering/pagination)
+  const sortedIncidents = [...incidents]
+    .filter(incident => {
+      // Apply multi-agency filter
+      if (filterMultiAgency) {
+        return incident.is_multi_agency === true;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      if (!sortConfig) return 0;
+      const aValue = a[sortConfig.key] || '';
+      const bValue = b[sortConfig.key] || '';
+      
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
 
   // Pagination helpers
   const goToPage = (page: number) => {
@@ -335,6 +356,22 @@ function Incidents() {
               </option>
             ))}
           </select>
+
+          {/* Multi-Agency Filter Toggle */}
+          <label className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors bg-white dark:bg-gray-800">
+            <input
+              type="checkbox"
+              checked={filterMultiAgency}
+              onChange={(e) => setFilterMultiAgency(e.target.checked)}
+              className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+            />
+            <span className="text-sm text-gray-700 dark:text-gray-300 whitespace-nowrap flex items-center gap-1">
+              <svg className="w-4 h-4 text-purple-600" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
+              </svg>
+              Multi-Agency
+            </span>
+          </label>
         </div>
       </div>
 
@@ -399,9 +436,19 @@ function Incidents() {
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`px-2 py-1 rounded text-xs font-medium text-white ${getAgencyBadgeClass(incident.agency_type)}`}>
-                      {incident.agency_type.toUpperCase()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-1 rounded text-xs font-medium text-white ${getAgencyBadgeClass(incident.agency_type)}`}>
+                        {incident.agency_type.toUpperCase()}
+                      </span>
+                      {incident.is_multi_agency && (
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-purple-600 text-white flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
+                          </svg>
+                          {incident.agencies_count}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-6 py-4">
                     <p className="text-sm text-gray-800 dark:text-gray-200 truncate max-w-xs">

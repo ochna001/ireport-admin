@@ -5,6 +5,7 @@ import { existsSync, writeFileSync } from 'fs';
 import fetch from 'node-fetch';
 import { join } from 'path';
 import { getMunicipalityFromCoordinates, isInMunicipality } from './geoUtils';
+import { PushNotificationService } from './pushNotificationService';
 
 // ============================================
 // OBFUSCATED CONFIGURATION
@@ -81,6 +82,9 @@ const supabase = createClient(supabaseUrl || '', supabaseKey || '', {
     fetch: fetch as any,
   }
 });
+
+// Initialize push notification service
+const pushService = new PushNotificationService(supabase, supabaseKey);
 
 let mainWindow: BrowserWindow | null = null;
 let debugModeEnabled = false;
@@ -196,6 +200,10 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   createWindow();
+  
+  // Start the push notification service
+  pushService.start();
+  console.log('[Admin] Push notification service started');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -205,6 +213,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  // Stop the push notification service
+  pushService.stop();
+  
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -289,11 +300,60 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
 
   const sanitize = (value?: string) => value?.trim().replace(/,/g, ' ') || '';
 
+  // Variables to track multi-agency incidents for later use
+  let multiAgencyIncidentIds: string[] = [];
+  let multiAgencyCountMap: Record<string, number> = {};
+
+  // Handle agency filter - include both primary agency and multi-agency incidents
   if (filters.agency) {
-    query = query.eq('agency_type', filters.agency);
+    console.log('[Admin] Filtering incidents for agency:', filters.agency);
+    
+    // Get agency ID from short_name
+    const { data: agencyData, error: agencyError } = await supabase
+      .from('agencies')
+      .select('id')
+      .ilike('short_name', filters.agency)
+      .single();
+    
+    console.log('[Admin] Agency lookup result:', agencyData, 'error:', agencyError);
+    
+    if (agencyData) {
+      // Get incident IDs where this agency is a supporting/lead agency
+      const { data: multiAgencyIncidents, error: multiError } = await supabase
+        .from('incident_agencies')
+        .select('incident_id')
+        .eq('agency_id', agencyData.id)
+        .not('acknowledged_at', 'is', null); // Only include acknowledged agencies
+      
+      console.log('[Admin] Multi-agency incidents for agency ID', agencyData.id, ':', multiAgencyIncidents, 'error:', multiError);
+      
+      multiAgencyIncidentIds = multiAgencyIncidents?.map(ia => ia.incident_id) || [];
+      
+      // Filter to include: primary agency OR in multi-agency list
+      if (multiAgencyIncidentIds.length > 0) {
+        const orFilter = `agency_type.eq.${filters.agency},id.in.(${multiAgencyIncidentIds.join(',')})`;
+        console.log('[Admin] Using OR filter:', orFilter);
+        query = query.or(orFilter);
+      } else {
+        console.log('[Admin] No multi-agency incidents, using primary agency filter only');
+        query = query.eq('agency_type', filters.agency);
+      }
+    } else {
+      // Fallback to primary agency only if agency not found
+      console.log('[Admin] Agency not found, using primary agency filter');
+      query = query.eq('agency_type', filters.agency);
+    }
   }
   if (filters.stationId) {
-    query = query.eq('assigned_station_id', filters.stationId);
+    // For station filtering, include incidents assigned to this station OR multi-agency incidents
+    // This ensures supporting agencies can see multi-agency incidents even if not assigned to their station
+    if (multiAgencyIncidentIds.length > 0) {
+      // Include: assigned to this station OR is a multi-agency incident for this agency
+      console.log('[Admin] Station filter with multi-agency support');
+      query = query.or(`assigned_station_id.eq.${filters.stationId},id.in.(${multiAgencyIncidentIds.join(',')})`);
+    } else {
+      query = query.eq('assigned_station_id', filters.stationId);
+    }
   }
   if (filters.status) {
     query = query.eq('status', filters.status);
@@ -306,19 +366,54 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
     query = query.ilike('location_address', `%${barangay}%`);
   }
   
-  // Search by description, reporter name, or exact ID (UUID)
+  // Full-text search using search_vector column
   if (filters.search) {
-    const searchTerm = sanitize(filters.search);
-    console.log('[Admin] Searching incidents for:', searchTerm);
+    let searchTerm = sanitize(filters.search);
+    console.log('[Admin] Full-text searching incidents for:', searchTerm);
 
-    // If the term looks like a full UUID, also match on id.eq.
-    // PostgREST does not allow casts (id::text) in the filter key, so we only support exact UUID here.
-    const uuidPattern = /^[0-9a-fA-F-]{36}$/;
-    if (uuidPattern.test(searchTerm)) {
-      query = query.or(`description.ilike.*${searchTerm}*,reporter_name.ilike.*${searchTerm}*,id.eq.${searchTerm}`);
+    // Check if search starts with # (short code search)
+    const shortCodePattern = /^#?([0-9a-fA-F]{2,8})$/;
+    const shortCodeMatch = searchTerm.match(shortCodePattern);
+    
+    if (shortCodeMatch) {
+      // Short code search (e.g., #1f, #1f2a, 1f, 1f2a)
+      const code = shortCodeMatch[1].toLowerCase();
+      console.log('[Admin] Short code search:', code);
+      
+      // Search by short_code column (hex approach) with prefix matching
+      // This allows typing "75" to find "75ec"
+      query = query.ilike('short_code', `${code}%`);
     } else {
-      // Default: search only in text fields
-      query = query.or(`description.ilike.*${searchTerm}*,reporter_name.ilike.*${searchTerm}*`);
+      // Check if it's a UUID pattern (full or partial)
+      const fullUuidPattern = /^[0-9a-fA-F-]{36}$/;
+      const partialUuidPattern = /^[0-9a-fA-F-]{8,}$/;
+      
+      if (fullUuidPattern.test(searchTerm)) {
+        // Exact UUID match - use direct ID filter
+        console.log('[Admin] Exact UUID search:', searchTerm);
+        query = query.eq('id', searchTerm);
+      } else if (partialUuidPattern.test(searchTerm)) {
+        // Partial UUID - use ILIKE on id field
+        console.log('[Admin] Partial UUID search:', searchTerm);
+        query = query.ilike('id', `${searchTerm}%`);
+      } else {
+        // Full-text search using search_vector
+        // Use websearch_to_tsquery for natural language queries
+        // This supports: phrases ("fire incident"), AND (fire daet), OR (fire | water)
+        console.log('[Admin] Full-text search:', searchTerm);
+        
+        try {
+          // Use textSearch method with websearch type for natural language
+          query = query.textSearch('search_vector', searchTerm, {
+            type: 'websearch',
+            config: 'english'
+          });
+        } catch (error) {
+          // Fallback to ILIKE if full-text search fails
+          console.warn('[Admin] Full-text search failed, falling back to ILIKE:', error);
+          query = query.or(`description.ilike.*${searchTerm}*,reporter_name.ilike.*${searchTerm}*,location_address.ilike.*${searchTerm}*`);
+        }
+      }
     }
   }
 
@@ -355,7 +450,9 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
       });
     }
     
-    return filteredData;
+    // Enrich with multi-agency information
+    const enrichedData = await enrichIncidentsWithMultiAgency(filteredData);
+    return enrichedData;
   } else {
     // Paginated query - need to handle municipality filtering differently
     // If municipality filter is active, we need to fetch more and filter in memory
@@ -390,8 +487,11 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
       const total = filteredData.length;
       const paginatedData = filteredData.slice(offset, offset + pageSize);
       
+      // Enrich with multi-agency information
+      const enrichedData = await enrichIncidentsWithMultiAgency(paginatedData);
+      
       return {
-        data: paginatedData,
+        data: enrichedData,
         total,
         page,
         pageSize,
@@ -407,8 +507,11 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
       throw new Error(error.message || 'Failed to get incidents');
     }
     
+    // Enrich incidents with multi-agency information
+    const enrichedData = await enrichIncidentsWithMultiAgency(data || []);
+    
     return {
-      data: data || [],
+      data: enrichedData,
       total: count || 0,
       page,
       pageSize,
@@ -416,6 +519,33 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
     };
   }
 });
+
+// Helper function to enrich incidents with multi-agency info
+async function enrichIncidentsWithMultiAgency(incidents: any[]): Promise<any[]> {
+  if (incidents.length === 0) return incidents;
+  
+  const incidentIds = incidents.map(i => i.id);
+  
+  // Get agency counts for all incidents
+  const { data: agencyCounts } = await supabase
+    .from('incident_agencies')
+    .select('incident_id')
+    .in('incident_id', incidentIds)
+    .not('acknowledged_at', 'is', null);
+  
+  // Count agencies per incident
+  const countMap: Record<string, number> = {};
+  agencyCounts?.forEach(ia => {
+    countMap[ia.incident_id] = (countMap[ia.incident_id] || 0) + 1;
+  });
+  
+  // Enrich incidents
+  return incidents.map(incident => ({
+    ...incident,
+    is_multi_agency: (countMap[incident.id] || 0) > 0,
+    agencies_count: (countMap[incident.id] || 0) + 1 // +1 for primary agency
+  }));
+}
 
 ipcMain.handle('db:getIncident', async (_event, id: string) => {
   try {
@@ -682,72 +812,9 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       }
     }
 
-    // Create notifications for assigned officers
-    if (officerIds !== undefined) {
-      const oldOfficerIds: string[] = currentIncident?.assigned_officer_ids || [];
-      const newOfficerIds: string[] = officerIds;
-      
-      // Determine which officers are new, still assigned, or removed
-      const addedOfficers = newOfficerIds.filter(oid => !oldOfficerIds.includes(oid));
-      const stillAssigned = newOfficerIds.filter(oid => oldOfficerIds.includes(oid));
-      const removedOfficers = oldOfficerIds.filter(oid => !newOfficerIds.includes(oid));
-      
-      const allNotifications: any[] = [];
-      
-      // Notify newly assigned officers
-      if (addedOfficers.length > 0) {
-        addedOfficers.forEach(officerId => {
-          allNotifications.push({
-            recipient_id: officerId,
-            incident_id: id,
-            title: 'New Incident Assignment',
-            body: `You have been assigned to incident #${id.slice(0, 8).toUpperCase()}. Status: ${status}`,
-            is_read: false,
-            created_at: now
-          });
-        });
-      }
-      
-      // Notify officers who remain assigned (only if there were changes to the team)
-      if (stillAssigned.length > 0 && (addedOfficers.length > 0 || removedOfficers.length > 0)) {
-        stillAssigned.forEach(officerId => {
-          allNotifications.push({
-            recipient_id: officerId,
-            incident_id: id,
-            title: 'Incident Team Updated',
-            body: `The response team for incident #${id.slice(0, 8).toUpperCase()} has been updated. Status: ${status}`,
-            is_read: false,
-            created_at: now
-          });
-        });
-      }
-      
-      // Notify removed officers
-      if (removedOfficers.length > 0) {
-        removedOfficers.forEach(officerId => {
-          allNotifications.push({
-            recipient_id: officerId,
-            incident_id: id,
-            title: 'Unassigned from Incident',
-            body: `You have been unassigned from incident #${id.slice(0, 8).toUpperCase()}.`,
-            is_read: false,
-            created_at: now
-          });
-        });
-      }
-      
-      if (allNotifications.length > 0) {
-        const { error: notifError } = await supabase
-          .from('notifications')
-          .insert(allNotifications);
-
-        if (notifError) {
-          console.error('[Admin] Failed to create officer notifications:', notifError);
-        } else {
-          console.log(`[Admin] Created ${allNotifications.length} notification(s) for officers`);
-        }
-      }
-    }
+    // Officer notifications are now handled by:
+    // 1. SQL trigger (notify_officers_on_assignment) creates notification rows
+    // 2. Background PushNotificationService automatically sends pushes for all new notifications
 
     // Invalidate stats cache since status changed
     clearCache('stats');
@@ -1045,6 +1112,32 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
       console.error('[Admin] Failed to calculate daily trend:', e);
     }
 
+    // Count multi-agency incidents (where this agency is a supporting agency)
+    let multiAgencyCount = 0;
+    if (filters?.agency) {
+      try {
+        // Get agency ID from short_name
+        const { data: agencyData } = await supabase
+          .from('agencies')
+          .select('id')
+          .ilike('short_name', filters.agency)
+          .single();
+        
+        if (agencyData) {
+          // Count incidents where this agency is a supporting/lead agency
+          const { data: multiAgencyIncidents } = await supabase
+            .from('incident_agencies')
+            .select('incident_id', { count: 'exact' })
+            .eq('agency_id', agencyData.id)
+            .not('acknowledged_at', 'is', null);
+          
+          multiAgencyCount = multiAgencyIncidents?.length || 0;
+        }
+      } catch (e) {
+        console.error('[Admin] Failed to count multi-agency incidents:', e);
+      }
+    }
+
     const result = {
       total,
       pending,
@@ -1056,6 +1149,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
       avgResponseTime,    // in minutes
       avgResolutionTime,  // in minutes
       dailyTrend,
+      multiAgencyCount,   // count of multi-agency incidents for this agency
     };
     
     console.log('[Admin] Stats result:', result);

@@ -8,6 +8,8 @@ import {
     History,
     Image as ImageIcon,
     MapPin,
+    Maximize2,
+    Minimize2,
     Plus,
     RefreshCcw,
     Send,
@@ -138,6 +140,7 @@ function IncidentDetail() {
   const [newStatus, setNewStatus] = useState('');
   const [notes, setNotes] = useState('');
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
+  const [viewAgencyFilter, setViewAgencyFilter] = useState<string>('all');
   const [selectedOfficerIds, setSelectedOfficerIds] = useState<string[]>([]);
   const [selectedResourceIds, setSelectedResourceIds] = useState<number[]>([]);
   const [initialOfficerIds, setInitialOfficerIds] = useState<string[]>([]);
@@ -146,6 +149,7 @@ function IncidentDetail() {
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateSuccess, setUpdateSuccess] = useState(false);
+  const [isUpdateStatusExpanded, setIsUpdateStatusExpanded] = useState(false);
 
   // Final Report Modal State (legacy - for closing incidents)
   const [showFinalReportModal, setShowFinalReportModal] = useState(false);
@@ -177,6 +181,9 @@ function IncidentDetail() {
   const [selectedAgencyToAdd, setSelectedAgencyToAdd] = useState<number | null>(null);
   const [selectedAgencyRole, setSelectedAgencyRole] = useState<'supporting' | 'lead'>('supporting');
   const [addingAgency, setAddingAgency] = useState(false);
+  
+  // Track which agencies are involved (primary + supporting)
+  const [involvedAgencies, setInvolvedAgencies] = useState<string[]>([]);
 
   // Callback for when route is loaded from RouteMap component
   const handleRouteLoaded = useCallback((distance: number, duration: number) => {
@@ -200,10 +207,20 @@ function IncidentDetail() {
       loadStations();
     }
     if (incident?.agency_type) {
-      loadOfficers(incident.agency_type);
+      // Load officers and resources from all involved agencies
+      const agencies = [incident.agency_type];
+      const supportingAgencies = incidentAgencies
+        .filter(ia => ia.acknowledged_at)
+        .map(ia => ia.agencies?.short_name?.toLowerCase())
+        .filter(Boolean) as string[];
+      const allAgencies = [...agencies, ...supportingAgencies];
+      setInvolvedAgencies(allAgencies);
+      
+      // Load officers from all agencies
+      allAgencies.forEach(agency => loadOfficers(agency));
       loadResources();
     }
-  }, [incident?.latitude, incident?.longitude, incident?.agency_type]);
+  }, [incident?.latitude, incident?.longitude, incident?.agency_type, incidentAgencies]);
 
   const loadIncident = async () => {
     try {
@@ -379,25 +396,7 @@ function IncidentDetail() {
       // DEBUG: Log all officers returned from API
       console.log('[IncidentDetail] Officers loaded for agency:', agencyType);
       console.log('[IncidentDetail] Total officers from API:', data?.length || 0);
-      console.log('[IncidentDetail] All officers data:', JSON.stringify(data, null, 2));
       
-      // Log each officer's key fields
-      if (data && data.length > 0) {
-        data.forEach((officer: Officer, idx: number) => {
-          console.log(`[IncidentDetail] Officer ${idx + 1}:`, {
-            id: officer.id,
-            name: officer.display_name,
-            email: officer.email,
-            role: officer.role,
-            agency_id: officer.agency_id,
-            station_id: officer.station_id,
-            status: officer.status
-          });
-        });
-      } else {
-        console.warn('[IncidentDetail] ⚠️ No officers returned from API for agency:', agencyType);
-      }
-
       // Filter based on scope if needed
       let filtered = data || [];
       if (isStationScoped(scope) && scope.stationId) {
@@ -405,8 +404,22 @@ function IncidentDetail() {
         console.log('[IncidentDetail] Filtered to station', scope.stationId, ':', filtered.length, 'officers');
       }
       
-      console.log('[IncidentDetail] Final officers list:', filtered.length, 'officers');
-      setOfficers(filtered);
+      console.log('[IncidentDetail] Final officers list for', agencyType, ':', filtered.length, 'officers');
+      
+      // Accumulate officers from all agencies instead of replacing
+      setOfficers(prev => {
+        // Remove officers from this agency first to avoid duplicates
+        const withoutThisAgency = prev.filter(o => {
+          const officerAgency = stations.find(s => s.id === o.station_id)?.agencies?.short_name?.toLowerCase();
+          return officerAgency !== agencyType.toLowerCase();
+        });
+        // Combine and deduplicate by officer ID
+        const combined = [...withoutThisAgency, ...filtered];
+        const uniqueOfficers = Array.from(
+          new Map(combined.map(officer => [officer.id, officer])).values()
+        );
+        return uniqueOfficers;
+      });
     } catch (error) {
       console.error('Failed to load officers:', error);
     }
@@ -713,12 +726,17 @@ function IncidentDetail() {
     return <p className="mt-1 text-gray-800 dark:text-white whitespace-pre-wrap">{String(content)}</p>;
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     if (!finalReport || !incident) return;
     
-    const doc = exportFinalReportToPDF(incident, finalReport, incident.agency_type);
-    const filename = `Final_Report_${incident.agency_type.toUpperCase()}_${incident.id.substring(0, 8)}_${new Date().toISOString().split('T')[0]}.pdf`;
-    doc.save(filename);
+    try {
+      const doc = await exportFinalReportToPDF(incident, finalReport, incident.agency_type);
+      const filename = `Final_Report_${incident.agency_type.toUpperCase()}_${incident.id.substring(0, 8)}_${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(filename);
+    } catch (error) {
+      console.error('Error exporting PDF:', error);
+      alert('Failed to export PDF. Please try again.');
+    }
   };
 
   const handleExportPDFOld = () => {
@@ -1244,6 +1262,27 @@ function IncidentDetail() {
               Location
             </h2>
             <p className="text-gray-700 dark:text-gray-300 mb-2">{incident.location_address || 'Address not available'}</p>
+            {/* Assigned Station Badge */}
+            {incident.assigned_station_id && (() => {
+              const assignedStation = stations.find(s => s.id === incident.assigned_station_id);
+              if (assignedStation) {
+                const isPrimary = assignedStation.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
+                return (
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-sm text-gray-500 dark:text-gray-400">Assigned to:</span>
+                    <span className={`px-2 py-1 text-xs font-medium rounded ${
+                      isPrimary 
+                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                        : 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                    }`}>
+                      {assignedStation.agencies?.short_name?.toUpperCase()} - {assignedStation.name}
+                      {isPrimary ? ' (Primary)' : ' (Supporting)'}
+                    </span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
             {incident.latitude != null && incident.longitude != null ? (
               <>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
@@ -1484,6 +1523,27 @@ function IncidentDetail() {
                         {officer.role}
                         {officer.phone_number && ` • ${officer.phone_number}`}
                       </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        {(() => {
+                          const officerStation = stations.find(s => s.id === officer.station_id);
+                          const agencyShortName = officerStation?.agencies?.short_name;
+                          const stationName = officerStation?.name;
+                          return (
+                            <>
+                              {agencyShortName && (
+                                <span className="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 rounded">
+                                  {agencyShortName.toUpperCase()}
+                                </span>
+                              )}
+                              {stationName && (
+                                <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 rounded">
+                                  {stationName}
+                                </span>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
                     </div>
                     {index === 0 && incident.assigned_officer_ids && incident.assigned_officer_ids.length > 1 && (
                       <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded">
@@ -1883,9 +1943,19 @@ function IncidentDetail() {
             )}
           </div>
 
-          {/* Update Status */}
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-            <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Update Status</h2>
+          {/* Update Status - Inline View */}
+          {!isUpdateStatusExpanded && (
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Update Status</h2>
+                <button
+                  onClick={() => setIsUpdateStatusExpanded(true)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  title="Expand to modal"
+                >
+                  <Maximize2 size={18} className="text-gray-600 dark:text-gray-400" />
+                </button>
+              </div>
             
             {/* Current Status Display */}
             <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
@@ -1925,43 +1995,126 @@ function IncidentDetail() {
                 </select>
               </div>
 
-              {/* Station Assignment */}
+              {/* Station Assignment - Editable for Admin, read-only for others */}
               <div>
                 <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
-                  Assign Station
+                  Assigned Station
                   {incident.assigned_station_id && (
                     <span className="ml-2 text-xs text-green-600 dark:text-green-400">
                       (Currently assigned: Station #{incident.assigned_station_id})
                     </span>
                   )}
                 </label>
-                <select
-                  value={selectedStationId || ''}
-                  onChange={(e) => setSelectedStationId(e.target.value ? Number(e.target.value) : null)}
-                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
-                >
-                  <option value="">
-                    {incident.assigned_station_id 
-                      ? 'Keep current assignment' 
-                      : 'Auto-assign closest station'}
-                  </option>
-                  {stations
-                    .filter(s => s.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase())
-                    .map((station) => (
-                      <option key={station.id} value={station.id}>
-                        {station.name} {station.address ? `- ${station.address}` : ''}
-                      </option>
-                    ))}
-                  {stations.filter(s => s.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase()).length === 0 && (
-                    <option disabled>No stations available for {incident.agency_type?.toUpperCase()}</option>
-                  )}
-                </select>
-                <p className="mt-1 text-xs text-gray-400">
-                  {!incident.assigned_station_id && newStatus !== 'pending' 
-                    ? 'Will auto-assign to closest station if left empty'
-                    : 'Select a station to reassign or leave empty to keep current'}
-                </p>
+                {(() => {
+                  const scope = getSessionScope();
+                  const isAdmin = scope.role === 'Admin';
+                  
+                  if (isAdmin) {
+                    // Admin can reassign
+                    return (
+                      <>
+                        <select
+                          value={selectedStationId || ''}
+                          onChange={(e) => setSelectedStationId(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                        >
+                          <option value="">
+                            {incident.assigned_station_id 
+                              ? 'Keep current assignment' 
+                              : 'Auto-assign closest station'}
+                          </option>
+                          {stations
+                            .filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase()))
+                            .map((station) => {
+                              const isPrimary = station.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
+                              const agencyRole = incidentAgencies.find(ia => 
+                                ia.agencies?.short_name?.toLowerCase() === station.agencies?.short_name?.toLowerCase()
+                              )?.role;
+                              const badge = isPrimary ? '(Primary)' : agencyRole ? `(${agencyRole})` : '';
+                              return (
+                                <option key={station.id} value={station.id}>
+                                  {station.name} - {station.agencies?.short_name?.toUpperCase()} {badge} {station.address ? `- ${station.address}` : ''}
+                                </option>
+                              );
+                            })}
+                          {stations.filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase())).length === 0 && (
+                            <option disabled>No stations available</option>
+                          )}
+                        </select>
+                        <div className="mt-2 flex items-center gap-2 text-xs">
+                          <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                          <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
+                            {incident.agency_type?.toUpperCase()}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-gray-400">
+                          {!incident.assigned_station_id && newStatus !== 'pending' 
+                            ? 'Will auto-assign to closest station if left empty'
+                            : 'Select a station to reassign or leave empty to keep current'}
+                        </p>
+                      </>
+                    );
+                  } else {
+                    // Non-admin: read-only
+                    return (
+                      <>
+                        <div className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                          {incident.assigned_station_id ? (
+                            (() => {
+                              const assignedStation = stations.find(s => s.id === incident.assigned_station_id);
+                              if (assignedStation) {
+                                const isPrimary = assignedStation.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
+                                const badge = isPrimary ? '(Primary)' : '(Supporting)';
+                                return `${assignedStation.name} - ${assignedStation.agencies?.short_name?.toUpperCase()} ${badge}`;
+                              }
+                              return `Station #${incident.assigned_station_id}`;
+                            })()
+                          ) : (
+                            'No station assigned yet'
+                          )}
+                        </div>
+                        <div className="mt-2 flex items-center gap-2 text-xs">
+                          <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                          <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
+                            {incident.agency_type?.toUpperCase()}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-gray-400">
+                          Station assignment is locked. Contact admin to reassign.
+                        </p>
+                      </>
+                    );
+                  }
+                })()}
               </div>
+
+              {/* Agency Filter - Show for all incidents with involved agencies */}
+              {incidentAgencies.length > 0 && (
+                <div>
+                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    View Officers By Agency
+                  </label>
+                  <select
+                    value={viewAgencyFilter}
+                    onChange={(e) => setViewAgencyFilter(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  >
+                    <option value="all">All Agencies</option>
+                    {incidentAgencies.map((ia) => {
+                      const isPrimary = ia.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
+                      const badge = isPrimary ? ' (Primary)' : ` (${ia.role || 'Supporting'})`;
+                      return (
+                        <option key={ia.agency_id} value={ia.agencies?.short_name?.toLowerCase()}>
+                          {ia.agencies?.short_name?.toUpperCase()}{badge}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Filter officers by agency to see available responders
+                  </p>
+                </div>
+              )}
 
               {/* Officer Assignment */}
               <div>
@@ -1976,13 +2129,16 @@ function IncidentDetail() {
                     </span>
                   )}
                 </label>
-                <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-gray-700">
+                <div className={`border border-gray-200 dark:border-gray-600 rounded-lg ${isUpdateStatusExpanded ? 'max-h-96' : 'max-h-48'} overflow-y-auto bg-white dark:bg-gray-700`}>
                   {(() => {
                     const visibleOfficers = officers.filter(officer => {
-                      const targetStationId = selectedStationId || incident.assigned_station_id;
-                      // If station is selected/assigned, only show officers from that station or with no station
-                      if (targetStationId) {
-                        return !officer.station_id || officer.station_id === targetStationId;
+                      // Filter by agency if multi-agency and filter is set
+                      if (viewAgencyFilter !== 'all') {
+                        const officerStation = stations.find(s => s.id === officer.station_id);
+                        const officerAgency = officerStation?.agencies?.short_name?.toLowerCase();
+                        if (officerAgency !== viewAgencyFilter) {
+                          return false;
+                        }
                       }
                       return true;
                     });
@@ -1990,7 +2146,7 @@ function IncidentDetail() {
                     if (visibleOfficers.length === 0) {
                       return (
                         <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                          No officers available {selectedStationId ? 'at selected station' : `for ${incident.agency_type?.toUpperCase()}`}
+                          No officers available {selectedStationId ? 'at selected station' : 'for involved agencies'}
                         </p>
                       );
                     }
@@ -2036,8 +2192,27 @@ function IncidentDetail() {
                               </span>
                             )}
                           </p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">
-                            {officer.role} {officer.phone_number && `• ${officer.phone_number}`}
+                          <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                            <span>{officer.role}</span>
+                            {(() => {
+                              const officerStation = stations.find(s => s.id === officer.station_id);
+                              const agencyShortName = officerStation?.agencies?.short_name;
+                              if (agencyShortName) {
+                                const isPrimary = agencyShortName.toLowerCase() === incident.agency_type?.toLowerCase();
+                                const agencyRole = incidentAgencies.find(ia => 
+                                  ia.agencies?.short_name?.toLowerCase() === agencyShortName.toLowerCase()
+                                )?.role;
+                                const badge = isPrimary ? 'Primary' : agencyRole || 'Supporting';
+                                const badgeColor = isPrimary ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300' : 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300';
+                                return (
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${badgeColor}`}>
+                                    {agencyShortName.toUpperCase()} ({badge})
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })()}
+                            {officer.phone_number && <span>• {officer.phone_number}</span>}
                           </p>
                         </div>
                       </label>
@@ -2062,7 +2237,7 @@ function IncidentDetail() {
                     </span>
                   )}
                 </label>
-                <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-gray-700">
+                <div className={`border border-gray-200 dark:border-gray-600 rounded-lg ${isUpdateStatusExpanded ? 'max-h-96' : 'max-h-48'} overflow-y-auto bg-white dark:bg-gray-700`}>
                   {(() => {
                     const visibleResources = resources.filter(res => {
                       const targetStationId = selectedStationId || incident.assigned_station_id;
@@ -2153,8 +2328,394 @@ function IncidentDetail() {
               </button>
             </div>
           </div>
+          )}
         </div>
       </div>
+
+      {/* Update Status - Modal View */}
+      {isUpdateStatusExpanded && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Update Status</h2>
+              <button
+                onClick={() => setIsUpdateStatusExpanded(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                <X size={20} className="text-gray-600 dark:text-gray-400" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {/* Current Status Display */}
+              <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Current Status</p>
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-sm font-medium ${
+                  STATUS_OPTIONS.find(s => s.value === incident.status)?.color || 'bg-gray-500'
+                } text-white`}>
+                  {STATUS_OPTIONS.find(s => s.value === incident.status)?.label || incident.status}
+                </span>
+              </div>
+
+              {updateSuccess && (
+                <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg text-green-700 dark:text-green-400 text-sm">
+                  Status updated successfully!
+                </div>
+              )}
+              
+              {updateError && (
+                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400 text-sm">
+                  {updateError}
+                </div>
+              )}
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Change To</label>
+                  <select
+                    value={newStatus}
+                    onChange={(e) => setNewStatus(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  >
+                    {STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label} {option.value === incident.status ? '(current)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Station Assignment - Editable for Admin, read-only for others */}
+                <div>
+                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    Assigned Station
+                    {incident.assigned_station_id && (
+                      <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+                        (Currently assigned: Station #{incident.assigned_station_id})
+                      </span>
+                    )}
+                  </label>
+                  {(() => {
+                    const scope = getSessionScope();
+                    const isAdmin = scope.role === 'Admin';
+                    
+                    if (isAdmin) {
+                      // Admin can reassign
+                      return (
+                        <>
+                          <select
+                            value={selectedStationId || ''}
+                            onChange={(e) => setSelectedStationId(e.target.value ? Number(e.target.value) : null)}
+                            className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                          >
+                            <option value="">
+                              {incident.assigned_station_id 
+                                ? 'Keep current assignment' 
+                                : 'Auto-assign closest station'}
+                            </option>
+                            {stations
+                              .filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase()))
+                              .map((station) => {
+                                const isPrimary = station.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
+                                const agencyRole = incidentAgencies.find(ia => 
+                                  ia.agencies?.short_name?.toLowerCase() === station.agencies?.short_name?.toLowerCase()
+                                )?.role;
+                                const badge = isPrimary ? '(Primary)' : agencyRole ? `(${agencyRole})` : '';
+                                return (
+                                  <option key={station.id} value={station.id}>
+                                    {station.name} - {station.agencies?.short_name?.toUpperCase()} {badge} {station.address ? `- ${station.address}` : ''}
+                                  </option>
+                                );
+                              })}
+                            {stations.filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase())).length === 0 && (
+                              <option disabled>No stations available</option>
+                            )}
+                          </select>
+                          <div className="mt-2 flex items-center gap-2 text-xs">
+                            <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                            <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
+                              {incident.agency_type?.toUpperCase()}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-xs text-gray-400">
+                            {!incident.assigned_station_id && newStatus !== 'pending' 
+                              ? 'Will auto-assign to closest station if left empty'
+                              : 'Select a station to reassign or leave empty to keep current'}
+                          </p>
+                        </>
+                      );
+                    } else {
+                      // Non-admin: read-only
+                      return (
+                        <>
+                          <div className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                            {incident.assigned_station_id ? (
+                              (() => {
+                                const assignedStation = stations.find(s => s.id === incident.assigned_station_id);
+                                if (assignedStation) {
+                                  const isPrimary = assignedStation.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
+                                  const badge = isPrimary ? '(Primary)' : '(Supporting)';
+                                  return `${assignedStation.name} - ${assignedStation.agencies?.short_name?.toUpperCase()} ${badge}`;
+                                }
+                                return `Station #${incident.assigned_station_id}`;
+                              })()
+                            ) : (
+                              'No station assigned yet'
+                            )}
+                          </div>
+                          <div className="mt-2 flex items-center gap-2 text-xs">
+                            <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                            <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
+                              {incident.agency_type?.toUpperCase()}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-xs text-gray-400">
+                            Station assignment is locked. Contact admin to reassign.
+                          </p>
+                        </>
+                      );
+                    }
+                  })()}
+                </div>
+
+                {/* Agency Filter - Show for all incidents with involved agencies */}
+                {incidentAgencies.length > 0 && (
+                  <div>
+                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                      View Officers By Agency
+                    </label>
+                    <select
+                      value={viewAgencyFilter}
+                      onChange={(e) => setViewAgencyFilter(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                    >
+                      <option value="all">All Agencies</option>
+                      {incidentAgencies.map((ia) => {
+                        const isPrimary = ia.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
+                        const badge = isPrimary ? ' (Primary)' : ` (${ia.role || 'Supporting'})`;
+                        return (
+                          <option key={ia.agency_id} value={ia.agencies?.short_name?.toLowerCase()}>
+                            {ia.agencies?.short_name?.toUpperCase()}{badge}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-400">
+                      Filter officers by agency to see available responders
+                    </p>
+                  </div>
+                )}
+
+                {/* Officer Assignment */}
+                <div>
+                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <span className="flex items-center gap-1">
+                      <UserCheck size={14} />
+                      Assign Officers
+                    </span>
+                    {selectedOfficerIds.length > 0 && (
+                      <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">
+                        ({selectedOfficerIds.length} selected{hasOfficerChanges() ? ' - modified' : ''})
+                      </span>
+                    )}
+                  </label>
+                  <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-96 overflow-y-auto bg-white dark:bg-gray-700">
+                    {(() => {
+                      const visibleOfficers = officers.filter(officer => {
+                        // Filter by agency if multi-agency and filter is set
+                        if (viewAgencyFilter !== 'all') {
+                          const officerStation = stations.find(s => s.id === officer.station_id);
+                          const officerAgency = officerStation?.agencies?.short_name?.toLowerCase();
+                          if (officerAgency !== viewAgencyFilter) {
+                            return false;
+                          }
+                        }
+                        return true;
+                      });
+
+                      if (visibleOfficers.length === 0) {
+                        return (
+                          <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                            No officers available {selectedStationId ? 'at selected station' : 'for involved agencies'}
+                          </p>
+                        );
+                      }
+
+                      return visibleOfficers.map((officer) => {
+                        const isCurrentlyAssigned = initialOfficerIds.includes(officer.id);
+                        const isAvailable = officer.status === 'available' || !officer.status;
+                        const showBusy = !isAvailable && !isCurrentlyAssigned;
+
+                        return (
+                        <label
+                          key={officer.id}
+                          className={`flex items-center gap-3 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer border-b border-gray-100 dark:border-gray-600 last:border-b-0 ${
+                            isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedOfficerIds.includes(officer.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedOfficerIds([...selectedOfficerIds, officer.id]);
+                              } else {
+                                setSelectedOfficerIds(selectedOfficerIds.filter(id => id !== officer.id));
+                              }
+                            }}
+                            disabled={showBusy}
+                            className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-800 dark:text-white truncate flex items-center gap-2">
+                              {officer.display_name || officer.email}
+                              {isCurrentlyAssigned && (
+                                <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded">
+                                  Assigned
+                                </span>
+                              )}
+                              {showBusy && (
+                                <span className="text-xs px-1.5 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded">
+                                  Busy
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                              <span>{officer.role}</span>
+                              {(() => {
+                                const officerStation = stations.find(s => s.id === officer.station_id);
+                                const agencyShortName = officerStation?.agencies?.short_name;
+                                if (agencyShortName) {
+                                  const isPrimary = agencyShortName.toLowerCase() === incident.agency_type?.toLowerCase();
+                                  const agencyRole = incidentAgencies.find(ia => 
+                                    ia.agencies?.short_name?.toLowerCase() === agencyShortName.toLowerCase()
+                                  )?.role;
+                                  const badge = isPrimary ? 'Primary' : agencyRole || 'Supporting';
+                                  const badgeColor = isPrimary ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300' : 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300';
+                                  return (
+                                    <span className={`text-xs px-1.5 py-0.5 rounded ${badgeColor}`}>
+                                      {agencyShortName.toUpperCase()} ({badge})
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
+                              {officer.phone_number && <span>• {officer.phone_number}</span>}
+                            </p>
+                          </div>
+                        </label>
+                      );});
+                    })()}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Select one or more officers to respond to this incident
+                  </p>
+                </div>
+
+                {/* Assign Resources */}
+                <div>
+                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <span className="flex items-center gap-1">
+                      <Truck size={14} />
+                      Assign Resources
+                    </span>
+                    {selectedResourceIds.length > 0 && (
+                      <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">
+                        ({selectedResourceIds.length} selected{hasResourceChanges() ? ' - modified' : ''})
+                      </span>
+                    )}
+                  </label>
+                  <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-96 overflow-y-auto bg-white dark:bg-gray-700">
+                    {(() => {
+                      const visibleResources = resources.filter(res => {
+                        const targetStationId = selectedStationId || incident.assigned_station_id;
+                        if (targetStationId) {
+                          return res.station_id === targetStationId;
+                        }
+                        return false;
+                      });
+
+                      if (visibleResources.length === 0) {
+                        return (
+                          <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                            {selectedStationId ? 'No resources available at selected station' : 'Select a station to see resources'}
+                          </p>
+                        );
+                      }
+
+                      return visibleResources.map((res) => {
+                        const isCurrentlyAssigned = initialResourceIds.includes(res.id);
+                        const isAvailable = res.status === 'available';
+                        const showBusy = !isAvailable && !isCurrentlyAssigned;
+
+                        return (
+                        <label
+                          key={res.id}
+                          className={`flex items-center gap-3 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer border-b border-gray-100 dark:border-gray-600 last:border-b-0 ${
+                            isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedResourceIds.includes(res.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedResourceIds([...selectedResourceIds, res.id]);
+                              } else {
+                                setSelectedResourceIds(selectedResourceIds.filter(id => id !== res.id));
+                              }
+                            }}
+                            disabled={showBusy}
+                            className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-800 dark:text-white truncate flex items-center gap-2">
+                              {res.name}
+                              {isCurrentlyAssigned && (
+                                <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded">
+                                  Assigned
+                                </span>
+                              )}
+                              {showBusy && (
+                                <span className="text-xs px-1.5 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded capitalize">
+                                  {res.status}
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">
+                              {res.type}
+                            </p>
+                          </div>
+                        </label>
+                      );});
+                    })()}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Notes (optional)</label>
+                  <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Add notes about this status change..."
+                    rows={3}
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+
+                <button
+                  onClick={handleUpdateStatus}
+                  disabled={updating || !hasChanges()}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Send size={18} />
+                  {updating ? 'Updating...' : hasOfficerChanges() && newStatus === incident.status ? 'Update Officers' : 'Update Status'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Final Report Modal */}
       {showFinalReportModal && (

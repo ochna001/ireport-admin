@@ -5,11 +5,13 @@ import {
   Flame,
   Shield,
   TrendingUp,
+  Users,
   Waves
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getSessionScope, isStationScoped, SessionScope } from '../utils/sessionScope';
+import { DashboardMap } from '../components/DashboardMap';
 
 interface Stats {
   total: number;
@@ -26,6 +28,7 @@ interface Stats {
   }>;
   avgResponseTime?: number | null;
   avgResolutionTime?: number | null;
+  multiAgencyCount?: number;
 }
 
 function Dashboard() {
@@ -235,7 +238,7 @@ function Dashboard() {
 
       {/* Agency Breakdown - Hide for Desk Officer */}
       {sessionScope.role !== 'Desk Officer' && (
-        <div className={`grid ${isStationScoped(sessionScope) ? 'grid-cols-1 max-w-md' : 'grid-cols-3'} gap-6 mb-8`}>
+        <div className={`grid ${isStationScoped(sessionScope) ? 'grid-cols-2 max-w-2xl' : 'grid-cols-3'} gap-6 mb-8`}>
         {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'pnp') && (
           <div 
             className="bg-blue-600 rounded-xl p-6 text-white cursor-pointer hover:bg-blue-700 transition-colors"
@@ -280,8 +283,27 @@ function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Multi-Agency Reports Card - only show if user has agency scope and there are multi-agency incidents */}
+        {isStationScoped(sessionScope) && sessionScope.agencyShortName && (stats?.multiAgencyCount || 0) > 0 && (
+          <div 
+            className="bg-purple-600 rounded-xl p-6 text-white cursor-pointer hover:bg-purple-700 transition-colors"
+            onClick={() => navigate('/incidents')}
+          >
+            <div className="flex items-center gap-4">
+              <Users size={32} />
+              <div>
+                <p className="text-purple-100">Multi-Agency Support</p>
+                <p className="text-3xl font-bold">{stats?.multiAgencyCount || 0}</p>
+              </div>
+            </div>
+          </div>
+        )}
         </div>
       )}
+
+      {/* GIS / Map Overview */}
+      <DashboardMap />
 
       {/* Recent Activity */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">

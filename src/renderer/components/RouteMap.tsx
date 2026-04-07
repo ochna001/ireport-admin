@@ -2,6 +2,35 @@ import { useEffect, useState, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { Layers as LayersIcon, Map as MapIcon, Globe, Info, Building2, MapPin as MapPinIcon, Navigation } from 'lucide-react';
+
+const MAP_LAYERS = {
+  osm: {
+    name: 'OpenStreetMap',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors'
+  },
+  google_road: {
+    name: 'Google Roadmap',
+    url: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+    attribution: '&copy; Google Maps'
+  },
+  google_satellite: {
+    name: 'Google Satellite',
+    url: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+    attribution: '&copy; Google Maps'
+  },
+  google_terrain: {
+    name: 'Google Terrain',
+    url: 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}',
+    attribution: '&copy; Google Maps'
+  },
+  google_hybrid: {
+    name: 'Google Hybrid',
+    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+    attribution: '&copy; Google Maps'
+  }
+};
 
 // Fix for default marker icons in webpack/vite
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -11,24 +40,33 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-// Custom icons
-const incidentIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
+// Custom Pins with divIcon to avoid 404s and for better style
+const createPinIcon = (color: string) => {
+  return L.divIcon({
+    className: 'custom-pin-marker',
+    html: `
+      <div style="position: relative; width: 32px; height: 32px;">
+        <svg viewBox="0 0 384 512" style="width: 100%; height: 100%; fill: ${color}; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+          <path d="M172.268 501.67C26.97 291.031 0 269.413 0 192 0 85.961 85.961 0 192 0s192 85.961 192 192c0 77.413-26.97 99.031-172.268 309.67-9.535 13.774-29.93 13.773-39.464 0z"/>
+        </svg>
+        <div style="
+          position: absolute; 
+          top: 45%; 
+          left: 50%; 
+          transform: translate(-50%, -50%); 
+          color: white;
+        ">
+        </div>
+      </div>
+    `,
+    iconSize: [32, 32],
+    iconAnchor: [16, 32],
+    popupAnchor: [0, -32]
+  });
+};
 
-const stationIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
+const incidentPin = createPinIcon('#dc2626');
+const stationPin = createPinIcon('#2563eb');
 
 interface RouteMapProps {
   incidentLat: number;
@@ -63,6 +101,8 @@ export function RouteMap({
   const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('osm');
+  const [showLayerSelector, setShowLayerSelector] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
 
   // Fetch route from OSRM when showRoute is enabled
@@ -118,6 +158,48 @@ export function RouteMap({
 
   return (
     <div className="relative w-full h-[350px] rounded-lg overflow-hidden" style={{ zIndex: 0 }}>
+      {/* Layer Selector */}
+      <div className="absolute bottom-4 right-4 z-[1010] flex flex-col items-end gap-2">
+        {showLayerSelector && (
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-2 min-w-[160px] animate-in fade-in slide-in-from-bottom-2">
+            <div className="space-y-1">
+              {(Object.keys(MAP_LAYERS) as Array<keyof typeof MAP_LAYERS>).map((key) => (
+                <button
+                  key={key}
+                  onClick={() => {
+                    setActiveLayer(key);
+                    setShowLayerSelector(false);
+                  }}
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    activeLayer === key 
+                      ? 'bg-blue-600 text-white shadow-md' 
+                      : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {key === 'osm' && <MapIcon size={12} />}
+                  {key.includes('google_road') && <Globe size={12} />}
+                  {key.includes('satellite') && <Info size={12} />}
+                  {key.includes('terrain') && <Building2 size={12} />}
+                  {key.includes('hybrid') && <LayersIcon size={12} />}
+                  {MAP_LAYERS[key].name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <button
+          onClick={() => setShowLayerSelector(!showLayerSelector)}
+          className={`p-2.5 rounded-full shadow-lg border transition-all ${
+            showLayerSelector 
+              ? 'bg-blue-600 text-white border-transparent' 
+              : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-100 dark:border-gray-700 hover:bg-gray-50'
+          }`}
+          title="Change Map Layers"
+        >
+          <LayersIcon size={18} />
+        </button>
+      </div>
+
       {loading && (
         <div className="absolute inset-0 bg-black/20 z-[1000] flex items-center justify-center">
           <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
@@ -133,37 +215,37 @@ export function RouteMap({
         </div>
       )}
 
+    <div className="relative h-[300px] rounded-xl overflow-hidden border border-gray-100 dark:border-gray-700 shadow-inner">
       <MapContainer
         center={[incidentLat, incidentLng]}
-        zoom={15}
+        zoom={14}
         style={{ height: '100%', width: '100%' }}
-        ref={mapRef}
+        key={activeLayer}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution={MAP_LAYERS[activeLayer].attribution}
+          url={MAP_LAYERS[activeLayer].url}
         />
         
         {/* Fit bounds when showing route */}
         <FitBounds bounds={getBounds()} />
         
         {/* Incident marker (red) */}
-        <Marker position={[incidentLat, incidentLng]} icon={incidentIcon}>
+        <Marker position={[incidentLat, incidentLng]} icon={incidentPin}>
           <Popup>
-            <div className="text-sm">
-              <strong className="text-red-600">📍 Incident Location</strong>
-              {incidentAddress && <p className="mt-1 text-gray-600">{incidentAddress}</p>}
+            <div className="text-xs">
+              <p className="font-bold">Incident Location</p>
+              <p className="text-gray-500 mt-1">{incidentAddress}</p>
             </div>
           </Popup>
         </Marker>
-        
-        {/* Station marker (blue) - only show when route is enabled */}
-        {showRoute && stationLat && stationLng && (
-          <Marker position={[stationLat, stationLng]} icon={stationIcon}>
+
+        {stationLat && stationLng && stationPin && (
+          <Marker position={[stationLat, stationLng]} icon={stationPin}>
             <Popup>
-              <div className="text-sm">
-                <strong className="text-blue-600">🏢 {stationName || 'Station'}</strong>
-                <p className="mt-1 text-gray-600">Response Unit Origin</p>
+              <div className="text-xs">
+                <p className="font-bold">Responding Station</p>
+                <p className="text-gray-500 mt-1">{stationName || 'Base Station'}</p>
               </div>
             </Popup>
           </Marker>
@@ -183,6 +265,7 @@ export function RouteMap({
           />
         )}
       </MapContainer>
+    </div>
     </div>
   );
 }

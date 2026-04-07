@@ -1,6 +1,6 @@
 {
   "name": "ireport-admin",
-  "version": "1.1.5",
+  "version": "1.2.7",
   "description": "iReport Admin Dashboard - LGU Emergency Response Management",
   "main": "dist/main/index.js",
   "scripts": {
@@ -32,6 +32,7 @@
     "leaflet": "^1.9.4",
     "node-fetch": "^2.7.0",
     "papaparse": "^5.5.3",
+    "pdfjs-dist": "^5.4.449",
     "react-leaflet": "^4.2.1",
     "uuid": "^9.0.0"
   },
