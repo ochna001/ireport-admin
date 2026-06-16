@@ -10,6 +10,7 @@ import {
     FileText,
     Filter,
     Info,
+    Map,
     MapPin,
     PieChart,
     Printer,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { barangaysByMunicipality, municipalities } from '../data/camarinesNorteLocations';
+import { ReportsMap } from '../components/ReportsMap';
 import { getSessionScope, isStationScoped, SessionScope } from '../utils/sessionScope';
 
 interface ReportStats {
@@ -53,11 +55,13 @@ interface ReportConfig {
   groupBy: 'none' | 'agency' | 'status' | 'date' | 'location';
 }
 
-const AGENCIES = ['PNP', 'BFP', 'PDRRMO'];
+const AGENCIES = ['PNP', 'BFP', 'MDRRMO'];
 const STATUSES = ['pending', 'assigned', 'responding', 'resolved', 'closed'];
+const normalizeAgency = (agency?: string) => agency?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency;
+const formatAgency = (agency?: string) => normalizeAgency(agency)?.toUpperCase();
 
 function Reports() {
-  const initialScope = getSessionScope();
+  const initialScope = useMemo(() => getSessionScope(), []);
   const [sessionScope, setSessionScope] = useState<SessionScope>(initialScope);
   const [stats, setStats] = useState<ReportStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,6 +76,7 @@ function Reports() {
   const [generating, setGenerating] = useState(false);
   const [showReportBuilder, setShowReportBuilder] = useState(false);
   const [skipCacheNext, setSkipCacheNext] = useState(false);
+  const [activeTab, setActiveTab] = useState<'analytics' | 'map'>('analytics');
   
   const [reportConfig, setReportConfig] = useState<ReportConfig>({
     dateRange: '30d',
@@ -212,10 +217,10 @@ function Reports() {
   };
 
   const getAgencyColor = (agency: string) => {
-    switch (agency.toLowerCase()) {
+    switch (normalizeAgency(agency)?.toLowerCase()) {
       case 'pnp': return 'bg-blue-500';
       case 'bfp': return 'bg-red-500';
-      case 'pdrrmo': return 'bg-teal-500';
+      case 'mdrrmo': return 'bg-cyan-500';
       default: return 'bg-gray-500';
     }
   };
@@ -389,7 +394,7 @@ function Reports() {
       // Filter by multiple agencies/statuses if needed
       if (reportConfig.agencies.length > 0) {
         filteredIncidents = filteredIncidents.filter((i: any) => 
-          reportConfig.agencies.map(a => a.toLowerCase()).includes(i.agency_type?.toLowerCase())
+          reportConfig.agencies.map(a => a.toLowerCase()).includes(normalizeAgency(i.agency_type)?.toLowerCase() || '')
         );
       }
       if (reportConfig.statuses.length > 0) {
@@ -414,7 +419,7 @@ function Reports() {
       const reportData = filteredIncidents.map((incident: any) => {
         const row: any = {
           id: incident.id,
-          agency: incident.agency_type?.toUpperCase(),
+          agency: formatAgency(incident.agency_type),
           status: incident.status,
           created_at: incident.created_at,
         };
@@ -629,6 +634,7 @@ function Reports() {
           <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Reports & Analytics</h1>
           <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Incident statistics and trends</p>
         </div>
+        {activeTab === 'analytics' && (
         <div className="flex gap-3">
           <select
             value={dateRange}
@@ -674,6 +680,7 @@ function Reports() {
             Refresh
           </button>
         </div>
+        )}
       </div>
 
       {stationScopeActive && (
@@ -682,6 +689,37 @@ function Reports() {
         </div>
       )}
 
+      {/* Tab Switcher */}
+      <div className="flex items-center gap-1 mb-6 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
+        <button
+          onClick={() => setActiveTab('analytics')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'analytics'
+              ? 'bg-white dark:bg-gray-700 text-gray-800 dark:text-white shadow-sm'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4" />
+          Analytics
+        </button>
+        <button
+          onClick={() => setActiveTab('map')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'map'
+              ? 'bg-white dark:bg-gray-700 text-gray-800 dark:text-white shadow-sm'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+          }`}
+        >
+          <Map className="w-4 h-4" />
+          Incident Map
+        </button>
+      </div>
+
+      {/* Map Tab */}
+      {activeTab === 'map' && <ReportsMap />}
+
+      {/* Analytics Tab */}
+      {activeTab === 'analytics' && (<>
       {/* Report Builder Panel */}
       {showReportBuilder && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 mb-6">
@@ -999,7 +1037,7 @@ function Reports() {
                 <div key={item.agency_type}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium text-gray-700 dark:text-gray-300 uppercase">
-                      {item.agency_type}
+                      {formatAgency(item.agency_type)}
                     </span>
                     <span className="text-sm text-gray-500 dark:text-gray-400">
                       {item.count} ({percentage}%)
@@ -1224,6 +1262,7 @@ function Reports() {
           </div>
         </div>
       </div>
+      </>)}
     </div>
   );
 }

@@ -47,28 +47,28 @@ function Dashboard() {
     }
 
     loadStats();
-    
+
     // Listen for updates
-    window.api.onIncidentUpdated(() => {
+    const unIncident = window.api.onIncidentUpdated(() => {
       loadStats();
     });
 
     // Setup auto-refresh based on settings
     let refreshTimer: NodeJS.Timeout;
-    
+
     const setupAutoRefresh = async () => {
       try {
         // Try to get settings from localStorage first (faster)
         const savedSettings = localStorage.getItem('ireport_admin_settings');
         let settings;
-        
+
         if (savedSettings) {
           settings = JSON.parse(savedSettings);
         } else {
           // Fallback to API defaults
           settings = await window.api.getSettings();
         }
-        
+
         if (settings?.display?.autoRefresh) {
           const interval = (settings.display.refreshInterval || 30) * 1000;
           console.log(`[Dashboard] Auto-refresh enabled: ${interval}ms`);
@@ -78,11 +78,11 @@ function Dashboard() {
         console.error('Failed to setup auto-refresh:', error);
       }
     };
-    
+
     setupAutoRefresh();
 
     return () => {
-      window.api?.removeAllListeners('incident-updated');
+      unIncident();
       if (refreshTimer) clearInterval(refreshTimer);
     };
   }, []);
@@ -138,16 +138,20 @@ function Dashboard() {
   };
 
   const getAgencyBadgeColor = (agency?: string | null) => {
-    switch (agency?.toLowerCase()) {
+    switch (agency?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency?.toLowerCase()) {
       case 'pnp':
         return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200';
       case 'bfp':
         return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200';
-      case 'pdrrmo':
+      case 'mdrrmo':
         return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-200';
       default:
         return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300';
     }
+  };
+
+  const formatAgency = (agency?: string | null) => {
+    return (agency?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency)?.toUpperCase();
   };
 
   const displayedActivity = stats?.recentActivity
@@ -182,7 +186,7 @@ function Dashboard() {
           <p className="text-yellow-500 text-xs mt-1">Error: {(stats as any)?._error}</p>
         </div>
       )}
-      
+
       {/* Stats Cards - Hide for Desk Officer, show simplified for others */}
       {sessionScope.role !== 'Desk Officer' && (
         <div className="grid grid-cols-4 gap-6 mb-8">
@@ -239,66 +243,66 @@ function Dashboard() {
       {/* Agency Breakdown - Hide for Desk Officer */}
       {sessionScope.role !== 'Desk Officer' && (
         <div className={`grid ${isStationScoped(sessionScope) ? 'grid-cols-2 max-w-2xl' : 'grid-cols-3'} gap-6 mb-8`}>
-        {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'pnp') && (
-          <div 
-            className="bg-blue-600 rounded-xl p-6 text-white cursor-pointer hover:bg-blue-700 transition-colors"
-            onClick={() => navigate('/incidents?agency=pnp')}
-          >
-            <div className="flex items-center gap-4">
-              <Shield size={32} />
-              <div>
-                <p className="text-blue-100">PNP Reports</p>
-                <p className="text-3xl font-bold">{getAgencyCount('pnp')}</p>
+          {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'pnp') && (
+            <div
+              className="bg-blue-600 rounded-xl p-6 text-white cursor-pointer hover:bg-blue-700 transition-colors"
+              onClick={() => navigate('/incidents?agency=pnp')}
+            >
+              <div className="flex items-center gap-4">
+                <Shield size={32} />
+                <div>
+                  <p className="text-blue-100">PNP Reports</p>
+                  <p className="text-3xl font-bold">{getAgencyCount('pnp')}</p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'bfp') && (
-          <div 
-            className="bg-red-600 rounded-xl p-6 text-white cursor-pointer hover:bg-red-700 transition-colors"
-            onClick={() => navigate('/incidents?agency=bfp')}
-          >
-            <div className="flex items-center gap-4">
-              <Flame size={32} />
-              <div>
-                <p className="text-red-100">BFP Reports</p>
-                <p className="text-3xl font-bold">{getAgencyCount('bfp')}</p>
+          {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'bfp') && (
+            <div
+              className="bg-red-600 rounded-xl p-6 text-white cursor-pointer hover:bg-red-700 transition-colors"
+              onClick={() => navigate('/incidents?agency=bfp')}
+            >
+              <div className="flex items-center gap-4">
+                <Flame size={32} />
+                <div>
+                  <p className="text-red-100">BFP Reports</p>
+                  <p className="text-3xl font-bold">{getAgencyCount('bfp')}</p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'pdrrmo') && (
-          <div 
-            className="bg-cyan-600 rounded-xl p-6 text-white cursor-pointer hover:bg-cyan-700 transition-colors"
-            onClick={() => navigate('/incidents?agency=pdrrmo')}
-          >
-            <div className="flex items-center gap-4">
-              <Waves size={32} />
-              <div>
-                <p className="text-cyan-100">PDRRMO Reports</p>
-                <p className="text-3xl font-bold">{getAgencyCount('pdrrmo')}</p>
+          {(!isStationScoped(sessionScope) || sessionScope.agencyShortName?.toLowerCase() === 'mdrrmo') && (
+            <div
+              className="bg-cyan-600 rounded-xl p-6 text-white cursor-pointer hover:bg-cyan-700 transition-colors"
+              onClick={() => navigate('/incidents?agency=mdrrmo')}
+            >
+              <div className="flex items-center gap-4">
+                <Waves size={32} />
+                <div>
+                  <p className="text-cyan-100">MDRRMO Reports</p>
+                  <p className="text-3xl font-bold">{getAgencyCount('mdrrmo')}</p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Multi-Agency Reports Card - only show if user has agency scope and there are multi-agency incidents */}
-        {isStationScoped(sessionScope) && sessionScope.agencyShortName && (stats?.multiAgencyCount || 0) > 0 && (
-          <div 
-            className="bg-purple-600 rounded-xl p-6 text-white cursor-pointer hover:bg-purple-700 transition-colors"
-            onClick={() => navigate('/incidents')}
-          >
-            <div className="flex items-center gap-4">
-              <Users size={32} />
-              <div>
-                <p className="text-purple-100">Multi-Agency Support</p>
-                <p className="text-3xl font-bold">{stats?.multiAgencyCount || 0}</p>
+          {/* Multi-Agency Reports Card - only show if user has agency scope and there are multi-agency incidents */}
+          {isStationScoped(sessionScope) && sessionScope.agencyShortName && (stats?.multiAgencyCount || 0) > 0 && (
+            <div
+              className="bg-purple-600 rounded-xl p-6 text-white cursor-pointer hover:bg-purple-700 transition-colors"
+              onClick={() => navigate('/incidents')}
+            >
+              <div className="flex items-center gap-4">
+                <Users size={32} />
+                <div>
+                  <p className="text-purple-100">Multi-Agency Support</p>
+                  <p className="text-3xl font-bold">{stats?.multiAgencyCount || 0}</p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
         </div>
       )}
 
@@ -344,7 +348,7 @@ function Dashboard() {
                   </span>
                   {activity.agency_type && (
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getAgencyBadgeColor(activity.agency_type)}`}>
-                      {activity.agency_type.toUpperCase()}
+                      {formatAgency(activity.agency_type)}
                     </span>
                   )}
                 </div>

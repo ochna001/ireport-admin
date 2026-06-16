@@ -71,7 +71,7 @@ export function initDatabase(): Promise<void> {
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         name TEXT,
-        role TEXT NOT NULL, -- 'admin', 'pnp', 'bfp', 'pdrrmo'
+        role TEXT NOT NULL, -- 'admin', 'pnp', 'bfp', 'mdrrmo'
         agency_type TEXT,
         created_at TEXT,
         last_login TEXT

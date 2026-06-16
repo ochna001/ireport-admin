@@ -19,9 +19,10 @@ import {
   Waves,
   X
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getSessionScope, isStationScoped } from '../utils/sessionScope';
 import { parseResourcesCSV, generateResourcesCSVTemplate, downloadFile } from '../utils/exportUtils';
+import { StationDetailView } from './StationDetailView';
 
 // Google Maps API Key from main process
 const GOOGLE_MAPS_API_KEY = 'AIzaSyBuylnOdkYntsIFYVDbsQFemeyqya1TaTc';
@@ -43,7 +44,7 @@ declare namespace google.maps {
     setZoom(zoom: number): void;
     addListener(event: string, handler: (e: MapMouseEvent) => void): void;
   }
-  
+
   // New AdvancedMarkerElement API
   namespace marker {
     class AdvancedMarkerElement {
@@ -53,7 +54,7 @@ declare namespace google.maps {
       gmpDraggable: boolean;
       addListener(event: string, handler: (e?: any) => void): void;
     }
-    
+
     interface AdvancedMarkerOptions {
       position: LatLngLiteral;
       map: Map;
@@ -61,28 +62,28 @@ declare namespace google.maps {
       title?: string;
     }
   }
-  
+
   class Geocoder {
     geocode(request: GeocoderRequest): Promise<GeocoderResponse>;
   }
-  
+
   // New PlaceAutocompleteElement API
   namespace places {
     class PlaceAutocompleteElement extends HTMLElement {
       constructor(options?: PlaceAutocompleteOptions);
     }
-    
+
     interface PlaceAutocompleteOptions {
       componentRestrictions?: { country: string | string[] };
     }
-    
+
     interface PlaceResult {
       displayName?: string;
       formattedAddress?: string;
       location?: LatLng;
     }
   }
-  
+
   interface MapOptions {
     center: LatLngLiteral;
     zoom: number;
@@ -91,29 +92,29 @@ declare namespace google.maps {
     streetViewControl?: boolean;
     fullscreenControl?: boolean;
   }
-  
+
   interface LatLngLiteral {
     lat: number;
     lng: number;
   }
-  
+
   interface LatLng {
     lat(): number;
     lng(): number;
   }
-  
+
   interface MapMouseEvent {
     latLng: LatLng | null;
   }
-  
+
   interface GeocoderRequest {
     location: LatLngLiteral;
   }
-  
+
   interface GeocoderResponse {
     results: GeocoderResult[];
   }
-  
+
   interface GeocoderResult {
     formatted_address: string;
     geometry: {
@@ -151,7 +152,7 @@ interface Resource {
 type TabType = 'agencies' | 'stations' | 'resources';
 
 function Agencies() {
-  const scope = getSessionScope();
+  const scope = useMemo(() => getSessionScope(), []);
   const isAdmin = scope.role === 'Admin';
   const stationScopeActive = isStationScoped(scope);
   // Station-scoped users start on stations tab, admins start on agencies
@@ -162,16 +163,17 @@ function Agencies() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [agencyFilter, setAgencyFilter] = useState('');
-  
+
   // Modal states
   const [showStationModal, setShowStationModal] = useState(false);
   const [showResourceModal, setShowResourceModal] = useState(false);
   const [editingStation, setEditingStation] = useState<Station | null>(null);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  const [detailStation, setDetailStation] = useState<Station | null>(null);
   const [showBatchImportModal, setShowBatchImportModal] = useState(false);
   const [importingResources, setImportingResources] = useState(false);
   const [importPreview, setImportPreview] = useState<any[]>([]);
-  
+
   // Toast notification state
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -209,7 +211,7 @@ function Agencies() {
     switch (shortName) {
       case 'PNP': return <Shield className="w-5 h-5" />;
       case 'BFP': return <Flame className="w-5 h-5" />;
-      case 'PDRRMO': return <Waves className="w-5 h-5" />;
+      case 'MDRRMO': return <Waves className="w-5 h-5" />;
       default: return <Building2 className="w-5 h-5" />;
     }
   };
@@ -218,7 +220,7 @@ function Agencies() {
     switch (shortName) {
       case 'PNP': return 'bg-blue-500';
       case 'BFP': return 'bg-red-500';
-      case 'PDRRMO': return 'bg-teal-500';
+      case 'MDRRMO': return 'bg-teal-500';
       default: return 'bg-gray-500';
     }
   };
@@ -227,7 +229,7 @@ function Agencies() {
     switch (shortName) {
       case 'PNP': return 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800';
       case 'BFP': return 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800';
-      case 'PDRRMO': return 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800';
+      case 'MDRRMO': return 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800';
       default: return 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
     }
   };
@@ -260,7 +262,7 @@ function Agencies() {
 
   const filteredResources = resources.filter(resource => {
     const station = stations.find(s => s.id === resource.station_id);
-    
+
     // Scope filter
     if (!isAdmin) {
       if (scope.stationId && resource.station_id !== scope.stationId) return false;
@@ -306,14 +308,14 @@ function Agencies() {
   const handleDeleteStation = async (id: number) => {
     const station = stations.find(s => s.id === id);
     const stationResources = resources.filter(r => r.station_id === id);
-    
+
     if (stationResources.length > 0) {
       showToast('error', `Cannot delete station with ${stationResources.length} resource(s). Remove resources first.`);
       return;
     }
-    
+
     if (!confirm(`Are you sure you want to delete "${station?.name}"?`)) return;
-    
+
     try {
       await window.api.deleteStation(id);
       showToast('success', 'Station deleted successfully');
@@ -361,7 +363,7 @@ function Agencies() {
   const handleDeleteResource = async (id: number) => {
     const resource = resources.find(r => r.id === id);
     if (!confirm(`Are you sure you want to delete "${resource?.name}"?`)) return;
-    
+
     try {
       await window.api.deleteResource(id);
       showToast('success', 'Resource deleted successfully');
@@ -386,7 +388,7 @@ function Agencies() {
     try {
       const text = await file.text();
       const parsed = await parseResourcesCSV(text);
-      
+
       if (parsed.length === 0) {
         showToast('error', 'No valid resources found in CSV');
         return;
@@ -398,13 +400,13 @@ function Agencies() {
       console.error('Failed to parse CSV:', error);
       showToast('error', 'Failed to parse CSV file. Please check the format.');
     }
-    
+
     event.target.value = '';
   };
 
   const handleBatchImport = async () => {
     if (importPreview.length === 0) return;
-    
+
     if (!agencyFilter) {
       showToast('error', 'Please select an agency filter first');
       return;
@@ -477,15 +479,25 @@ function Agencies() {
     );
   }
 
+  // Show station detail view instead of the list
+  if (detailStation) {
+    return (
+      <StationDetailView
+        station={detailStation}
+        agencies={agencies}
+        onBack={() => setDetailStation(null)}
+      />
+    );
+  }
+
   return (
     <div className="p-6 dark:bg-gray-950 min-h-full">
       {/* Toast Notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg transition-all ${
-          toast.type === 'success' 
-            ? 'bg-green-600 text-white' 
-            : 'bg-red-600 text-white'
-        }`}>
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg transition-all ${toast.type === 'success'
+          ? 'bg-green-600 text-white'
+          : 'bg-red-600 text-white'
+          }`}>
           {toast.type === 'success' ? (
             <CheckCircle className="w-5 h-5" />
           ) : (
@@ -514,7 +526,7 @@ function Agencies() {
             {stationScopeActive ? 'My Station' : 'Agency Management'}
           </h1>
           <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            {stationScopeActive 
+            {stationScopeActive
               ? 'View your station information and resources'
               : 'Manage agencies, stations, and resources'
             }
@@ -534,11 +546,10 @@ function Agencies() {
         {!stationScopeActive && (
           <button
             onClick={() => setActiveTab('agencies')}
-            className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
-              activeTab === 'agencies'
-                ? 'text-blue-600 border-blue-600'
-                : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
-            }`}
+            className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${activeTab === 'agencies'
+              ? 'text-blue-600 border-blue-600'
+              : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
+              }`}
           >
             <div className="flex items-center gap-2">
               <Building2 className="w-4 h-4" />
@@ -548,11 +559,10 @@ function Agencies() {
         )}
         <button
           onClick={() => setActiveTab('stations')}
-          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
-            activeTab === 'stations'
-              ? 'text-blue-600 border-blue-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
-          }`}
+          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${activeTab === 'stations'
+            ? 'text-blue-600 border-blue-600'
+            : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
+            }`}
         >
           <div className="flex items-center gap-2">
             <MapPin className="w-4 h-4" />
@@ -561,11 +571,10 @@ function Agencies() {
         </button>
         <button
           onClick={() => setActiveTab('resources')}
-          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${
-            activeTab === 'resources'
-              ? 'text-blue-600 border-blue-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
-          }`}
+          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${activeTab === 'resources'
+            ? 'text-blue-600 border-blue-600'
+            : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
+            }`}
         >
           <div className="flex items-center gap-2">
             <Truck className="w-4 h-4" />
@@ -580,57 +589,57 @@ function Agencies() {
           {agencies
             .filter(agency => !scope.agencyId || agency.id === scope.agencyId)
             .map((agency) => {
-            const stationCount = stations.filter(s => s.agency_id === agency.id).length;
-            const resourceCount = resources.filter(r => {
-              const station = stations.find(s => s.id === r.station_id);
-              return station?.agency_id === agency.id;
-            }).length;
-            const availableResources = resources.filter(r => {
-              const station = stations.find(s => s.id === r.station_id);
-              return station?.agency_id === agency.id && r.status === 'available';
-            }).length;
+              const stationCount = stations.filter(s => s.agency_id === agency.id).length;
+              const resourceCount = resources.filter(r => {
+                const station = stations.find(s => s.id === r.station_id);
+                return station?.agency_id === agency.id;
+              }).length;
+              const availableResources = resources.filter(r => {
+                const station = stations.find(s => s.id === r.station_id);
+                return station?.agency_id === agency.id && r.status === 'available';
+              }).length;
 
-            return (
-              <div
-                key={agency.id}
-                className={`rounded-xl p-6 border ${getAgencyBgColor(agency.short_name)}`}
-              >
-                <div className="flex items-center gap-4 mb-4">
-                  <div className={`w-12 h-12 rounded-xl ${getAgencyColor(agency.short_name)} flex items-center justify-center text-white`}>
-                    {getAgencyIcon(agency.short_name)}
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-gray-800 dark:text-white">{agency.short_name}</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{agency.name}</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
-                    <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
-                      <MapPin className="w-4 h-4" />
-                      Stations
+              return (
+                <div
+                  key={agency.id}
+                  className={`rounded-xl p-6 border ${getAgencyBgColor(agency.short_name)}`}
+                >
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className={`w-12 h-12 rounded-xl ${getAgencyColor(agency.short_name)} flex items-center justify-center text-white`}>
+                      {getAgencyIcon(agency.short_name)}
                     </div>
-                    <p className="text-2xl font-bold text-gray-800 dark:text-white">{stationCount}</p>
-                  </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
-                    <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
-                      <Truck className="w-4 h-4" />
-                      Resources
+                    <div>
+                      <h3 className="font-bold text-gray-800 dark:text-white">{agency.short_name}</h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{agency.name}</p>
                     </div>
-                    <p className="text-2xl font-bold text-gray-800 dark:text-white">{resourceCount}</p>
                   </div>
-                </div>
 
-                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-500 dark:text-gray-400">Available Resources</span>
-                    <span className="font-medium text-green-600">{availableResources} / {resourceCount}</span>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                      <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                        <MapPin className="w-4 h-4" />
+                        Stations
+                      </div>
+                      <p className="text-2xl font-bold text-gray-800 dark:text-white">{stationCount}</p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                      <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                        <Truck className="w-4 h-4" />
+                        Resources
+                      </div>
+                      <p className="text-2xl font-bold text-gray-800 dark:text-white">{resourceCount}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-500 dark:text-gray-400">Available Resources</span>
+                      <span className="font-medium text-green-600">{availableResources} / {resourceCount}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
         </div>
       )}
 
@@ -693,11 +702,12 @@ function Agencies() {
               filteredStations.map((station) => {
                 const agency = agencies.find(a => a.id === station.agency_id);
                 const stationResources = resources.filter(r => r.station_id === station.id);
-                
+
                 return (
                   <div
                     key={station.id}
-                    className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4"
+                    onClick={() => setDetailStation(station)}
+                    className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 cursor-pointer hover:shadow-md transition-shadow relative"
                   >
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-3">
@@ -710,7 +720,7 @@ function Agencies() {
                         </div>
                       </div>
                       {!stationScopeActive && (
-                        <div className="flex gap-1">
+                        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => handleEditStation(station)}
                             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
@@ -894,7 +904,7 @@ function Agencies() {
                   filteredResources.map((resource) => {
                     const station = stations.find(s => s.id === resource.station_id);
                     const agency = agencies.find(a => a.id === station?.agency_id);
-                    
+
                     return (
                       <tr key={resource.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                         <td className="px-6 py-4">
@@ -1009,7 +1019,7 @@ function StationModal({
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const markerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  
+
   const [formData, setFormData] = useState({
     agency_id: station?.agency_id?.toString() || '',
     name: station?.name || '',
@@ -1018,7 +1028,7 @@ function StationModal({
     latitude: station?.latitude || 0,
     longitude: station?.longitude || 0,
   });
-  
+
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [mapLoading, setMapLoading] = useState(true);
@@ -1167,31 +1177,31 @@ function StationModal({
   // Handle search using Geocoding API (simpler alternative to deprecated Autocomplete)
   const handleSearch = async () => {
     if (!searchQuery.trim() || !window.google?.maps) return;
-    
+
     try {
       const geocoder = new google.maps.Geocoder();
-      const response = await geocoder.geocode({ 
+      const response = await geocoder.geocode({
         address: searchQuery + ', Philippines'
       } as any);
-      
+
       if (response.results[0]) {
         const location = response.results[0].geometry.location;
         const lat = location.lat();
         const lng = location.lng();
-        
+
         if (mapInstanceRef.current && markerRef.current) {
           mapInstanceRef.current.setCenter({ lat, lng });
           mapInstanceRef.current.setZoom(17);
           markerRef.current.position = { lat, lng };
         }
-        
+
         setFormData(prev => ({
           ...prev,
           latitude: lat,
           longitude: lng,
           address: response.results[0].formatted_address
         }));
-        
+
         setErrors(prev => ({ ...prev, location: '' }));
       }
     } catch (err) {
@@ -1248,7 +1258,7 @@ function StationModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validateForm()) {
       return;
     }
@@ -1300,9 +1310,8 @@ function StationModal({
                   setFormData({ ...formData, agency_id: e.target.value });
                   setErrors(prev => ({ ...prev, agency_id: '' }));
                 }}
-                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
-                  errors.agency_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-                }`}
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.agency_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                  }`}
               >
                 <option value="">Select Agency</option>
                 {agencies.map(agency => (
@@ -1327,9 +1336,8 @@ function StationModal({
                   setErrors(prev => ({ ...prev, name: '' }));
                 }}
                 placeholder="e.g., Daet Municipal Police Station"
-                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
-                  errors.name ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-                }`}
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.name ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                  }`}
               />
               {errors.name && (
                 <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
@@ -1349,9 +1357,8 @@ function StationModal({
                   setErrors(prev => ({ ...prev, contact_number: '' }));
                 }}
                 placeholder="+63 XXX XXX XXXX"
-                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
-                  errors.contact_number ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-                }`}
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.contact_number ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                  }`}
               />
               {errors.contact_number && (
                 <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
@@ -1424,9 +1431,8 @@ function StationModal({
                           setErrors(prev => ({ ...prev, location: '' }));
                         }}
                         placeholder="14.1122"
-                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
-                          errors.location ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-                        }`}
+                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.location ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                          }`}
                       />
                     </div>
                     <div>
@@ -1440,9 +1446,8 @@ function StationModal({
                           setErrors(prev => ({ ...prev, location: '' }));
                         }}
                         placeholder="122.9553"
-                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
-                          errors.location ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-                        }`}
+                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.location ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                          }`}
                       />
                     </div>
                   </div>
@@ -1615,7 +1620,7 @@ function ResourceModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validateForm()) {
       return;
     }
@@ -1669,9 +1674,8 @@ function ResourceModal({
                 setFormData({ ...formData, station_id: e.target.value });
                 setErrors(prev => ({ ...prev, station_id: '' }));
               }}
-              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
-                errors.station_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-              }`}
+              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.station_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                }`}
             >
               <option value="">Select Station</option>
               {stations.map(station => {
@@ -1700,9 +1704,8 @@ function ResourceModal({
                 setErrors(prev => ({ ...prev, name: '' }));
               }}
               placeholder="e.g., Patrol Car 01, Fire Truck Alpha"
-              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${
-                errors.name ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-              }`}
+              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.name ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                }`}
             />
             {errors.name && (
               <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
@@ -1752,9 +1755,8 @@ function ResourceModal({
               placeholder="Additional details..."
               rows={3}
               maxLength={500}
-              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white resize-none ${
-                errors.description ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
-              }`}
+              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white resize-none ${errors.description ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                }`}
             />
             {errors.description && (
               <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
@@ -1792,16 +1794,16 @@ function ResourceModal({
   );
 }
 
-function BatchImportModal({ 
-  isOpen, 
-  onClose, 
-  resources, 
-  onImport, 
-  importing 
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
-  resources: any[]; 
+function BatchImportModal({
+  isOpen,
+  onClose,
+  resources,
+  onImport,
+  importing
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  resources: any[];
   onImport: () => void;
   importing: boolean;
 }) {
@@ -1828,7 +1830,7 @@ function BatchImportModal({
 
           <div className="space-y-2">
             {resources.map((resource, index) => (
-              <div 
+              <div
                 key={index}
                 className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
               >
@@ -1879,6 +1881,174 @@ function BatchImportModal({
               </>
             )}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StationDetailsModal({
+  station,
+  agency,
+  resources,
+  getAgencyColor,
+  getAgencyIcon,
+  getStatusColor,
+  onClose
+}: {
+  station: Station;
+  agency?: Agency;
+  resources: Resource[];
+  getAgencyColor: (shortName: string) => string;
+  getAgencyIcon: (shortName: string) => JSX.Element;
+  getStatusColor: (status: string) => string;
+  onClose: () => void;
+}) {
+  const [members, setMembers] = useState<any[]>([]);
+  const [activeIncidents, setActiveIncidents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [usersData, incidentsData] = await Promise.all([
+          window.api.getUsers({ stationId: station.id }),
+          window.api.getIncidents({ limit: 100 })
+        ]);
+        setMembers(usersData.filter((u: any) => u.station_id === station.id || u.role === 'Chief')); // Approximation of members
+        setActiveIncidents(incidentsData.filter((i: any) => i.status !== 'resolved' && i.status !== 'closed' && i.status !== 'fake_report'));
+      } catch (err) {
+        console.error('Failed to load station details', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [station.id]);
+
+  // Derived stats
+  const availableResources = resources.filter(r => r.status === 'available');
+  const deployedResources = resources.filter(r => r.status === 'deployed');
+
+  const busyMemberIds = new Set<string>();
+  activeIncidents.forEach(inc => {
+    if (inc.assigned_officer_id) busyMemberIds.add(inc.assigned_officer_id);
+    if (inc.assigned_officer_ids) {
+      inc.assigned_officer_ids.forEach((id: string) => busyMemberIds.add(id));
+    }
+  });
+
+  const availableMembers = members.filter(m => !busyMemberIds.has(m.id));
+  const busyMembers = members.filter(m => busyMemberIds.has(m.id));
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
+          <div className="flex items-center gap-4">
+            <div className={`w-12 h-12 rounded-xl ${getAgencyColor(agency?.short_name || '')} flex items-center justify-center text-white`}>
+              {getAgencyIcon(agency?.short_name || '')}
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-gray-800 dark:text-white">{station.name}</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{agency?.name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {loading ? (
+            <div className="flex justify-center p-12">
+              <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Quick Stats */}
+              <div className="grid grid-cols-4 gap-4">
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                    <Users className="w-4 h-4" /> Available Officers
+                  </div>
+                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">{availableMembers.length}</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                    <Users className="w-4 h-4" /> Busy Officers
+                  </div>
+                  <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{busyMembers.length}</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                    <Truck className="w-4 h-4" /> Available Resources
+                  </div>
+                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">{availableResources.length}</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                    <Truck className="w-4 h-4" /> Dispatched Resources
+                  </div>
+                  <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{deployedResources.length}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6">
+                {/* Members List */}
+                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 flex flex-col min-h-0">
+                  <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 relative">
+                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                      <Users className="w-4 h-4" /> Station Members ({members.length})
+                    </h3>
+                  </div>
+                  <div className="divide-y divide-gray-100 dark:divide-gray-700 max-h-[400px] overflow-y-auto">
+                    {members.length === 0 ? (
+                      <div className="p-4 text-center text-gray-500 text-sm">No members assigned to this station</div>
+                    ) : (
+                      members.map(member => (
+                        <div key={member.id} className="p-4 flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-gray-800 dark:text-white">{member.display_name || member.email}</span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400">{member.role}</span>
+                          </div>
+                          <span className={`px-2 py-1 text-xs font-bold rounded-full ${busyMemberIds.has(member.id) ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30' : 'bg-green-100 text-green-700 dark:bg-green-900/30'}`}>
+                            {busyMemberIds.has(member.id) ? 'Busy' : 'Available'}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Resources List */}
+                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 flex flex-col min-h-0">
+                  <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 relative">
+                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                      <Truck className="w-4 h-4" /> Station Resources ({resources.length})
+                    </h3>
+                  </div>
+                  <div className="divide-y divide-gray-100 dark:divide-gray-700 max-h-[400px] overflow-y-auto">
+                    {resources.length === 0 ? (
+                      <div className="p-4 text-center text-gray-500 text-sm">No resources assigned to this station</div>
+                    ) : (
+                      resources.map(resource => (
+                        <div key={resource.id} className="p-4 flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-gray-800 dark:text-white">{resource.name}</span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400 capitalize">{resource.type}</span>
+                          </div>
+                          <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${getStatusColor(resource.status)}`}>
+                            {resource.status}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

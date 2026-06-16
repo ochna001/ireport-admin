@@ -108,11 +108,12 @@ export class SyncManager {
     const lastSyncRow = db.prepare("SELECT value FROM sync_meta WHERE key = 'last_pull'").get() as { value: string } | undefined;
     const lastSync = lastSyncRow?.value || '1970-01-01T00:00:00Z';
 
-    // Fetch updated incidents from Supabase
+    // Fetch updated incidents from Supabase (exclude ai_routing fast reports)
     const { data: incidents, error } = await this.supabase
       .from('incidents')
       .select('*')
       .gte('updated_at', lastSync)
+      .neq('status', 'ai_routing')
       .order('updated_at', { ascending: true });
 
     if (error) throw error;
@@ -260,6 +261,9 @@ export class SyncManager {
     
     if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
       const incident = payload.new;
+      
+      // Skip ai_routing fast reports until AI completes triage
+      if (incident.status === 'ai_routing') return;
       
       // Check if we have local changes that are newer
       const local = db.prepare('SELECT updated_at, synced FROM incidents WHERE id = ?').get(incident.id) as { updated_at: string; synced: number } | undefined;

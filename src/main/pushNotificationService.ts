@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { BrowserWindow } from 'electron';
 
 interface PendingNotification {
   id: number;
@@ -25,10 +26,15 @@ export class PushNotificationService {
   private supabaseAnonKey: string;
   private intervalId: NodeJS.Timeout | null = null;
   private isProcessing = false;
+  private mainWindow: BrowserWindow | null = null;
 
   constructor(supabase: SupabaseClient, supabaseAnonKey: string) {
     this.supabase = supabase;
     this.supabaseAnonKey = supabaseAnonKey;
+  }
+
+  setMainWindow(window: BrowserWindow | null) {
+    this.mainWindow = window;
   }
 
   start() {
@@ -39,7 +45,7 @@ export class PushNotificationService {
 
     console.log('[PushService] Starting background push notification service');
     this.intervalId = setInterval(() => this.checkAndSendNotifications(), CHECK_INTERVAL);
-    
+
     // Run immediately on start
     this.checkAndSendNotifications();
   }
@@ -89,8 +95,9 @@ export class PushNotificationService {
 
       for (const notif of pendingNotifications) {
         await this.sendPushForNotification(notif);
+        this.notifyRenderer(notif);
         PROCESSED_NOTIFICATIONS.add(notif.id);
-        
+
         // Clean up old entries to prevent memory leak
         if (PROCESSED_NOTIFICATIONS.size > 1000) {
           const toDelete = Array.from(PROCESSED_NOTIFICATIONS).slice(0, 500);
@@ -107,7 +114,7 @@ export class PushNotificationService {
   private async sendPushForNotification(notif: PendingNotification) {
     try {
       console.log(`[PushService] Processing notification ${notif.id} for recipient ${notif.recipient_id}`);
-      
+
       // Get push tokens for this recipient
       const { data: tokens, error } = await this.supabase
         .from('push_tokens')
@@ -129,12 +136,12 @@ export class PushNotificationService {
       for (const tokenData of tokens as PushToken[]) {
         const platform = tokenData.platform || '';
         const appType = tokenData.app_type || 'responder'; // Default to responder for backward compatibility
-        
+
         // Determine if this is an Expo token or FCM token
         const isExpo = tokenData.token.startsWith('ExponentPushToken');
-        
+
         console.log(`[PushService] Sending to token (platform: ${platform || 'unknown'}, app_type: ${appType}, isExpo: ${isExpo})`);
-        
+
         // Smart detection: if platform is missing, detect from token format
         if (isExpo || platform === 'ios') {
           // Send via Expo
@@ -153,7 +160,7 @@ export class PushNotificationService {
     try {
       const response = await fetch(EDGE_FUNCTION_URL, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.supabaseAnonKey}` // Required for Supabase edge functions
         },
@@ -175,7 +182,7 @@ export class PushNotificationService {
 
       if (!response.ok) {
         console.error('[PushService] FCM push failed:', response.status, responseText);
-        
+
         // Remove stale tokens on SENDER_ID_MISMATCH
         if (responseText.includes('SENDER_ID_MISMATCH')) {
           await this.supabase
@@ -220,6 +227,29 @@ export class PushNotificationService {
       }
     } catch (error) {
       console.error('[PushService] Expo push error:', error);
+    }
+  }
+
+  /**
+   * Send a new-notification IPC event to the renderer window so the
+   * admin UI can update its badge and show a desktop toast in real-time.
+   */
+  private notifyRenderer(notif: PendingNotification) {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
+      return;
+    }
+    try {
+      this.mainWindow.webContents.send('new-notification', {
+        id: notif.id,
+        recipient_id: notif.recipient_id,
+        title: notif.title,
+        body: notif.body,
+        incident_id: notif.incident_id,
+        created_at: notif.created_at,
+      });
+      console.log('[PushService] Sent new-notification IPC for notification:', notif.id);
+    } catch (error) {
+      console.error('[PushService] Failed to send IPC notification:', error);
     }
   }
 }

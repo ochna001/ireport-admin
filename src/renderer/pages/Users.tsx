@@ -1,6 +1,7 @@
 import {
     Building2,
     Calendar,
+    CheckCircle,
     Edit,
     Key,
     Phone,
@@ -11,9 +12,10 @@ import {
     Trash2,
     UserCog,
     UserPlus,
+    AlertCircle,
     X
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getSessionScope, isStationScoped } from '../utils/sessionScope';
 
 interface User {
@@ -31,6 +33,11 @@ interface User {
     name: string;
     short_name: string;
   };
+  agency_stations?: {
+    id: number;
+    name: string;
+    agency_id: number;
+  } | null;
 }
 
 interface Agency {
@@ -98,7 +105,7 @@ interface ValidationErrors {
 }
 
 function Users() {
-  const initialScope = getSessionScope();
+  const initialScope = useMemo(() => getSessionScope(), []);
   const stationScopeActive = isStationScoped(initialScope);
   const [users, setUsers] = useState<User[]>([]);
   const [agencies, setAgencies] = useState<Agency[]>([]);
@@ -133,6 +140,7 @@ function Users() {
   const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [pageMessage, setPageMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [sortConfig, setSortConfig] = useState<{ key: keyof User | 'agency_name'; direction: 'asc' | 'desc' } | null>(null);
 
   // ... existing code ...
@@ -164,6 +172,12 @@ function Users() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!pageMessage) return;
+    const timeout = window.setTimeout(() => setPageMessage(null), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [pageMessage]);
 
   useEffect(() => {
     const debounce = setTimeout(() => {
@@ -286,9 +300,9 @@ function Users() {
       errors.agencyId = 'Agency is required for officers';
     }
 
-    // Validate station for chiefs to support per-station scope
-    if (newUserData.role === 'Chief' && !newUserData.stationId) {
-      errors.stationId = 'Station is required for chiefs';
+    // Validate station for operational accounts
+    if (OFFICER_ROLES.includes(newUserData.role) && !newUserData.stationId) {
+      errors.stationId = 'Station is required for officer accounts';
     }
     
     // Validate phone number if provided
@@ -364,7 +378,7 @@ function Users() {
     if (!selectedUser || !newPassword) return;
     
     if (newPassword.length < 6) {
-      alert('Password must be at least 6 characters');
+      setPageMessage({ type: 'error', text: 'Password must be at least 6 characters' });
       return;
     }
     
@@ -374,10 +388,14 @@ function Users() {
       setShowResetPasswordModal(false);
       setNewPassword('');
       setSelectedUser(null);
-      alert('Password reset successfully');
+      setPageMessage({ type: 'success', text: 'Password reset successfully' });
+      window.setTimeout(() => {
+        window.api.focusWindow?.().catch(() => {});
+        (document.querySelector('input[placeholder="Search by name or email..."]') as HTMLInputElement | null)?.focus();
+      }, 50);
     } catch (error: any) {
       console.error('Failed to reset password:', error);
-      alert(error.message || 'Failed to reset password');
+      setPageMessage({ type: 'error', text: error.message || 'Failed to reset password' });
     } finally {
       setResettingPassword(false);
     }
@@ -400,7 +418,7 @@ function Users() {
         return 'bg-blue-500';
       case 'BFP':
         return 'bg-red-500';
-      case 'PDRRMO':
+      case 'MDRRMO':
         return 'bg-teal-500';
       default:
         return 'bg-gray-400';
@@ -417,6 +435,22 @@ function Users() {
 
   return (
     <div className="p-6 dark:bg-gray-950">
+      {pageMessage && (
+        <div className={`fixed top-4 right-4 z-[60] flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg border ${
+          pageMessage.type === 'success'
+            ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-900/90 dark:border-green-700 dark:text-green-100'
+            : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/90 dark:border-red-700 dark:text-red-100'
+        }`}>
+          {pageMessage.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+          <span className="text-sm font-medium">{pageMessage.text}</span>
+          <button
+            onClick={() => setPageMessage(null)}
+            className="ml-2 rounded hover:bg-black/10 dark:hover:bg-white/10"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -574,6 +608,7 @@ function Users() {
               >
                 Agency {sortConfig?.key === 'agency_name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
               </th>
+              <th className="text-left px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300">Station</th>
               <th className="text-left px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300">Contact</th>
               <th 
                 className="text-left px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
@@ -587,7 +622,7 @@ function Users() {
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
             {sortedUsers.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                <td colSpan={7} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                   No users found
                 </td>
               </tr>
@@ -616,6 +651,13 @@ function Users() {
                         <div className={`w-2 h-2 rounded-full ${getAgencyColor(user.agencies.short_name)}`}></div>
                         <span className="text-gray-700 dark:text-gray-300">{user.agencies.short_name}</span>
                       </div>
+                    ) : (
+                      <span className="text-gray-400 dark:text-gray-500">-</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    {user.agency_stations?.name ? (
+                      <span className="text-sm text-gray-700 dark:text-gray-300">{user.agency_stations.name}</span>
                     ) : (
                       <span className="text-gray-400 dark:text-gray-500">-</span>
                     )}
@@ -798,7 +840,7 @@ function Users() {
 
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                          Station {newUserData.role === 'Chief' && <span className="text-red-500">*</span>}
+                          Station {OFFICER_ROLES.includes(newUserData.role) && <span className="text-red-500">*</span>}
                         </label>
                         <select
                           value={newUserData.stationId || ''}
@@ -826,7 +868,7 @@ function Users() {
                           <p className="mt-1 text-sm text-red-500">{validationErrors.stationId}</p>
                         )}
                         <p className="mt-1 text-xs text-gray-400">
-                          Required for Chiefs; optional for other officers.
+                          Required for officer accounts.
                         </p>
                       </div>
                     </>
@@ -1124,9 +1166,9 @@ function EditUserModal({
     if (['Desk Officer', 'Field Officer', 'Chief'].includes(formData.role) && !formData.agency_id) {
       newErrors.agency_id = 'Agency is required for officers';
     }
-    // For Chief, station is required
-    if (formData.role === 'Chief' && !formData.station_id) {
-      newErrors.station_id = 'Station is required for Chief';
+    // For operational accounts, station is required
+    if (['Desk Officer', 'Field Officer', 'Chief'].includes(formData.role) && !formData.station_id) {
+      newErrors.station_id = 'Station is required for officer accounts';
     }
 
     if (Object.keys(newErrors).length > 0) {
@@ -1217,7 +1259,7 @@ function EditUserModal({
                 errors.station_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
               }`}
             >
-              <option value="">No Station</option>
+              <option value="">Select Station</option>
               {stations
                 .filter(station => !formData.agency_id || station.agency_id.toString() === formData.agency_id)
                 .map(station => (

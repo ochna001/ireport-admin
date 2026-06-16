@@ -10,6 +10,7 @@ interface FinalReportModalProps {
   onReportPublished: () => void;
   onDraftSaved?: () => void;
   latestUnitReport?: any;
+  readOnly?: boolean;
 }
 
 // ============================================
@@ -48,9 +49,9 @@ interface BfpFormData {
 }
 
 // ============================================
-// PDRRMO FORM FIELDS (matches MdrrmoReportFormActivity.java)
+// MDRRMO FORM FIELDS (matches MdrrmoReportFormActivity.java)
 // ============================================
-interface PdrrmoFormData {
+interface MdrrmoFormData {
   natureOfCall: string;
   emergencyType: string;
   areaType: string;
@@ -66,10 +67,10 @@ interface PdrrmoFormData {
   timeHandover: string;
   timeClear: string;
   timeBase: string;
-  patients: PdrrmoPatientEntry[];
+  patients: MdrrmoPatientEntry[];
 }
 
-interface PdrrmoPatientEntry {
+interface MdrrmoPatientEntry {
   id: string;
   // Basic Info
   name: string;
@@ -124,7 +125,7 @@ interface PdrrmoPatientEntry {
   patientNarrative: string;
 }
 
-const createEmptyPdrrmoPatient = (): PdrrmoPatientEntry => ({
+const createEmptyMdrrmoPatient = (): MdrrmoPatientEntry => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   // Basic Info
   name: '',
@@ -179,10 +180,10 @@ const createEmptyPdrrmoPatient = (): PdrrmoPatientEntry => ({
   patientNarrative: ''
 });
 
-const parsePdrrmoPatients = (raw: any): PdrrmoPatientEntry[] => {
+const parseMdrrmoPatients = (raw: any): MdrrmoPatientEntry[] => {
   if (!raw) return [];
   let parsed: any[] = [];
-  
+
   // Handle string input (possibly double-escaped JSON)
   if (typeof raw === 'string') {
     let data = raw;
@@ -193,15 +194,15 @@ const parsePdrrmoPatients = (raw: any): PdrrmoPatientEntry[] => {
         data = JSON.parse(data);
         maxAttempts--;
       } catch (e) {
-        console.warn('Failed to parse PDRRMO patients JSON', e, 'raw:', raw);
+        console.warn('Failed to parse MDRRMO patients JSON', e, 'raw:', raw);
         return [];
       }
     }
-    
+
     if (Array.isArray(data)) {
       parsed = data;
     } else {
-      console.warn('Parsed PDRRMO patients is not an array:', data);
+      console.warn('Parsed MDRRMO patients is not an array:', data);
       return [];
     }
   } else if (Array.isArray(raw)) {
@@ -209,11 +210,11 @@ const parsePdrrmoPatients = (raw: any): PdrrmoPatientEntry[] => {
   } else if (raw?.patients && Array.isArray(raw.patients)) {
     parsed = raw.patients;
   } else {
-    console.warn('Unknown PDRRMO patients format:', raw);
+    console.warn('Unknown MDRRMO patients format:', raw);
     return [];
   }
-  
-  console.log('Parsed PDRRMO patients:', parsed);
+
+  console.log('Parsed MDRRMO patients:', parsed);
 
   // Helper to extract vital value from nested object with t1/t2/t3 structure
   const extractVital = (vitalObj: any): string => {
@@ -330,7 +331,7 @@ const defaultBfpForm: BfpFormData = {
   estimatedDamage: ''
 };
 
-const buildDefaultPdrrmoForm = (): PdrrmoFormData => ({
+const buildDefaultMdrrmoForm = (): MdrrmoFormData => ({
   natureOfCall: '',
   emergencyType: '',
   areaType: '',
@@ -349,7 +350,7 @@ const buildDefaultPdrrmoForm = (): PdrrmoFormData => ({
   patients: []
 });
 
-const defaultPdrrmoForm = buildDefaultPdrrmoForm();
+const defaultMdrrmoForm = buildDefaultMdrrmoForm();
 
 const defaultMdrrmoDisasterForm: MdrrmoDisasterFormData = {
   disasterType: '',
@@ -365,7 +366,7 @@ const defaultMdrrmoDisasterForm: MdrrmoDisasterFormData = {
   narrative: ''
 };
 
-export function FinalReportModal({ isOpen, onClose, incident, existingFinalReport, onReportPublished, onDraftSaved, latestUnitReport }: FinalReportModalProps) {
+export function FinalReportModal({ isOpen, onClose, incident, existingFinalReport, onReportPublished, onDraftSaved, latestUnitReport, readOnly }: FinalReportModalProps) {
   const [activeTab, setActiveTab] = useState<'draft' | 'published'>('draft');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -373,15 +374,15 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
   const [draftStatus, setDraftStatus] = useState<'draft' | 'ready_for_review'>('draft');
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saveError, setSaveError] = useState<string | null>(null);
-  
+
   // Agency-specific form data
   const [pnpForm, setPnpForm] = useState<PnpFormData>({ ...defaultPnpForm });
   const [bfpForm, setBfpForm] = useState<BfpFormData>({ ...defaultBfpForm });
-  const [pdrrmoForm, setPdrrmoForm] = useState<PdrrmoFormData>(buildDefaultPdrrmoForm());
+  const [mdrrmoForm, setMdrrmoForm] = useState<MdrrmoFormData>(buildDefaultMdrrmoForm());
   const [mdrrmoDisasterForm, setMdrrmoDisasterForm] = useState<MdrrmoDisasterFormData>({ ...defaultMdrrmoDisasterForm });
-  
-  // For PDRRMO, we can have either "Emergency" or "Disaster" report types
-  const [pdrrmoReportType, setPdrrmoReportType] = useState<'emergency' | 'disaster'>('emergency');
+
+  // For MDRRMO, we can have either "Emergency" or "Disaster" report types
+  const [mdrrmoReportType, setMdrrmoReportType] = useState<'emergency' | 'disaster'>('emergency');
 
   const agencyType = incident?.agency_type?.toLowerCase() || 'pnp';
 
@@ -396,9 +397,9 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     if (incident?.location_address) {
       if (agencyType === 'bfp') {
         setBfpForm(prev => ({ ...prev, fireLocation: prev.fireLocation || incident.location_address }));
-      } else if (agencyType === 'pdrrmo') {
+      } else if (agencyType === 'mdrrmo') {
         // Pre-fill both forms just in case
-        setPdrrmoForm(prev => ({ ...prev, incidentLocation: prev.incidentLocation || incident.location_address }));
+        setMdrrmoForm(prev => ({ ...prev, incidentLocation: prev.incidentLocation || incident.location_address }));
         setMdrrmoDisasterForm(prev => ({ ...prev, affectedArea: prev.affectedArea || incident.location_address }));
       } else if (agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') {
         setMdrrmoDisasterForm(prev => ({ ...prev, affectedArea: prev.affectedArea || incident.location_address }));
@@ -412,14 +413,14 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     setSaveError(null);
     try {
       const draftData = await window.api.getFinalReportDraft(incident.id);
-      
+
       if (draftData) {
         setDraft(draftData);
         setDraftStatus(draftData.status as any);
         let details = draftData.draft_details;
-        
-        // For PDRRMO, if draft doesn't have patients but unit report does, merge them
-        if (agencyType === 'pdrrmo' && latestUnitReport?.details) {
+
+        // For MDRRMO, if draft doesn't have patients but unit report does, merge them
+        if (agencyType === 'mdrrmo' && latestUnitReport?.details) {
           let unitDetails = latestUnitReport.details;
           if (typeof unitDetails === 'string') {
             try {
@@ -429,13 +430,13 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
               unitDetails = null;
             }
           }
-          
+
           // If draft has no patients (or empty array) but unit report does, use unit report's patients
-          const draftHasPatients = details.patients?.length > 0 || details.patients_data?.length > 0 || 
+          const draftHasPatients = details.patients?.length > 0 || details.patients_data?.length > 0 ||
             (typeof details.patients === 'string' && details.patients.length > 2) ||
             (typeof details.patients_data === 'string' && details.patients_data.length > 2);
           const unitHasPatients = unitDetails?.patients || unitDetails?.patients_data;
-          
+
           if (unitDetails && !draftHasPatients && unitHasPatients) {
             console.log('Merging patients from unit report into draft');
             details = {
@@ -445,15 +446,15 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
             };
           }
         }
-        
+
         populateFormFromDetails(details);
-        
-        // Auto-detect report type for PDRRMO based on fields present
-        if (agencyType === 'pdrrmo') {
+
+        // Auto-detect report type for MDRRMO based on fields present
+        if (agencyType === 'mdrrmo') {
           if (details.disaster_type || details.disasterType) {
-            setPdrrmoReportType('disaster');
+            setMdrrmoReportType('disaster');
           } else {
-            setPdrrmoReportType('emergency');
+            setMdrrmoReportType('emergency');
           }
         }
       } else {
@@ -461,10 +462,10 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         if (existingFinalReport) {
           const details = existingFinalReport.report_details;
           populateFormFromDetails(details);
-          
-          if (agencyType === 'pdrrmo') {
+
+          if (agencyType === 'mdrrmo') {
             if (details.disaster_type || details.disasterType) {
-              setPdrrmoReportType('disaster');
+              setMdrrmoReportType('disaster');
             }
           }
         } else if (latestUnitReport && latestUnitReport.details) {
@@ -478,16 +479,16 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
               details = { narrative: latestUnitReport.details }; // Fallback
             }
           }
-          
+
           console.log('Pre-filling from unit report:', details);
           populateFormFromDetails(details);
-          
-          // Auto-detect report type for PDRRMO based on unit report fields
-          if (agencyType === 'pdrrmo') {
+
+          // Auto-detect report type for MDRRMO based on unit report fields
+          if (agencyType === 'mdrrmo') {
             if (details.disaster_type || details.disasterType) {
-              setPdrrmoReportType('disaster');
+              setMdrrmoReportType('disaster');
             } else {
-              setPdrrmoReportType('emergency');
+              setMdrrmoReportType('emergency');
             }
           }
         }
@@ -502,7 +503,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
   // Helper to parse person data from various formats (JSON array, semicolon-separated string, or simple name)
   const parsePersonList = (data: any): PersonEntry[] => {
     if (!data) return [];
-    
+
     // If already an array
     if (Array.isArray(data)) {
       return data.map((p: any) => ({
@@ -514,12 +515,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         status: p.status || ''
       }));
     }
-    
+
     // If it's a string
     if (typeof data === 'string') {
       const trimmed = data.trim();
       if (!trimmed) return [];
-      
+
       // Try JSON parse first
       if (trimmed.startsWith('[')) {
         try {
@@ -529,7 +530,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           console.warn('Failed to parse as JSON:', e);
         }
       }
-      
+
       // Handle semicolon-separated names (e.g., "Walter White; John Doe;")
       const names = trimmed.split(';').map(n => n.trim()).filter(n => n.length > 0);
       return names.map(name => {
@@ -544,32 +545,32 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         };
       });
     }
-    
+
     return [];
   };
 
   const populateFormFromDetails = (details: any) => {
     if (!details) return;
-    
+
     if (agencyType === 'pnp') {
       // Parse suspects/victims from stored format
       console.log('PNP details:', details);
       console.log('PNP suspects raw:', details.suspects_data, details.suspects);
       console.log('PNP victims raw:', details.victims_data, details.victims);
-      
+
       const parseSuspects = parsePersonList(details.suspects_data || details.suspects);
       const parseVictims = parsePersonList(details.victims_data || details.victims);
-      
+
       console.log('PNP suspects parsed:', parseSuspects);
       console.log('PNP victims parsed:', parseVictims);
-      
+
       setPnpForm({
         narrative: details.narrative || '',
-        suspects: Array.isArray(parseSuspects) && parseSuspects.length > 0 
-          ? parseSuspects 
+        suspects: Array.isArray(parseSuspects) && parseSuspects.length > 0
+          ? parseSuspects
           : [{ ...emptyPerson }],
-        victims: Array.isArray(parseVictims) && parseVictims.length > 0 
-          ? parseVictims 
+        victims: Array.isArray(parseVictims) && parseVictims.length > 0
+          ? parseVictims
           : [{ ...emptyPerson }],
         evidenceCount: parseInt(details.evidence_count || '0') || 0,
         caseNumber: details.caseNumber || details.case_number || ''
@@ -583,12 +584,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         victimsCount: parseInt(details.victims_count || details.number_of_victims || details.casualties_count || details.people_injured || '0') || 0,
         estimatedDamage: details.estimatedDamage || details.estimated_damage || ''
       });
-    } else if (agencyType === 'pdrrmo') {
-      console.log('PDRRMO details:', details);
-      console.log('PDRRMO patients raw:', details.patients, 'patients_data:', details.patients_data);
-      const patients = parsePdrrmoPatients(details.patients || details.patients_data);
-      console.log('PDRRMO patients parsed:', patients);
-      setPdrrmoForm({
+    } else if (agencyType === 'mdrrmo') {
+      console.log('MDRRMO details:', details);
+      console.log('MDRRMO patients raw:', details.patients, 'patients_data:', details.patients_data);
+      const patients = parseMdrrmoPatients(details.patients || details.patients_data);
+      console.log('MDRRMO patients parsed:', patients);
+      setMdrrmoForm({
         natureOfCall: details.natureOfCall || details.nature_of_call || '',
         emergencyType: details.emergencyType || details.emergency_type || '',
         areaType: details.areaType || details.area_type || '',
@@ -629,7 +630,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
   // ============================================
   const validateForm = (): boolean => {
     const newErrors: ValidationErrors = {};
-    
+
     if (agencyType === 'pnp') {
       if (!pnpForm.narrative.trim()) {
         newErrors.narrative = 'Incident narrative is required';
@@ -643,12 +644,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       if (!bfpForm.classOfFire) {
         newErrors.classOfFire = 'Class of fire is required';
       }
-    } else if (agencyType === 'pdrrmo') {
-      if (pdrrmoReportType === 'emergency') {
-        if (!pdrrmoForm.incidentLocation.trim()) {
+    } else if (agencyType === 'mdrrmo') {
+      if (mdrrmoReportType === 'emergency') {
+        if (!mdrrmoForm.incidentLocation.trim()) {
           newErrors.incidentLocation = 'Incident location is required';
         }
-        if (!pdrrmoForm.natureOfCall) {
+        if (!mdrrmoForm.natureOfCall) {
           newErrors.natureOfCall = 'Nature of call is required';
         }
       } else {
@@ -680,14 +681,14 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         newErrors.narrative = 'Narrative report is required';
       }
     }
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const getFormDetails = (): any => {
     const timestamp = new Date().toISOString();
-    
+
     // Helper to get media URLs safely
     const getMediaUrls = () => {
       if (!incident?.media_urls) return [];
@@ -700,12 +701,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     };
 
     const mediaUrls = getMediaUrls();
-    
+
     if (agencyType === 'pnp') {
       // Filter out empty person entries
       const validSuspects = pnpForm.suspects.filter(s => s.firstName || s.lastName);
       const validVictims = pnpForm.victims.filter(v => v.firstName || v.lastName);
-      
+
       return {
         narrative: pnpForm.narrative,
         suspects_data: pnpForm.suspects,
@@ -730,36 +731,36 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         media_urls: mediaUrls,
         timestamp
       };
-    } else if (agencyType === 'pdrrmo') {
-      if (pdrrmoReportType === 'emergency') {
+    } else if (agencyType === 'mdrrmo') {
+      if (mdrrmoReportType === 'emergency') {
         return {
-          natureOfCall: pdrrmoForm.natureOfCall,
-          emergencyType: pdrrmoForm.emergencyType,
-          areaType: pdrrmoForm.areaType,
-          incidentLocation: pdrrmoForm.incidentLocation,
-          narrative: pdrrmoForm.narrative,
-          facilityType: pdrrmoForm.facilityType,
-          facilityName: pdrrmoForm.facilityName,
-          time_call: pdrrmoForm.timeCall,
-          time_dispatch: pdrrmoForm.timeDispatch,
-          time_scene: pdrrmoForm.timeScene,
-          time_depart: pdrrmoForm.timeDeparture,
-          time_facility: pdrrmoForm.timeFacility,
-          time_handover: pdrrmoForm.timeHandover,
-          time_clear: pdrrmoForm.timeClear,
-          time_base: pdrrmoForm.timeBase,
-          patients_count: pdrrmoForm.patients.length.toString(),
-          patients: pdrrmoForm.patients,
-          patients_data: pdrrmoForm.patients,
+          natureOfCall: mdrrmoForm.natureOfCall,
+          emergencyType: mdrrmoForm.emergencyType,
+          areaType: mdrrmoForm.areaType,
+          incidentLocation: mdrrmoForm.incidentLocation,
+          narrative: mdrrmoForm.narrative,
+          facilityType: mdrrmoForm.facilityType,
+          facilityName: mdrrmoForm.facilityName,
+          time_call: mdrrmoForm.timeCall,
+          time_dispatch: mdrrmoForm.timeDispatch,
+          time_scene: mdrrmoForm.timeScene,
+          time_depart: mdrrmoForm.timeDeparture,
+          time_facility: mdrrmoForm.timeFacility,
+          time_handover: mdrrmoForm.timeHandover,
+          time_clear: mdrrmoForm.timeClear,
+          time_base: mdrrmoForm.timeBase,
+          patients_count: mdrrmoForm.patients.length.toString(),
+          patients: mdrrmoForm.patients,
+          patients_data: mdrrmoForm.patients,
           media_urls: mediaUrls,
           timestamp
         };
       } else {
-        // PDRRMO Disaster Report
-        const finalDisasterType = mdrrmoDisasterForm.disasterType === 'Other' 
-          ? mdrrmoDisasterForm.disasterTypeOther 
+        // MDRRMO Disaster Report
+        const finalDisasterType = mdrrmoDisasterForm.disasterType === 'Other'
+          ? mdrrmoDisasterForm.disasterTypeOther
           : mdrrmoDisasterForm.disasterType;
-        
+
         const totalCasualties = mdrrmoDisasterForm.casualtiesDead + mdrrmoDisasterForm.casualtiesInjured + mdrrmoDisasterForm.casualtiesMissing;
         return {
           report_type: 'DISASTER',
@@ -780,10 +781,10 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       }
     } else if (agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') {
       // mdrrmo_disaster or mdrrmo
-      const finalDisasterType = mdrrmoDisasterForm.disasterType === 'Other' 
-        ? mdrrmoDisasterForm.disasterTypeOther 
+      const finalDisasterType = mdrrmoDisasterForm.disasterType === 'Other'
+        ? mdrrmoDisasterForm.disasterTypeOther
         : mdrrmoDisasterForm.disasterType;
-      
+
       const totalCasualties = mdrrmoDisasterForm.casualtiesDead + mdrrmoDisasterForm.casualtiesInjured + mdrrmoDisasterForm.casualtiesMissing;
       return {
         report_type: 'DISASTER',
@@ -802,7 +803,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         timestamp
       };
     }
-    
+
     // Fallback - should not reach here
     return {
       narrative: '',
@@ -813,13 +814,13 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
 
   const handleSaveDraft = async (status: 'draft' | 'ready_for_review' = 'draft') => {
     setSaveError(null);
-    
+
     // Validate only when submitting for review
     if (status === 'ready_for_review' && !validateForm()) {
       setSaveError('Please fix the validation errors before submitting');
       return;
     }
-    
+
     setSaving(true);
     try {
       const scope = getSessionScope();
@@ -843,18 +844,18 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
 
   const handlePublish = async () => {
     setSaveError(null);
-    
+
     if (!validateForm()) {
       setSaveError('Please fix the validation errors before publishing');
       return;
     }
-    
+
     if (!confirm('Publish this final report? This will finalize the incident.')) return;
-    
+
     setSaving(true);
     try {
       const scope = getSessionScope();
-      
+
       // Save draft first if not exists
       if (!draft) {
         await window.api.saveFinalReportDraft({
@@ -865,12 +866,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           authorId: scope.userId || undefined
         });
       }
-      
+
       await window.api.promoteFinalReportDraft({
         incidentId: incident.id,
         authorId: scope.userId || undefined
       });
-      
+
       onReportPublished();
       onClose();
     } catch (error: any) {
@@ -882,13 +883,13 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
 
   const handleDeleteDraft = async () => {
     if (!confirm('Delete this draft? This cannot be undone.')) return;
-    
+
     try {
       await window.api.deleteFinalReportDraft(incident.id);
       setDraft(null);
       setPnpForm({ ...defaultPnpForm });
       setBfpForm({ ...defaultBfpForm });
-      setPdrrmoForm({ ...defaultPdrrmoForm });
+      setMdrrmoForm({ ...defaultMdrrmoForm });
       setMdrrmoDisasterForm({ ...defaultMdrrmoDisasterForm });
       if (onDraftSaved) onDraftSaved();
     } catch (error: any) {
@@ -900,7 +901,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     switch (agencyType) {
       case 'pnp': return <Shield className="text-blue-600" size={24} />;
       case 'bfp': return <Flame className="text-red-600" size={24} />;
-      case 'pdrrmo': return <Waves className="text-cyan-600" size={24} />;
+      case 'mdrrmo': return <Waves className="text-cyan-600" size={24} />;
       default: return <FileText size={24} />;
     }
   };
@@ -909,7 +910,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     switch (agencyType) {
       case 'pnp': return 'blue';
       case 'bfp': return 'red';
-      case 'pdrrmo': return 'cyan';
+      case 'mdrrmo': return 'cyan';
       default: return 'gray';
     }
   };
@@ -917,14 +918,14 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
   // Format details for display
   const formatReportDetails = (details: any) => {
     if (!details) return null;
-    
+
     const entries = Object.entries(details).filter(([key, value]) => {
       // Skip internal fields and empty values
       if (key === 'timestamp' || key.endsWith('_data')) return false;
       if (value === '' || value === '0' || value === null || value === undefined) return false;
       return true;
     });
-    
+
     return entries;
   };
 
@@ -988,11 +989,10 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4" style={{ isolation: 'isolate' }}>
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden relative z-10">
         {/* Header */}
-        <div className={`p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between rounded-t-xl bg-gradient-to-r ${
-          color === 'blue' ? 'from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/20' :
+        <div className={`p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between rounded-t-xl bg-gradient-to-r ${color === 'blue' ? 'from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/20' :
           color === 'red' ? 'from-red-50 to-red-100 dark:from-red-900/30 dark:to-red-800/20' :
-          'from-cyan-50 to-cyan-100 dark:from-cyan-900/30 dark:to-cyan-800/20'
-        }`}>
+            'from-cyan-50 to-cyan-100 dark:from-cyan-900/30 dark:to-cyan-800/20'
+          }`}>
           <div className="flex items-center gap-3">
             {getAgencyIcon()}
             <div>
@@ -1013,34 +1013,31 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         <div className="flex border-b border-gray-200 dark:border-gray-700">
           <button
             onClick={() => setActiveTab('draft')}
-            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
-              activeTab === 'draft'
-                ? `text-${color}-600 border-b-2 border-${color}-600 bg-${color}-50/50 dark:bg-${color}-900/10`
-                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-            }`}
+            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'draft'
+              ? `text-${color}-600 border-b-2 border-${color}-600 bg-${color}-50/50 dark:bg-${color}-900/10`
+              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+              }`}
           >
             <Edit3 size={16} />
-            Draft 
+            Draft
             {draft && (
-              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                draftStatus === 'ready_for_review' 
-                  ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' 
-                  : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-              }`}>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${draftStatus === 'ready_for_review'
+                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+                : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                }`}>
                 {draftStatus === 'ready_for_review' ? 'Ready' : 'In Progress'}
               </span>
             )}
           </button>
           <button
             onClick={() => setActiveTab('published')}
-            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
-              activeTab === 'published'
-                ? `text-${color}-600 border-b-2 border-${color}-600 bg-${color}-50/50 dark:bg-${color}-900/10`
-                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-            }`}
+            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'published'
+              ? `text-${color}-600 border-b-2 border-${color}-600 bg-${color}-50/50 dark:bg-${color}-900/10`
+              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+              }`}
           >
             <FileText size={16} />
-            Published 
+            Published
             {existingFinalReport && (
               <span className="text-xs bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 px-2 py-0.5 rounded-full">
                 Final
@@ -1100,47 +1097,42 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
               </div>
 
               {/* Agency-specific form */}
-              {agencyType === 'pnp' && (
-                <PnpForm form={pnpForm} setForm={setPnpForm} errors={errors} setErrors={setErrors} />
-              )}
-              {agencyType === 'bfp' && (
-                <BfpForm form={bfpForm} setForm={setBfpForm} errors={errors} setErrors={setErrors} />
-              )}
-              {agencyType === 'pdrrmo' && (
+              {agencyType === 'pnp' ? (
+                <PnpForm form={pnpForm} setForm={setPnpForm} errors={errors} setErrors={setErrors} readOnly={readOnly} />
+              ) : agencyType === 'bfp' ? (
+                <BfpForm form={bfpForm} setForm={setBfpForm} errors={errors} setErrors={setErrors} readOnly={readOnly} />
+              ) : agencyType === 'mdrrmo' ? (
                 <div className="space-y-4">
-                  {/* Report Type Selector */}
+                  {/* MDRRMO specific sub-tabs */}
                   <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
                     <button
-                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                        pdrrmoReportType === 'emergency'
-                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-                      }`}
-                      onClick={() => setPdrrmoReportType('emergency')}
+                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${mdrrmoReportType === 'emergency'
+                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                        : 'text-gray-500 dark:bg-gray-800 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                        }`}
+                      onClick={() => setMdrrmoReportType('emergency')}
                     >
                       Emergency Report
                     </button>
                     <button
-                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                        pdrrmoReportType === 'disaster'
-                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-                      }`}
-                      onClick={() => setPdrrmoReportType('disaster')}
+                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${mdrrmoReportType === 'disaster'
+                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                        : 'text-gray-500 dark:bg-gray-800 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                        }`}
+                      onClick={() => setMdrrmoReportType('disaster')}
                     >
                       Disaster Report
                     </button>
                   </div>
 
-                  {pdrrmoReportType === 'emergency' ? (
-                    <PdrrmoForm form={pdrrmoForm} setForm={setPdrrmoForm} errors={errors} setErrors={setErrors} />
+                  {mdrrmoReportType === 'emergency' ? (
+                    <MdrrmoForm form={mdrrmoForm} setForm={setMdrrmoForm} errors={errors} setErrors={setErrors} readOnly={readOnly} />
                   ) : (
-                    <MdrrmoDisasterForm form={mdrrmoDisasterForm} setForm={setMdrrmoDisasterForm} errors={errors} setErrors={setErrors} />
+                    <MdrrmoDisasterForm form={mdrrmoDisasterForm} setForm={setMdrrmoDisasterForm} errors={errors} setErrors={setErrors} readOnly={readOnly} />
                   )}
                 </div>
-              )}
-              {(agencyType === 'mdrrmo_disaster' || agencyType === 'mdrrmo') && (
-                <MdrrmoDisasterForm form={mdrrmoDisasterForm} setForm={setMdrrmoDisasterForm} errors={errors} setErrors={setErrors} />
+              ) : (
+                <PnpForm form={pnpForm} setForm={setPnpForm} errors={errors} setErrors={setErrors} readOnly={readOnly} />
               )}
             </div>
           ) : (
@@ -1151,7 +1143,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
                     <Check className="text-green-600" size={20} />
                     <span className="font-semibold text-green-800 dark:text-green-200">Published Final Report</span>
                   </div>
-                  
+
                   {/* Formatted display */}
                   <div className="space-y-3">
                     {formatReportDetails(existingFinalReport.report_details)?.map(([key, value]) => (
@@ -1163,7 +1155,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
                       </div>
                     ))}
                   </div>
-                  
+
                   <p className="text-xs text-gray-500 mt-4 pt-3 border-t border-green-200 dark:border-green-800">
                     Completed at: {new Date(existingFinalReport.completed_at).toLocaleString()}
                   </p>
@@ -1194,34 +1186,43 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
               )}
             </div>
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => handleSaveDraft('draft')}
-                disabled={saving}
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
-              >
-                <Save size={16} />
-                {saving ? 'Saving...' : 'Save Draft'}
-              </button>
-              <button
-                onClick={() => handleSaveDraft('ready_for_review')}
-                disabled={saving}
-                className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
-              >
-                <Send size={16} />
-                Submit for Review
-              </button>
-              <button
-                onClick={handlePublish}
-                disabled={saving}
-                className={`px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors text-white ${
-                  color === 'blue' ? 'bg-blue-600 hover:bg-blue-700' :
-                  color === 'red' ? 'bg-red-600 hover:bg-red-700' :
-                  'bg-cyan-600 hover:bg-cyan-700'
-                }`}
-              >
-                <Check size={16} />
-                Publish Final Report
-              </button>
+              {!readOnly && (
+                <>
+                  <button
+                    onClick={() => handleSaveDraft('draft')}
+                    disabled={saving}
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
+                  >
+                    <Save size={16} />
+                    {saving ? 'Saving...' : 'Save Draft'}
+                  </button>
+                  <button
+                    onClick={() => handleSaveDraft('ready_for_review')}
+                    disabled={saving}
+                    className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
+                  >
+                    <Send size={16} />
+                    Submit for Review
+                  </button>
+                  <button
+                    onClick={handlePublish}
+                    disabled={saving}
+                    className={`px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors text-white ${color === 'blue' ? 'bg-blue-600 hover:bg-blue-700' :
+                      color === 'red' ? 'bg-red-600 hover:bg-red-700' :
+                        'bg-cyan-600 hover:bg-cyan-700'
+                      }`}
+                  >
+                    <Check size={16} />
+                    Publish Final Report
+                  </button>
+                </>
+              )}
+              {readOnly && (
+                <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-lg flex items-center gap-2 italic">
+                  <Shield size={16} />
+                  Report is Locked (Incident Closed/Resolved)
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1233,11 +1234,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
 // ============================================
 // PNP FORM COMPONENT (matches PnpReportFormActivity.java)
 // ============================================
-function PnpForm({ form, setForm, errors, setErrors }: { 
-  form: PnpFormData; 
+function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
+  form: PnpFormData;
   setForm: React.Dispatch<React.SetStateAction<PnpFormData>>;
   errors: ValidationErrors;
   setErrors: React.Dispatch<React.SetStateAction<ValidationErrors>>;
+  readOnly?: boolean;
 }) {
   const addPerson = (type: 'suspects' | 'victims') => {
     setForm(prev => ({
@@ -1271,6 +1273,7 @@ function PnpForm({ form, setForm, errors, setErrors }: {
           type="text"
           value={form.caseNumber}
           onChange={(e) => setForm(prev => ({ ...prev, caseNumber: e.target.value }))}
+          disabled={readOnly}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           placeholder="e.g., 2024-001234"
         />
@@ -1287,10 +1290,10 @@ function PnpForm({ form, setForm, errors, setErrors }: {
             setForm(prev => ({ ...prev, narrative: e.target.value }));
             if (errors.narrative) setErrors(prev => ({ ...prev, narrative: '' }));
           }}
+          disabled={readOnly}
           rows={5}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-            errors.narrative ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-          }`}
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent ${errors.narrative ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            }`}
           placeholder="Provide a detailed narrative of the incident, including what happened, when, and how..."
         />
         {errors.narrative && (
@@ -1308,13 +1311,15 @@ function PnpForm({ form, setForm, errors, setErrors }: {
             <User size={18} className="text-red-500" />
             Suspects ({form.suspects.filter(s => s.firstName || s.lastName).length})
           </h3>
-          <button
-            type="button"
-            onClick={() => addPerson('suspects')}
-            className="px-3 py-1 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 rounded-lg text-sm flex items-center gap-1 transition-colors"
-          >
-            <Plus size={14} /> Add Suspect
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => addPerson('suspects')}
+              className="px-3 py-1 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 rounded-lg text-sm flex items-center gap-1 transition-colors"
+            >
+              <Plus size={14} /> Add Suspect
+            </button>
+          )}
         </div>
         <div className="space-y-4">
           {form.suspects.map((suspect, index) => (
@@ -1325,7 +1330,8 @@ function PnpForm({ form, setForm, errors, setErrors }: {
               type="Suspect"
               onUpdate={(field, value) => updatePerson('suspects', index, field, value)}
               onRemove={() => removePerson('suspects', index)}
-              canRemove={form.suspects.length > 1}
+              canRemove={!readOnly && form.suspects.length > 1}
+              readOnly={readOnly}
             />
           ))}
         </div>
@@ -1338,13 +1344,15 @@ function PnpForm({ form, setForm, errors, setErrors }: {
             <User size={18} className="text-blue-500" />
             Victims ({form.victims.filter(v => v.firstName || v.lastName).length})
           </h3>
-          <button
-            type="button"
-            onClick={() => addPerson('victims')}
-            className="px-3 py-1 bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded-lg text-sm flex items-center gap-1 transition-colors"
-          >
-            <Plus size={14} /> Add Victim
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => addPerson('victims')}
+              className="px-3 py-1 bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded-lg text-sm flex items-center gap-1 transition-colors"
+            >
+              <Plus size={14} /> Add Victim
+            </button>
+          )}
         </div>
         <div className="space-y-4">
           {form.victims.map((victim, index) => (
@@ -1355,7 +1363,8 @@ function PnpForm({ form, setForm, errors, setErrors }: {
               type="Victim"
               onUpdate={(field, value) => updatePerson('victims', index, field, value)}
               onRemove={() => removePerson('victims', index)}
-              canRemove={form.victims.length > 1}
+              canRemove={!readOnly && form.victims.length > 1}
+              readOnly={readOnly}
             />
           ))}
         </div>
@@ -1372,6 +1381,7 @@ function PnpForm({ form, setForm, errors, setErrors }: {
             min="0"
             value={form.evidenceCount}
             onChange={(e) => setForm(prev => ({ ...prev, evidenceCount: parseInt(e.target.value) || 0 }))}
+            disabled={readOnly}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         </div>
@@ -1381,13 +1391,14 @@ function PnpForm({ form, setForm, errors, setErrors }: {
 }
 
 // Person Card Component (for suspects/victims)
-function PersonCard({ person, index, type, onUpdate, onRemove, canRemove }: {
+function PersonCard({ person, index, type, onUpdate, onRemove, canRemove, readOnly }: {
   person: PersonEntry;
   index: number;
   type: string;
   onUpdate: (field: keyof PersonEntry, value: string) => void;
   onRemove: () => void;
   canRemove: boolean;
+  readOnly?: boolean;
 }) {
   return (
     <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
@@ -1408,6 +1419,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove }: {
           type="text"
           value={person.firstName}
           onChange={(e) => onUpdate('firstName', e.target.value)}
+          disabled={readOnly}
           placeholder="First Name"
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
@@ -1415,6 +1427,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove }: {
           type="text"
           value={person.middleName}
           onChange={(e) => onUpdate('middleName', e.target.value)}
+          disabled={readOnly}
           placeholder="Middle Name"
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
@@ -1422,6 +1435,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove }: {
           type="text"
           value={person.lastName}
           onChange={(e) => onUpdate('lastName', e.target.value)}
+          disabled={readOnly}
           placeholder="Last Name"
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
@@ -1429,6 +1443,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove }: {
           type="text"
           value={person.address}
           onChange={(e) => onUpdate('address', e.target.value)}
+          disabled={readOnly}
           placeholder="Address"
           className="col-span-2 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
@@ -1436,6 +1451,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove }: {
           type="text"
           value={person.occupation}
           onChange={(e) => onUpdate('occupation', e.target.value)}
+          disabled={readOnly}
           placeholder="Occupation"
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
@@ -1447,11 +1463,12 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove }: {
 // ============================================
 // BFP FORM COMPONENT (matches BfpReportFormActivity.java)
 // ============================================
-function BfpForm({ form, setForm, errors, setErrors }: { 
-  form: BfpFormData; 
+function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
+  form: BfpFormData;
   setForm: React.Dispatch<React.SetStateAction<BfpFormData>>;
   errors: ValidationErrors;
   setErrors: React.Dispatch<React.SetStateAction<ValidationErrors>>;
+  readOnly?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -1467,9 +1484,9 @@ function BfpForm({ form, setForm, errors, setErrors }: {
             setForm(prev => ({ ...prev, fireLocation: e.target.value }));
             if (errors.fireLocation) setErrors(prev => ({ ...prev, fireLocation: '' }));
           }}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${
-            errors.fireLocation ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-          }`}
+          disabled={readOnly}
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${errors.fireLocation ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            }`}
           placeholder="Exact location of the fire..."
         />
         {errors.fireLocation && (
@@ -1487,6 +1504,7 @@ function BfpForm({ form, setForm, errors, setErrors }: {
         <select
           value={form.areaOwnership}
           onChange={(e) => setForm(prev => ({ ...prev, areaOwnership: e.target.value }))}
+          disabled={readOnly}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
         >
           <option value="">Select area ownership...</option>
@@ -1535,9 +1553,9 @@ function BfpForm({ form, setForm, errors, setErrors }: {
             setForm(prev => ({ ...prev, classOfFire: e.target.value }));
             if (errors.classOfFire) setErrors(prev => ({ ...prev, classOfFire: '' }));
           }}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${
-            errors.classOfFire ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-          }`}
+          disabled={readOnly}
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${errors.classOfFire ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            }`}
         >
           <option value="">Select class of fire...</option>
           <option value="Class A">Class A - Ordinary Combustibles (wood, paper, cloth)</option>
@@ -1561,6 +1579,7 @@ function BfpForm({ form, setForm, errors, setErrors }: {
         <select
           value={form.alarmType}
           onChange={(e) => setForm(prev => ({ ...prev, alarmType: e.target.value }))}
+          disabled={readOnly}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
         >
           <option value="">Select alarm type...</option>
@@ -1587,6 +1606,7 @@ function BfpForm({ form, setForm, errors, setErrors }: {
             min="0"
             value={form.victimsCount}
             onChange={(e) => setForm(prev => ({ ...prev, victimsCount: parseInt(e.target.value) || 0 }))}
+            disabled={readOnly}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
             placeholder="Number of victims/injured"
           />
@@ -1599,6 +1619,7 @@ function BfpForm({ form, setForm, errors, setErrors }: {
             type="text"
             value={form.estimatedDamage}
             onChange={(e) => setForm(prev => ({ ...prev, estimatedDamage: e.target.value }))}
+            disabled={readOnly}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
             placeholder="e.g., 500,000"
           />
@@ -1609,13 +1630,14 @@ function BfpForm({ form, setForm, errors, setErrors }: {
 }
 
 // ============================================
-// PDRRMO FORM COMPONENT (matches MdrrmoReportFormActivity.java)
+// MDRRMO FORM COMPONENT (matches MdrrmoReportFormActivity.java)
 // ============================================
-function PdrrmoForm({ form, setForm, errors, setErrors }: { 
-  form: PdrrmoFormData; 
-  setForm: React.Dispatch<React.SetStateAction<PdrrmoFormData>>;
+function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
+  form: MdrrmoFormData;
+  setForm: React.Dispatch<React.SetStateAction<MdrrmoFormData>>;
   errors: ValidationErrors;
   setErrors: React.Dispatch<React.SetStateAction<ValidationErrors>>;
+  readOnly?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -1631,9 +1653,9 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
               setForm(prev => ({ ...prev, natureOfCall: e.target.value }));
               if (errors.natureOfCall) setErrors(prev => ({ ...prev, natureOfCall: '' }));
             }}
-            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
-              errors.natureOfCall ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-            }`}
+            disabled={readOnly}
+            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.natureOfCall ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+              }`}
           >
             <option value="">Select...</option>
             <option value="Emergency">Emergency</option>
@@ -1654,6 +1676,7 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
           <select
             value={form.emergencyType}
             onChange={(e) => setForm(prev => ({ ...prev, emergencyType: e.target.value }))}
+            disabled={readOnly}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           >
             <option value="">Select...</option>
@@ -1672,6 +1695,7 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
           <select
             value={form.areaType}
             onChange={(e) => setForm(prev => ({ ...prev, areaType: e.target.value }))}
+            disabled={readOnly}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           >
             <option value="">Select...</option>
@@ -1695,9 +1719,9 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
             setForm(prev => ({ ...prev, incidentLocation: e.target.value }));
             if (errors.incidentLocation) setErrors(prev => ({ ...prev, incidentLocation: '' }));
           }}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
-            errors.incidentLocation ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-          }`}
+          disabled={readOnly}
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.incidentLocation ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            }`}
         />
         {errors.incidentLocation && (
           <p className="mt-1 text-sm text-red-500 flex items-center gap-1">
@@ -1726,6 +1750,7 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
                 type="time"
                 value={(form as any)[key]}
                 onChange={(e) => setForm(prev => ({ ...prev, [key]: e.target.value }))}
+                disabled={readOnly}
                 className="w-full px-2 py-1.5 text-sm border border-cyan-300 dark:border-cyan-700 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
               />
             </div>
@@ -1742,6 +1767,7 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
           <select
             value={form.facilityType}
             onChange={(e) => setForm(prev => ({ ...prev, facilityType: e.target.value }))}
+            disabled={readOnly}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           >
             <option value="">Select...</option>
@@ -1759,6 +1785,7 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
             type="text"
             value={form.facilityName}
             onChange={(e) => setForm(prev => ({ ...prev, facilityName: e.target.value }))}
+            disabled={readOnly}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
             placeholder="Name of hospital/clinic..."
           />
@@ -1771,21 +1798,23 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
           <h4 className="font-medium text-cyan-800 dark:text-cyan-200">
             Patient Details ({form.patients.length} patient{form.patients.length !== 1 ? 's' : ''})
           </h4>
-          <button
-            type="button"
-            onClick={() => setForm(prev => ({ ...prev, patients: [...prev.patients, createEmptyPdrrmoPatient()] }))}
-            className="px-3 py-1 text-sm bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg flex items-center gap-1"
-          >
-            <Plus size={14} /> Add Patient
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setForm(prev => ({ ...prev, patients: [...prev.patients, createEmptyMdrrmoPatient()] }))}
+              className="px-3 py-1 text-sm bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg flex items-center gap-1"
+            >
+              <Plus size={14} /> Add Patient
+            </button>
+          )}
         </div>
-        
+
         {form.patients.length === 0 ? (
           <p className="text-gray-500 dark:text-gray-400 text-sm text-center py-4">No patients added yet. Click "Add Patient" to add one.</p>
         ) : (
           <div className="space-y-4">
             {form.patients.map((patient, index) => (
-              <PdrrmoPatientCard
+              <MdrrmoPatientCard
                 key={patient.id}
                 patient={patient}
                 index={index}
@@ -1807,7 +1836,8 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
                     patients: prev.patients.filter((_, i) => i !== index)
                   }));
                 }}
-                canRemove={form.patients.length > 0}
+                canRemove={!readOnly && form.patients.length > 0}
+                readOnly={readOnly}
               />
             ))}
           </div>
@@ -1822,6 +1852,7 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
         <textarea
           value={form.narrative}
           onChange={(e) => setForm(prev => ({ ...prev, narrative: e.target.value }))}
+          disabled={readOnly}
           rows={4}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           placeholder="Detailed narrative of the emergency response..."
@@ -1832,22 +1863,23 @@ function PdrrmoForm({ form, setForm, errors, setErrors }: {
 }
 
 // ============================================
-// PDRRMO PATIENT CARD COMPONENT (Editable)
+// MDRRMO PATIENT CARD COMPONENT (Editable)
 // ============================================
-function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove, canRemove }: {
-  patient: PdrrmoPatientEntry;
+function MdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove, canRemove, readOnly }: {
+  patient: MdrrmoPatientEntry;
   index: number;
-  onUpdate: (field: keyof PdrrmoPatientEntry, value: string) => void;
-  onUpdateVitals: (field: keyof PdrrmoPatientEntry['vitals'], value: string) => void;
+  onUpdate: (field: keyof MdrrmoPatientEntry, value: string) => void;
+  onUpdateVitals: (field: keyof MdrrmoPatientEntry['vitals'], value: string) => void;
   onRemove: () => void;
   canRemove: boolean;
+  readOnly?: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
-  
+
   const inputClass = "w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
   const selectClass = "w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
   const labelClass = "block text-xs text-gray-600 dark:text-gray-400 mb-1";
-  
+
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-cyan-300 dark:border-cyan-700 overflow-hidden">
       {/* Header */}
@@ -1870,7 +1902,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
           </button>
         )}
       </div>
-      
+
       {expanded && (
         <div className="p-4 space-y-4">
           {/* Basic Info */}
@@ -1879,15 +1911,15 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-5 gap-2">
               <div>
                 <label className={labelClass}>Name</label>
-                <input type="text" value={patient.name} onChange={(e) => onUpdate('name', e.target.value)} className={inputClass} placeholder="Patient name" />
+                <input type="text" value={patient.name} onChange={(e) => onUpdate('name', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Patient name" />
               </div>
               <div>
                 <label className={labelClass}>Age</label>
-                <input type="text" value={patient.age} onChange={(e) => onUpdate('age', e.target.value)} className={inputClass} placeholder="Age" />
+                <input type="text" value={patient.age} onChange={(e) => onUpdate('age', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Age" />
               </div>
               <div>
                 <label className={labelClass}>Sex</label>
-                <select value={patient.sex} onChange={(e) => onUpdate('sex', e.target.value)} className={selectClass}>
+                <select value={patient.sex} onChange={(e) => onUpdate('sex', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="M">Male</option>
                   <option value="F">Female</option>
@@ -1895,19 +1927,20 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div className="col-span-2">
                 <label className={labelClass}>Address</label>
-                <input type="text" value={patient.address} onChange={(e) => onUpdate('address', e.target.value)} className={inputClass} placeholder="Address" />
+                <input type="text" value={patient.address} onChange={(e) => onUpdate('address', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Address" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 mt-2">
               <div>
                 <label className={labelClass}>Next of Kin</label>
-                <input type="text" value={patient.nextOfKin} onChange={(e) => onUpdate('nextOfKin', e.target.value)} className={inputClass} placeholder="Next of kin" />
+                <input type="text" value={patient.nextOfKin} onChange={(e) => onUpdate('nextOfKin', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Next of kin" />
               </div>
               <div>
                 <label className={labelClass}>Chief Complaint / MOI</label>
-                <select 
-                  value={patient.chiefComplaint} 
-                  onChange={(e) => onUpdate('chiefComplaint', e.target.value)} 
+                <select
+                  value={patient.chiefComplaint}
+                  onChange={(e) => onUpdate('chiefComplaint', e.target.value)}
+                  disabled={readOnly}
                   className={selectClass}
                 >
                   <option value="">Select...</option>
@@ -1938,7 +1971,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-5 gap-2">
               <div>
                 <label className={labelClass}>C-Spine</label>
-                <select value={patient.cSpine} onChange={(e) => onUpdate('cSpine', e.target.value)} className={selectClass}>
+                <select value={patient.cSpine} onChange={(e) => onUpdate('cSpine', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="Not Indicated">Not Indicated</option>
                   <option value="Indicated">Indicated</option>
@@ -1947,7 +1980,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Airway</label>
-                <select value={patient.airway} onChange={(e) => onUpdate('airway', e.target.value)} className={selectClass}>
+                <select value={patient.airway} onChange={(e) => onUpdate('airway', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="Clear">Clear</option>
                   <option value="Obstructed">Obstructed</option>
@@ -1956,7 +1989,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Breathing</label>
-                <select value={patient.breathing} onChange={(e) => onUpdate('breathing', e.target.value)} className={selectClass}>
+                <select value={patient.breathing} onChange={(e) => onUpdate('breathing', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="Normal">Normal</option>
                   <option value="Labored">Labored</option>
@@ -1966,7 +1999,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Pulse</label>
-                <select value={patient.pulse} onChange={(e) => onUpdate('pulse', e.target.value)} className={selectClass}>
+                <select value={patient.pulse} onChange={(e) => onUpdate('pulse', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="Present">Present</option>
                   <option value="Absent">Absent</option>
@@ -1976,7 +2009,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Skin</label>
-                <select value={patient.skin} onChange={(e) => onUpdate('skin', e.target.value)} className={selectClass}>
+                <select value={patient.skin} onChange={(e) => onUpdate('skin', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="Normal">Normal</option>
                   <option value="Pale">Pale</option>
@@ -1989,7 +2022,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-4 gap-2 mt-2">
               <div>
                 <label className={labelClass}>LOC</label>
-                <select value={patient.loc} onChange={(e) => onUpdate('loc', e.target.value)} className={selectClass}>
+                <select value={patient.loc} onChange={(e) => onUpdate('loc', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="Yes">Yes</option>
                   <option value="No">No</option>
@@ -1997,7 +2030,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Consciousness</label>
-                <select value={patient.consciousness} onChange={(e) => onUpdate('consciousness', e.target.value)} className={selectClass}>
+                <select value={patient.consciousness} onChange={(e) => onUpdate('consciousness', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="Alert">Alert</option>
                   <option value="Verbal">Verbal</option>
@@ -2007,7 +2040,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Cap Refill</label>
-                <select value={patient.capRefill} onChange={(e) => onUpdate('capRefill', e.target.value)} className={selectClass}>
+                <select value={patient.capRefill} onChange={(e) => onUpdate('capRefill', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="&lt; 2 Seconds">&lt; 2 Seconds</option>
                   <option value="&gt; 2 Seconds">&gt; 2 Seconds</option>
@@ -2022,27 +2055,27 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-3 gap-2">
               <div>
                 <label className={labelClass}>Signs/Symptoms</label>
-                <input type="text" value={patient.signs} onChange={(e) => onUpdate('signs', e.target.value)} className={inputClass} placeholder="Signs/Symptoms" />
+                <input type="text" value={patient.signs} onChange={(e) => onUpdate('signs', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Signs/Symptoms" />
               </div>
               <div>
                 <label className={labelClass}>Allergies</label>
-                <input type="text" value={patient.allergies} onChange={(e) => onUpdate('allergies', e.target.value)} className={inputClass} placeholder="Allergies" />
+                <input type="text" value={patient.allergies} onChange={(e) => onUpdate('allergies', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Allergies" />
               </div>
               <div>
                 <label className={labelClass}>Medications</label>
-                <input type="text" value={patient.medications} onChange={(e) => onUpdate('medications', e.target.value)} className={inputClass} placeholder="Medications" />
+                <input type="text" value={patient.medications} onChange={(e) => onUpdate('medications', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Medications" />
               </div>
               <div>
                 <label className={labelClass}>Past History</label>
-                <input type="text" value={patient.history} onChange={(e) => onUpdate('history', e.target.value)} className={inputClass} placeholder="Past medical history" />
+                <input type="text" value={patient.history} onChange={(e) => onUpdate('history', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Past medical history" />
               </div>
               <div>
                 <label className={labelClass}>Last Oral Intake</label>
-                <input type="text" value={patient.oral} onChange={(e) => onUpdate('oral', e.target.value)} className={inputClass} placeholder="Last oral intake" />
+                <input type="text" value={patient.oral} onChange={(e) => onUpdate('oral', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Last oral intake" />
               </div>
               <div>
                 <label className={labelClass}>Events Leading</label>
-                <input type="text" value={patient.events} onChange={(e) => onUpdate('events', e.target.value)} className={inputClass} placeholder="Events leading to incident" />
+                <input type="text" value={patient.events} onChange={(e) => onUpdate('events', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Events leading to incident" />
               </div>
             </div>
           </div>
@@ -2053,41 +2086,41 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-5 gap-2">
               <div>
                 <label className={labelClass}>BP</label>
-                <input type="text" value={patient.vitals.bp} onChange={(e) => onUpdateVitals('bp', e.target.value)} className={inputClass} placeholder="120/80" />
+                <input type="text" value={patient.vitals.bp} onChange={(e) => onUpdateVitals('bp', e.target.value)} disabled={readOnly} className={inputClass} placeholder="120/80" />
               </div>
               <div>
                 <label className={labelClass}>Pulse Rate</label>
-                <input type="text" value={patient.vitals.pulseRate} onChange={(e) => onUpdateVitals('pulseRate', e.target.value)} className={inputClass} placeholder="bpm" />
+                <input type="text" value={patient.vitals.pulseRate} onChange={(e) => onUpdateVitals('pulseRate', e.target.value)} disabled={readOnly} className={inputClass} placeholder="bpm" />
               </div>
               <div>
                 <label className={labelClass}>Resp Rate</label>
-                <input type="text" value={patient.vitals.respRate} onChange={(e) => onUpdateVitals('respRate', e.target.value)} className={inputClass} placeholder="/min" />
+                <input type="text" value={patient.vitals.respRate} onChange={(e) => onUpdateVitals('respRate', e.target.value)} disabled={readOnly} className={inputClass} placeholder="/min" />
               </div>
               <div>
                 <label className={labelClass}>Temp</label>
-                <input type="text" value={patient.vitals.temp} onChange={(e) => onUpdateVitals('temp', e.target.value)} className={inputClass} placeholder="°C" />
+                <input type="text" value={patient.vitals.temp} onChange={(e) => onUpdateVitals('temp', e.target.value)} disabled={readOnly} className={inputClass} placeholder="°C" />
               </div>
               <div>
                 <label className={labelClass}>SpO2</label>
-                <input type="text" value={patient.vitals.spo2} onChange={(e) => onUpdateVitals('spo2', e.target.value)} className={inputClass} placeholder="%" />
+                <input type="text" value={patient.vitals.spo2} onChange={(e) => onUpdateVitals('spo2', e.target.value)} disabled={readOnly} className={inputClass} placeholder="%" />
               </div>
             </div>
             <div className="grid grid-cols-4 gap-2 mt-2">
               <div>
                 <label className={labelClass}>Pain (0-10)</label>
-                <input type="text" value={patient.vitals.pain} onChange={(e) => onUpdateVitals('pain', e.target.value)} className={inputClass} placeholder="0-10" />
+                <input type="text" value={patient.vitals.pain} onChange={(e) => onUpdateVitals('pain', e.target.value)} disabled={readOnly} className={inputClass} placeholder="0-10" />
               </div>
               <div>
                 <label className={labelClass}>Glucose</label>
-                <input type="text" value={patient.vitals.glucose} onChange={(e) => onUpdateVitals('glucose', e.target.value)} className={inputClass} placeholder="mg/dL" />
+                <input type="text" value={patient.vitals.glucose} onChange={(e) => onUpdateVitals('glucose', e.target.value)} disabled={readOnly} className={inputClass} placeholder="mg/dL" />
               </div>
               <div>
                 <label className={labelClass}>Cap Refill</label>
-                <input type="text" value={patient.vitals.capVital} onChange={(e) => onUpdateVitals('capVital', e.target.value)} className={inputClass} placeholder="seconds" />
+                <input type="text" value={patient.vitals.capVital} onChange={(e) => onUpdateVitals('capVital', e.target.value)} disabled={readOnly} className={inputClass} placeholder="seconds" />
               </div>
               <div>
                 <label className={labelClass}>Obs Time</label>
-                <input type="text" value={patient.vitals.obsTime} onChange={(e) => onUpdateVitals('obsTime', e.target.value)} className={inputClass} placeholder="HH:MM" />
+                <input type="text" value={patient.vitals.obsTime} onChange={(e) => onUpdateVitals('obsTime', e.target.value)} disabled={readOnly} className={inputClass} placeholder="HH:MM" />
               </div>
             </div>
           </div>
@@ -2098,19 +2131,19 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-4 gap-2">
               <div>
                 <label className={labelClass}>Eye (1-4)</label>
-                <input type="text" value={patient.gcsEye} onChange={(e) => onUpdate('gcsEye', e.target.value)} className={inputClass} placeholder="1-4" />
+                <input type="text" value={patient.gcsEye} onChange={(e) => onUpdate('gcsEye', e.target.value)} disabled={readOnly} className={inputClass} placeholder="1-4" />
               </div>
               <div>
                 <label className={labelClass}>Verbal (1-5)</label>
-                <input type="text" value={patient.gcsVerbal} onChange={(e) => onUpdate('gcsVerbal', e.target.value)} className={inputClass} placeholder="1-5" />
+                <input type="text" value={patient.gcsVerbal} onChange={(e) => onUpdate('gcsVerbal', e.target.value)} disabled={readOnly} className={inputClass} placeholder="1-5" />
               </div>
               <div>
                 <label className={labelClass}>Motor (1-6)</label>
-                <input type="text" value={patient.gcsMotor} onChange={(e) => onUpdate('gcsMotor', e.target.value)} className={inputClass} placeholder="1-6" />
+                <input type="text" value={patient.gcsMotor} onChange={(e) => onUpdate('gcsMotor', e.target.value)} disabled={readOnly} className={inputClass} placeholder="1-6" />
               </div>
               <div>
                 <label className={labelClass}>Total (3-15)</label>
-                <input type="text" value={patient.gcsTotal} onChange={(e) => onUpdate('gcsTotal', e.target.value)} className={inputClass} placeholder="3-15" />
+                <input type="text" value={patient.gcsTotal} onChange={(e) => onUpdate('gcsTotal', e.target.value)} disabled={readOnly} className={inputClass} placeholder="3-15" />
               </div>
             </div>
           </div>
@@ -2121,7 +2154,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-5 gap-2">
               <div>
                 <label className={labelClass}>Airway Mgmt</label>
-                <select value={patient.manageAirway} onChange={(e) => onUpdate('manageAirway', e.target.value)} className={selectClass}>
+                <select value={patient.manageAirway} onChange={(e) => onUpdate('manageAirway', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="None">None</option>
                   <option value="Suction">Suction</option>
@@ -2133,7 +2166,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Circulation</label>
-                <select value={patient.manageCirc} onChange={(e) => onUpdate('manageCirc', e.target.value)} className={selectClass}>
+                <select value={patient.manageCirc} onChange={(e) => onUpdate('manageCirc', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="None">None</option>
                   <option value="IV Access">IV Access</option>
@@ -2143,7 +2176,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Wound Care</label>
-                <select value={patient.manageWound} onChange={(e) => onUpdate('manageWound', e.target.value)} className={selectClass}>
+                <select value={patient.manageWound} onChange={(e) => onUpdate('manageWound', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="None">None</option>
                   <option value="Bandage">Bandage</option>
@@ -2153,7 +2186,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Immobilization</label>
-                <select value={patient.manageImmob} onChange={(e) => onUpdate('manageImmob', e.target.value)} className={selectClass}>
+                <select value={patient.manageImmob} onChange={(e) => onUpdate('manageImmob', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="None">None</option>
                   <option value="C-Collar">C-Collar</option>
@@ -2164,7 +2197,7 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
               </div>
               <div>
                 <label className={labelClass}>Other</label>
-                <select value={patient.manageOther} onChange={(e) => onUpdate('manageOther', e.target.value)} className={selectClass}>
+                <select value={patient.manageOther} onChange={(e) => onUpdate('manageOther', e.target.value)} disabled={readOnly} className={selectClass}>
                   <option value="">Select...</option>
                   <option value="None">None</option>
                   <option value="O2 Therapy">O2 Therapy</option>
@@ -2181,22 +2214,23 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className={labelClass}>Injury Type</label>
-                <input type="text" value={patient.injuryType} onChange={(e) => onUpdate('injuryType', e.target.value)} className={inputClass} placeholder="Type of injury" />
+                <input type="text" value={patient.injuryType} onChange={(e) => onUpdate('injuryType', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Type of injury" />
               </div>
               <div>
                 <label className={labelClass}>Affected Body Parts</label>
-                <input type="text" value={patient.affectedBodyParts} onChange={(e) => onUpdate('affectedBodyParts', e.target.value)} className={inputClass} placeholder="Body parts affected" />
+                <input type="text" value={patient.affectedBodyParts} onChange={(e) => onUpdate('affectedBodyParts', e.target.value)} disabled={readOnly} className={inputClass} placeholder="Body parts affected" />
               </div>
             </div>
             <div className="mt-2">
               <label className={labelClass}>Interventions Performed</label>
-              <input type="text" value={patient.interventions} onChange={(e) => onUpdate('interventions', e.target.value)} className={inputClass} placeholder="CPR, Oxygen Administration, Wound Care, etc." />
+              <input type="text" value={patient.interventions} onChange={(e) => onUpdate('interventions', e.target.value)} disabled={readOnly} className={inputClass} placeholder="CPR, Oxygen Administration, Wound Care, etc." />
             </div>
             <div className="mt-2">
               <label className={labelClass}>Patient Narrative</label>
               <textarea
                 value={patient.patientNarrative}
                 onChange={(e) => onUpdate('patientNarrative', e.target.value)}
+                disabled={readOnly}
                 rows={2}
                 className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500"
                 placeholder="Additional notes about this patient..."
@@ -2212,11 +2246,12 @@ function PdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
 // ============================================
 // MDRRMO DISASTER FORM COMPONENT (matches MdrrmoDisasterReportFormActivity.java)
 // ============================================
-function MdrrmoDisasterForm({ form, setForm, errors, setErrors }: { 
-  form: MdrrmoDisasterFormData; 
+function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
+  form: MdrrmoDisasterFormData;
   setForm: React.Dispatch<React.SetStateAction<MdrrmoDisasterFormData>>;
   errors: ValidationErrors;
   setErrors: React.Dispatch<React.SetStateAction<ValidationErrors>>;
+  readOnly?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -2234,9 +2269,8 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors }: {
                 setForm(prev => ({ ...prev, disasterType: e.target.value }));
                 if (errors.disasterType) setErrors(prev => ({ ...prev, disasterType: '' }));
               }}
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
-                errors.disasterType ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-              }`}
+              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.disasterType ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+                }`}
             >
               <option value="">Select...</option>
               <option value="Flood">Flood</option>
@@ -2266,9 +2300,8 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors }: {
                   setForm(prev => ({ ...prev, disasterTypeOther: e.target.value }));
                   if (errors.disasterTypeOther) setErrors(prev => ({ ...prev, disasterTypeOther: '' }));
                 }}
-                className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
-                  errors.disasterTypeOther ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-                }`}
+                className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.disasterTypeOther ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+                  }`}
                 placeholder="Specify other disaster type..."
               />
               {errors.disasterTypeOther && (
@@ -2290,9 +2323,8 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors }: {
               if (errors.affectedArea) setErrors(prev => ({ ...prev, affectedArea: '' }));
             }}
             rows={2}
-            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
-              errors.affectedArea ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-            }`}
+            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.affectedArea ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+              }`}
             placeholder="List affected areas, barangays, or sitios..."
           />
           {errors.affectedArea && (
@@ -2405,9 +2437,8 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors }: {
             if (errors.narrative) setErrors(prev => ({ ...prev, narrative: '' }));
           }}
           rows={4}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${
-            errors.narrative ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
-          }`}
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.narrative ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            }`}
           placeholder="Provide a detailed chronological account of the disaster response..."
         />
         {errors.narrative && (

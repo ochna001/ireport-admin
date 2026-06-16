@@ -17,7 +17,7 @@ const MAP_LAYERS = {
   osm: {
     name: 'OpenStreetMap',
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors'
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   },
   google_road: {
     name: 'Google Roadmap',
@@ -29,15 +29,15 @@ const MAP_LAYERS = {
     url: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
     attribution: '&copy; Google Maps'
   },
-  google_terrain: {
-    name: 'Google Terrain',
-    url: 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}',
-    attribution: '&copy; Google Maps'
-  },
   google_hybrid: {
     name: 'Google Hybrid',
     url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
     attribution: '&copy; Google Maps'
+  },
+  esri_satellite: {
+    name: 'Satellite (Esri)',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri'
   }
 };
 
@@ -57,13 +57,13 @@ function ChangeView({ markers, selectedItem, fitCounter }: { markers: any[], sel
     if (markers.length > 0) {
       const isNewIncident = markers.length > prevMarkersCount.current;
       const isManualFit = fitCounter > prevFitCounter.current;
-      
+
       if (!hasInitiallyFit.current || isNewIncident || isManualFit) {
         if (!selectedItem || isManualFit) {
           const bounds = L.latLngBounds(markers.map(m => [m.latitude, m.longitude]));
           map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
           hasInitiallyFit.current = true;
-          
+
           if (isManualFit) {
             // If they clicked overview, maybe clear the selection?
             // Actually, keep it but just pull back.
@@ -109,7 +109,7 @@ export function DashboardMap() {
 
   // Filters
   const [showStations, setShowStations] = useState(false);
-  const [filterAgency, setFilterAgency] = useState({ pnp: true, bfp: true, pdrrmo: true });
+  const [filterAgency, setFilterAgency] = useState({ pnp: true, bfp: true, mdrrmo: true });
   const [filterStatus, setFilterStatus] = useState<'active' | 'all'>('active');
   const [filterTime, setFilterTime] = useState<'24h' | 'today' | 'yesterday' | 'week' | 'month' | '90d' | 'year' | 'all'>('week');
 
@@ -118,7 +118,7 @@ export function DashboardMap() {
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentZoom, setCurrentZoom] = useState(12);
-  const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('osm');
+  const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('google_hybrid');
   const [showLayerSelector, setShowLayerSelector] = useState(false);
   const [fitCounter, setFitCounter] = useState(0);
 
@@ -150,7 +150,7 @@ export function DashboardMap() {
       const agencyType = incident.agency_type?.toLowerCase();
       if (agencyType === 'pnp' && !filterAgency.pnp) return false;
       if (agencyType === 'bfp' && !filterAgency.bfp) return false;
-      if (agencyType === 'pdrrmo' && !filterAgency.pdrrmo) return false;
+      if (agencyType === 'mdrrmo' && !filterAgency.mdrrmo) return false;
 
       // Status Filter
       if (filterStatus === 'active') {
@@ -190,15 +190,16 @@ export function DashboardMap() {
     });
   }, [incidents, filterAgency, filterStatus, filterTime]);
 
-  const getIncidentIcon = (agency?: string) => {
+  const getIncidentIcon = (agency?: string, status?: string) => {
     const color = agency?.toLowerCase() === 'pnp' ? '#2563eb' :
       agency?.toLowerCase() === 'bfp' ? '#dc2626' : '#0891b2';
+    const isActiveIncident = ['pending', 'assigned', 'in_progress', 'responding'].includes((status || '').toLowerCase());
 
-    // Scale size based on zoom
-    const size = currentZoom > 17 ? 20 : 32;
-    const iconSize = currentZoom > 17 ? 10 : 16;
+    // Scale size based on zoom (larger for better visibility on satellite tiles)
+    const size = currentZoom > 17 ? 24 : 38;
+    const iconSize = currentZoom > 17 ? 12 : 18;
 
-    // Shield (PNP), Flame (BFP), Waves (PDRRMO)
+    // Shield (PNP), Flame (BFP), Waves (MDRRMO)
     let iconPath = '';
     if (agency?.toLowerCase() === 'pnp') {
       iconPath = '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>';
@@ -212,7 +213,20 @@ export function DashboardMap() {
       className: 'custom-incident-marker',
       html: `
         <div style="position: relative; width: ${size}px; height: ${size}px;">
-          <svg viewBox="0 0 384 512" style="width: 100%; height: 100%; fill: ${color}; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+          <div class="${isActiveIncident ? 'incident-pulse-ring' : ''}" style="
+            position: absolute;
+            top: 22%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: ${Math.round(size * 0.6)}px;
+            height: ${Math.round(size * 0.6)}px;
+            border-radius: 9999px;
+            border: 2px solid rgba(255, 255, 255, 0.95);
+            background: ${color}55;
+            box-shadow: 0 0 0 4px ${color}33;
+            pointer-events: none;
+          "></div>
+          <svg viewBox="0 0 384 512" style="width: 100%; height: 100%; fill: ${color}; stroke: rgba(255,255,255,0.96); stroke-width: 20; filter: drop-shadow(0 5px 10px rgba(0,0,0,0.6));">
             <path d="M172.268 501.67C26.97 291.031 0 269.413 0 192 0 85.961 85.961 0 192 0s192 85.961 192 192c0 77.413-26.97 99.031-172.268 309.67-9.535 13.774-29.93 13.773-39.464 0z"/>
           </svg>
           <div style="
@@ -239,16 +253,29 @@ export function DashboardMap() {
     const color = agency?.toLowerCase() === 'pnp' ? '#2563eb' :
       agency?.toLowerCase() === 'bfp' ? '#dc2626' : '#0891b2';
 
-    // Scale size based on zoom
-    const size = currentZoom > 17 ? 20 : 32;
-    const iconSize = currentZoom > 17 ? 10 : 18;
+    // Scale size based on zoom (larger for better visibility on satellite tiles)
+    const size = currentZoom > 17 ? 24 : 38;
+    const iconSize = currentZoom > 17 ? 12 : 20;
 
     // Using a more robust divIcon with inline styles to ensure visibility
     return L.divIcon({
       className: 'custom-station-marker',
       html: `
         <div style="position: relative; width: ${size}px; height: ${size}px;">
-          <svg viewBox="0 0 384 512" style="width: 100%; height: 100%; fill: ${color}; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+          <div style="
+            position: absolute;
+            top: 22%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: ${Math.round(size * 0.6)}px;
+            height: ${Math.round(size * 0.6)}px;
+            border-radius: 9999px;
+            border: 2px solid rgba(255, 255, 255, 0.95);
+            background: ${color}55;
+            box-shadow: 0 0 0 4px ${color}33;
+            pointer-events: none;
+          "></div>
+          <svg viewBox="0 0 384 512" style="width: 100%; height: 100%; fill: ${color}; stroke: rgba(255,255,255,0.96); stroke-width: 20; filter: drop-shadow(0 5px 10px rgba(0,0,0,0.6));">
             <path d="M172.268 501.67C26.97 291.031 0 269.413 0 192 0 85.961 85.961 0 192 0s192 85.961 192 192c0 77.413-26.97 99.031-172.268 309.67-9.535 13.774-29.93 13.773-39.464 0z"/>
           </svg>
           <div style="
@@ -309,11 +336,11 @@ export function DashboardMap() {
               <Flame size={14} /> BFP
             </button>
             <button
-              onClick={() => setFilterAgency(prev => ({ ...prev, pdrrmo: !prev.pdrrmo }))}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${filterAgency.pdrrmo ? 'bg-cyan-600 text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+              onClick={() => setFilterAgency(prev => ({ ...prev, mdrrmo: !prev.mdrrmo }))}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${filterAgency.mdrrmo ? 'bg-cyan-600 text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                 }`}
             >
-              <Waves size={14} /> PDRRMO
+              <Waves size={14} /> MDRRMO
             </button>
           </div>
 
@@ -402,13 +429,13 @@ export function DashboardMap() {
 
             {/* Station Markers */}
             {showStations && stations.filter(s => {
-              const agency = s.agencies?.short_name || (s.agency_id === 1 ? 'PNP' : s.agency_id === 2 ? 'BFP' : 'PDRRMO');
+              const agency = s.agencies?.short_name || (s.agency_id === 1 ? 'PNP' : s.agency_id === 2 ? 'BFP' : 'MDRRMO');
               const isAgencyOn = (agency === 'PNP' && filterAgency.pnp) ||
                 (agency === 'BFP' && filterAgency.bfp) ||
-                (agency === 'PDRRMO' && filterAgency.pdrrmo);
+                (agency === 'MDRRMO' && filterAgency.mdrrmo);
               return isAgencyOn;
             }).map(station => {
-              const agencyShortName = station.agencies?.short_name || (station.agency_id === 1 ? 'PNP' : station.agency_id === 2 ? 'BFP' : 'PDRRMO');
+              const agencyShortName = station.agencies?.short_name || (station.agency_id === 1 ? 'PNP' : station.agency_id === 2 ? 'BFP' : 'MDRRMO');
               return (
                 <Marker
                   key={`station-${station.id}`}
@@ -429,7 +456,7 @@ export function DashboardMap() {
                         <div>
                           <h4 className="font-bold text-sm text-gray-900 leading-tight">{station.name}</h4>
                           <p className="text-[10px] text-gray-500 uppercase font-bold">
-                            {station.agencies?.short_name || (station.agency_id === 1 ? 'PNP' : station.agency_id === 2 ? 'BFP' : 'PDRRMO')} Base Station
+                            {station.agencies?.short_name || (station.agency_id === 1 ? 'PNP' : station.agency_id === 2 ? 'BFP' : 'MDRRMO')} Base Station
                           </p>
                         </div>
                       </div>
@@ -457,7 +484,7 @@ export function DashboardMap() {
               <Marker
                 key={incident.id}
                 position={[incident.latitude, incident.longitude]}
-                icon={getIncidentIcon(incident.agency_type)}
+                icon={getIncidentIcon(incident.agency_type, incident.status)}
                 eventHandlers={{
                   click: () => setSelectedItem(incident)
                 }}
@@ -511,8 +538,8 @@ export function DashboardMap() {
                         setShowLayerSelector(false);
                       }}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${activeLayer === key
-                          ? 'bg-blue-600 text-white shadow-md'
-                          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                         }`}
                     >
                       {key === 'osm' && <MapIcon size={14} />}
@@ -529,8 +556,8 @@ export function DashboardMap() {
             <button
               onClick={() => setShowLayerSelector(!showLayerSelector)}
               className={`p-3 rounded-full shadow-lg border transition-all ${showLayerSelector
-                  ? 'bg-blue-600 text-white border-transparent rotate-90'
-                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-100 dark:border-gray-700 hover:bg-gray-50'
+                ? 'bg-blue-600 text-white border-transparent rotate-90'
+                : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-100 dark:border-gray-700 hover:bg-gray-50'
                 }`}
               title="Change Map Layers"
             >
@@ -600,7 +627,7 @@ export function DashboardMap() {
                         <div className="flex items-center gap-1.5">
                           {incident.agency_type?.toLowerCase() === 'pnp' && <Shield size={12} className="text-blue-600" />}
                           {incident.agency_type?.toLowerCase() === 'bfp' && <Flame size={12} className="text-red-500" />}
-                          {incident.agency_type?.toLowerCase() === 'pdrrmo' && <Waves size={12} className="text-cyan-500" />}
+                          {incident.agency_type?.toLowerCase() === 'mdrrmo' && <Waves size={12} className="text-cyan-500" />}
                           <span className="text-[10px] font-mono font-bold text-gray-500">
                             #{incident.id?.slice(0, 8).toUpperCase()}
                           </span>

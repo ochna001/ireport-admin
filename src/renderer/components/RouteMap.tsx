@@ -101,7 +101,7 @@ export function RouteMap({
   const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('osm');
+  const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('google_hybrid');
   const [showLayerSelector, setShowLayerSelector] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
 

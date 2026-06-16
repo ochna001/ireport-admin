@@ -70,7 +70,7 @@ export const isValidStatus = (status: string): boolean => {
  * Validates agency type
  */
 export const isValidAgencyType = (type: string): boolean => {
-  const validTypes = ['pnp', 'bfp', 'pdrrmo'];
+  const validTypes = ['pnp', 'bfp', 'mdrrmo'];
   return validTypes.includes(type.toLowerCase());
 };
 
@@ -225,7 +225,7 @@ describe('Agency Type Validation', () => {
   it('should accept valid agency types', () => {
     expect(isValidAgencyType('pnp')).toBe(true);
     expect(isValidAgencyType('bfp')).toBe(true);
-    expect(isValidAgencyType('pdrrmo')).toBe(true);
+    expect(isValidAgencyType('mdrrmo')).toBe(true);
     expect(isValidAgencyType('PNP')).toBe(true); // Case insensitive
   });
 

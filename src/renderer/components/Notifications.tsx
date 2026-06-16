@@ -17,6 +17,22 @@ interface Notification {
   };
 }
 
+function dedupeNotifications(items: Notification[]): Notification[] {
+  const sorted = [...items].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
+  const seen = new Set<string>();
+  const result: Notification[] = [];
+
+  for (const n of sorted) {
+    const minuteBucket = Math.floor(+new Date(n.created_at) / 60000);
+    const key = `${n.incident_id || 'none'}|${n.title}|${n.body}|${minuteBucket}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(n);
+  }
+
+  return result;
+}
+
 export function Notifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -28,22 +44,31 @@ export function Notifications() {
     loadNotifications();
     loadUnreadCount();
 
+    // Auto-refresh when a new notification arrives via IPC
+    const handleNew = () => {
+      loadNotifications();
+      loadUnreadCount();
+    };
+    const unsubscribe = window.api.onNewNotification(handleNew);
+
     // Poll for new notifications every 30 seconds
     const interval = setInterval(() => {
       loadUnreadCount();
     }, 30000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      unsubscribe();
+    };
   }, []);
 
   const loadNotifications = async () => {
     setLoading(true);
     try {
       const scope = getSessionScope();
-      if (!scope.userId) return;
-
-      const data = await window.api.getNotificationsByUser(scope.userId);
-      setNotifications(data);
+      // Pass userId if available; main process returns ALL notifications when empty (Admin)
+      const data = await window.api.getNotificationsByUser(scope.userId || '');
+      setNotifications(dedupeNotifications(data));
     } catch (error) {
       console.error('Failed to load notifications:', error);
     } finally {
@@ -54,9 +79,7 @@ export function Notifications() {
   const loadUnreadCount = async () => {
     try {
       const scope = getSessionScope();
-      if (!scope.userId) return;
-
-      const count = await window.api.getUnreadNotificationCount(scope.userId);
+      const count = await window.api.getUnreadNotificationCount(scope.userId || '');
       setUnreadCount(count);
     } catch (error) {
       console.error('Failed to load unread count:', error);
@@ -91,7 +114,7 @@ export function Notifications() {
 
   const handleNotificationClick = async (notification: Notification) => {
     if (!notification.is_read) {
-      await handleMarkAsRead(notification.id, { stopPropagation: () => {} } as any);
+      await handleMarkAsRead(notification.id, { stopPropagation: () => { } } as any);
     }
 
     if (notification.incident_id) {
@@ -121,7 +144,7 @@ export function Notifications() {
         return 'text-blue-600 dark:text-blue-400';
       case 'bfp':
         return 'text-red-600 dark:text-red-400';
-      case 'pdrrmo':
+      case 'mdrrmo':
         return 'text-cyan-600 dark:text-cyan-400';
       default:
         return 'text-gray-600 dark:text-gray-400';
@@ -198,9 +221,8 @@ export function Notifications() {
                     <div
                       key={notification.id}
                       onClick={() => handleNotificationClick(notification)}
-                      className={`p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
-                        !notification.is_read ? 'bg-blue-50 dark:bg-blue-900/10' : ''
-                      }`}
+                      className={`p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${!notification.is_read ? 'bg-blue-50 dark:bg-blue-900/10' : ''
+                        }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
@@ -215,7 +237,7 @@ export function Notifications() {
                           <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
                             {notification.body}
                           </p>
-                          {notification.incidents && (
+                          {notification.incidents ? (
                             <div className="mt-2 flex items-center gap-2">
                               <span className={`text-xs font-medium ${getAgencyColor(notification.incidents.agency_type)}`}>
                                 {notification.incidents.agency_type?.toUpperCase()}
@@ -224,7 +246,13 @@ export function Notifications() {
                                 #{notification.incident_id?.slice(0, 8).toUpperCase()}
                               </span>
                             </div>
-                          )}
+                          ) : notification.incident_id ? (
+                            <div className="mt-2 flex items-center gap-2">
+                              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                                Incident #{notification.incident_id.slice(0, 8).toUpperCase()}
+                              </span>
+                            </div>
+                          ) : null}
                           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                             {formatTime(notification.created_at)}
                           </p>

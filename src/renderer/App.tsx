@@ -11,6 +11,9 @@ import Settings from './pages/Settings';
 import Users from './pages/Users';
 
 import NotificationsPage from './pages/NotificationsPage';
+import LogsPage from './pages/LogsPage';
+import AIAnalysis from './pages/AIAnalysis';
+import Calls from './pages/Calls';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -51,6 +54,9 @@ function App() {
         <Route path="users" element={<Users />} />
         <Route path="settings" element={<Settings />} />
         <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="logs" element={<LogsPage />} />
+        <Route path="ai-analysis" element={<AIAnalysis />} />
+        <Route path="calls" element={<Calls />} />
       </Route>
     </Routes>
   );

@@ -20,6 +20,13 @@ function Login({ onLogin }: { onLogin: () => void }) {
 
   useEffect(() => {
     window.api.focusWindow?.().catch(() => {});
+    window.setTimeout(() => {
+      if (selectedRole === 'admin') {
+        pinInputRef.current?.focus();
+      } else if (selectedRole === 'chief' || selectedRole === 'officer') {
+        emailInputRef.current?.focus();
+      }
+    }, 75);
   }, [view, selectedRole]);
 
   const handleRoleSelect = (role: Role) => {

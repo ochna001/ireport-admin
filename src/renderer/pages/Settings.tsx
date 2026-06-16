@@ -1,8 +1,10 @@
 import {
     AlertTriangle,
     Bell,
+    BrainCircuit,
     Bug,
     CheckCircle,
+    Cpu,
     Database,
     Download,
     FileJson,
@@ -18,9 +20,11 @@ import {
     Shield,
     Sun,
     Volume2,
-    VolumeX
+    VolumeX,
+    Wifi,
+    WifiOff
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getSessionScope } from '../utils/sessionScope';
 
@@ -68,8 +72,19 @@ interface StationOption {
   agencies?: { short_name?: string; name?: string };
 }
 
+function SessionInfo() {
+  const scope = useMemo(() => getSessionScope(), []);
+  return (
+    <>
+      <p><span className="font-semibold">Role:</span> {scope.role || 'None (full access)'}</p>
+      <p><span className="font-semibold">Agency:</span> {scope.agencyShortName || '—'}</p>
+      <p><span className="font-semibold">Station:</span> {scope.stationName || scope.stationId || '—'}</p>
+    </>
+  );
+}
+
 function Settings() {
-  const { role } = getSessionScope();
+  const { role } = useMemo(() => getSessionScope(), []);
   const isAdmin = role === 'Admin';
   const [settings, setSettings] = useState<AppSettings>({
     notifications: { enabled: true, sound: true, desktop: true },
@@ -352,9 +367,7 @@ function Settings() {
             </div>
           </div>
           <div className="p-4 space-y-2 text-sm text-gray-700 dark:text-gray-300">
-            <p><span className="font-semibold">Role:</span> {getSessionScope().role || 'None (full access)'}</p>
-            <p><span className="font-semibold">Agency:</span> {getSessionScope().agencyShortName || '—'}</p>
-            <p><span className="font-semibold">Station:</span> {getSessionScope().stationName || getSessionScope().stationId || '—'}</p>
+            <SessionInfo />
             <p className="text-gray-500 dark:text-gray-400">To change scope, log out and sign in with a different account.</p>
           </div>
         </section>
@@ -746,6 +759,24 @@ function Settings() {
         </section>
         )}
 
+        {/* AI Worker Connection */}
+        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+            <div className="flex items-center gap-3">
+              <BrainCircuit className="w-5 h-5 text-purple-600" />
+              <h2 className="font-semibold text-gray-800 dark:text-white">AI Worker Connection</h2>
+            </div>
+          </div>
+          <div className="p-4 space-y-4">
+            <AIWorkerSettings />
+            {isAdmin && (
+              <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+                <AIApiKeysSettings />
+              </div>
+            )}
+          </div>
+        </section>
+
         {/* About Section */}
         <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
@@ -782,6 +813,420 @@ function Settings() {
             </div>
           </div>
         </section>
+      </div>
+    </div>
+  );
+}
+
+// AI Worker Settings Sub-component
+function AIWorkerSettings() {
+  const [mode, setMode] = useState<'local' | 'vps'>('local');
+  const [localUrl, setLocalUrl] = useState('http://127.0.0.1:8000');
+  const [vpsUrl, setVpsUrl] = useState('');
+  const [fallbackUrl, setFallbackUrl] = useState('http://75.119.142.12:8000');
+  const [workerUrl, setWorkerUrl] = useState('http://127.0.0.1:8000');
+  const [health, setHealth] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [savingMode, setSavingMode] = useState(false);
+  const [modeSaved, setModeSaved] = useState(false);
+  const [fallbackSaved, setFallbackSaved] = useState(false);
+
+  useEffect(() => {
+    const loadWorkerSettings = async () => {
+      try {
+        const rows = await window.api.getSystemSettings();
+        const map: Record<string, string> = {};
+        rows.forEach((r: any) => {
+          map[r.setting_key] = r.setting_value || '';
+        });
+
+        const loadedMode = map.ai_worker_mode === 'vps' ? 'vps' : 'local';
+        const loadedLocalUrl = map.ai_worker_local_url || 'http://127.0.0.1:8000';
+        const loadedVpsUrl = map.ai_worker_vps_url || '';
+        const loadedFallbackUrl = map.ai_worker_fallback_url || 'http://75.119.142.12:8000';
+        const activeUrl = loadedMode === 'vps' ? loadedVpsUrl : loadedLocalUrl;
+
+        setMode(loadedMode);
+        setLocalUrl(loadedLocalUrl);
+        setVpsUrl(loadedVpsUrl);
+        setFallbackUrl(loadedFallbackUrl);
+        setWorkerUrl(activeUrl || 'http://127.0.0.1:8000');
+
+        if (activeUrl) {
+          localStorage.setItem('ireport_admin_ai_worker_url', activeUrl);
+          await window.api.setAIWorkerUrl(activeUrl);
+        }
+        if (loadedFallbackUrl) {
+          localStorage.setItem('ireport_admin_ai_fallback_worker_url', loadedFallbackUrl);
+          try { await window.api.setAIFallbackWorkerUrl(loadedFallbackUrl); } catch {}
+        }
+      } catch {
+        try {
+          const url = await window.api.getAIWorkerUrl();
+          if (url) {
+            setWorkerUrl(url);
+            localStorage.setItem('ireport_admin_ai_worker_url', url);
+          }
+        } catch {
+          const saved = localStorage.getItem('ireport_admin_ai_worker_url');
+          if (saved) setWorkerUrl(saved);
+        }
+      }
+    };
+
+    loadWorkerSettings();
+  }, []);
+
+  const saveUrl = () => {
+    localStorage.setItem('ireport_admin_ai_worker_url', workerUrl);
+    window.api.setAIWorkerUrl(workerUrl).catch(() => {});
+  };
+
+  const saveWorkerMode = async () => {
+    setSavingMode(true);
+    setHealth(null);
+    try {
+      const activeUrl = mode === 'vps' ? vpsUrl : localUrl;
+      await window.api.upsertSystemSetting('ai_worker_mode', mode);
+      await window.api.upsertSystemSetting('ai_worker_local_url', localUrl);
+      await window.api.upsertSystemSetting('ai_worker_vps_url', vpsUrl);
+      if (activeUrl) {
+        const normalized = activeUrl.replace(/\/+$/, '');
+        setWorkerUrl(normalized);
+        localStorage.setItem('ireport_admin_ai_worker_url', normalized);
+        await window.api.setAIWorkerUrl(normalized);
+      }
+      setModeSaved(true);
+      setTimeout(() => setModeSaved(false), 2000);
+    } finally {
+      setSavingMode(false);
+    }
+  };
+
+  const saveFallback = async () => {
+    const normalized = (fallbackUrl || '').trim().replace(/\/+$/, '');
+    setFallbackUrl(normalized);
+    localStorage.setItem('ireport_admin_ai_fallback_worker_url', normalized);
+    try {
+      await window.api.upsertSystemSetting('ai_worker_fallback_url', normalized);
+    } catch {}
+    try {
+      await window.api.setAIFallbackWorkerUrl(normalized);
+      setFallbackSaved(true);
+      setTimeout(() => setFallbackSaved(false), 2000);
+    } catch {}
+  };
+
+  const checkHealth = async () => {
+    setLoading(true);
+    try {
+      await window.api.setAIWorkerUrl(workerUrl);
+      setHealth(await window.api.checkAIWorkerHealth());
+    } catch {
+      setHealth(null);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="p-4 border border-gray-100 dark:border-gray-700 rounded-lg space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-medium text-gray-800 dark:text-white">AI Worker Runtime</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Choose whether this admin app talks to your local worker or the VPS worker.
+            </p>
+          </div>
+          {modeSaved && (
+            <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+              <CheckCircle className="w-3 h-3" /> Saved
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            onClick={() => setMode('local')}
+            className={`p-3 text-left rounded-lg border transition-colors ${
+              mode === 'local'
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+            }`}
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-white">
+              <Monitor className="w-4 h-4" />
+              Local setup
+            </div>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Use the worker running on this machine.</p>
+          </button>
+
+          <button
+            onClick={() => setMode('vps')}
+            className={`p-3 text-left rounded-lg border transition-colors ${
+              mode === 'vps'
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+            }`}
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-white">
+              <Wifi className="w-4 h-4" />
+              VPS worker
+            </div>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Use the deployed worker URL from Supabase settings.</p>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Local Worker URL</label>
+            <input
+              type="text"
+              value={localUrl}
+              onChange={(e) => setLocalUrl(e.target.value)}
+              placeholder="http://127.0.0.1:8000"
+              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">VPS Worker URL</label>
+            <input
+              type="text"
+              value={vpsUrl}
+              onChange={(e) => setVpsUrl(e.target.value)}
+              placeholder="https://your-vps-domain.com"
+              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Active URL: <span className="font-mono">{mode === 'vps' ? vpsUrl || 'Not set' : localUrl}</span>
+          </p>
+          <button
+            onClick={saveWorkerMode}
+            disabled={savingMode || (mode === 'vps' && !vpsUrl.trim())}
+            className="flex items-center gap-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+          >
+            {savingMode ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+            Save Runtime
+          </button>
+        </div>
+      </div>
+
+      <div className="p-4 border border-gray-100 dark:border-gray-700 rounded-lg space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-medium text-gray-800 dark:text-white">VPS Fallback</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              When the active worker is offline or missing cloud API keys, AI calls (incident analysis, call transcription, call summary) automatically retry against this URL. Leave blank to disable.
+            </p>
+          </div>
+          {fallbackSaved && (
+            <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+              <CheckCircle className="w-3 h-3" /> Saved
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            value={fallbackUrl}
+            onChange={(e) => setFallbackUrl(e.target.value)}
+            placeholder="http://75.119.142.12:8000"
+            className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+          />
+          <button
+            onClick={saveFallback}
+            className="flex items-center gap-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            <Save className="w-3 h-3" /> Save Fallback
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <input
+          type="text"
+          value={workerUrl}
+          onChange={(e) => setWorkerUrl(e.target.value)}
+          onBlur={saveUrl}
+          placeholder="http://127.0.0.1:8000"
+          className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+        />
+        <button
+          onClick={checkHealth}
+          disabled={loading}
+          className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+        >
+          {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
+          Test
+        </button>
+      </div>
+      {health && (
+        <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+          <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+            <CheckCircle className="w-4 h-4" />
+            <span>Worker connected</span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-400">
+            <div><Cpu className="w-3 h-3 inline mr-1" />Model: {health.vlm_model}</div>
+            <div><BrainCircuit className="w-3 h-3 inline mr-1" />Provider: {health.vlm_provider}</div>
+            <div>RAG: {health.rag_enabled ? 'Enabled' : 'Disabled'}</div>
+          </div>
+        </div>
+      )}
+      {health === null && !loading && (
+        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <div className="flex items-center gap-2 text-sm text-red-700 dark:text-red-400">
+            <WifiOff className="w-4 h-4" />
+            <span>Worker unreachable at {workerUrl}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// AI API Keys Sub-component (admin-only)
+function AIApiKeysSettings() {
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [savedFlash, setSavedFlash] = useState<Record<string, boolean>>({});
+
+  const keysConfig = [
+    { key: 'gemini_api_key', label: 'Gemini API Key', placeholder: 'AIza...', help: 'Vision-Language Model (image analysis)' },
+    { key: 'groq_api_key', label: 'Groq API Key', placeholder: 'gsk_...', help: 'Whisper transcription + LLM summarization' },
+    { key: 'groq_whisper_model', label: 'Groq Whisper Model', placeholder: 'whisper-large-v3', help: 'Voice-to-text model' },
+    { key: 'groq_chat_model', label: 'Groq Chat Model', placeholder: 'llama-3.3-70b-versatile', help: 'Call summarization LLM' },
+  ];
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    setLoading(true);
+    try {
+      const rows = await window.api.getSystemSettings();
+      const map: Record<string, string> = {};
+      rows.forEach((r: any) => {
+        map[r.setting_key] = r.setting_value || '';
+      });
+      setSettings(map);
+    } catch (error) {
+      console.error('Failed to load system settings:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateKey = async (key: string, value: string) => {
+    setSaving((prev) => ({ ...prev, [key]: true }));
+    try {
+      await window.api.upsertSystemSetting(key, value);
+      setSettings((prev) => ({ ...prev, [key]: value }));
+      setSavedFlash((prev) => ({ ...prev, [key]: true }));
+      setTimeout(() => setSavedFlash((prev) => ({ ...prev, [key]: false })), 2000);
+    } catch (error) {
+      console.error(`Failed to save ${key}:`, error);
+    } finally {
+      setSaving((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <RefreshCw className="w-4 h-4 animate-spin" />
+        Loading API configuration...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-medium text-gray-800 dark:text-white">AI Worker API Keys</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            These are stored in Supabase and picked up by the AI worker automatically.
+            No VPS restart required.
+          </p>
+        </div>
+        <button
+          onClick={loadSettings}
+          className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+        >
+          <RefreshCw className="w-3 h-3" />
+          Refresh
+        </button>
+      </div>
+
+      {keysConfig.map((cfg) => {
+        const value = settings[cfg.key] || '';
+        const isKeyField = cfg.key.includes('api_key');
+        const isSaving = saving[cfg.key];
+        const justSaved = savedFlash[cfg.key];
+        const isConfigured = value.length > 0;
+
+        return (
+          <div key={cfg.key} className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">{cfg.label}</label>
+              <div className="flex items-center gap-2">
+                {justSaved && (
+                  <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" /> Saved
+                  </span>
+                )}
+                <span
+                  className={`text-xs px-2 py-0.5 rounded-full ${
+                    isConfigured
+                      ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                      : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                  }`}
+                >
+                  {isConfigured ? 'Set' : 'Not set'}
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{cfg.help}</p>
+            <div className="flex items-center gap-2">
+              <input
+                type={isKeyField ? 'password' : 'text'}
+                value={value}
+                onChange={(e) => setSettings((prev) => ({ ...prev, [cfg.key]: e.target.value }))}
+                onBlur={() => {
+                  if (settings[cfg.key] !== value) {
+                    updateKey(cfg.key, settings[cfg.key]);
+                  }
+                }}
+                placeholder={cfg.placeholder}
+                className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+              />
+              <button
+                onClick={() => updateKey(cfg.key, settings[cfg.key])}
+                disabled={isSaving}
+                className="flex items-center gap-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isSaving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                Save
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+        <p className="text-xs text-blue-700 dark:text-blue-400">
+          <strong>How it works:</strong> The VPS worker polls the Supabase{' '}
+          <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">system_settings</code> table every 60 seconds.
+          Changes apply automatically — no SSH or restart needed.
+        </p>
       </div>
     </div>
   );

@@ -1,10 +1,10 @@
 {
   "name": "ireport-admin",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "iReport Admin Dashboard - LGU Emergency Response Management",
   "main": "dist/main/index.js",
   "scripts": {
-    "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
+    "dev": "electron-vite dev",
     "dev:main": "electron-vite dev",
     "dev:renderer": "electron-vite dev",
     "build": "electron-vite build",
@@ -30,6 +30,7 @@
     "jspdf": "^3.0.4",
     "jspdf-autotable": "^5.0.2",
     "leaflet": "^1.9.4",
+    "livekit-client": "^2.19.0",
     "node-fetch": "^2.7.0",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^5.4.449",
@@ -98,7 +99,6 @@
           ]
         }
       ],
-      "artifactName": "${productName}-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "nsis": {
@@ -109,7 +109,11 @@
       "installerHeaderIcon": null,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "iReport Admin"
+      "shortcutName": "iReport Admin",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
     },
     "asar": true,
     "asarUnpack": [

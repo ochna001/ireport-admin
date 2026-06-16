@@ -32,13 +32,13 @@ interface PaginatedResponse {
 function Incidents() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const initialScope = getSessionScope();
+  const initialScope = useMemo(() => getSessionScope(), []);
   const [sessionScope, setSessionScope] = useState<SessionScope>(initialScope);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  
+
   // Station-scoped users (Chief/Desk Officer) have locked agency
   const stationScopeActive = isStationScoped(initialScope);
   const [filterAgency, setFilterAgency] = useState(
@@ -90,12 +90,12 @@ function Incidents() {
     loadIncidents();
 
     // Listen for real-time updates
-    window.api.onIncidentUpdated(() => {
+    const unsubscribe = window.api.onIncidentUpdated(() => {
       loadIncidents();
     });
 
     return () => {
-      window.api.removeAllListeners('incident-updated');
+      unsubscribe();
     };
   }, [filterAgency, filterStatus, filterMunicipality, filterBarangay, currentPage, debouncedSearch]);
 
@@ -118,7 +118,7 @@ function Incidents() {
       if (isStationScoped(scope)) {
         filters.agency = scope.agencyShortName?.toLowerCase();
         filters.stationId = scope.stationId;
-        
+
         if (scope.agencyShortName) {
           const scopedAgency = scope.agencyShortName.toLowerCase();
           if (filterAgency !== scopedAgency) {
@@ -128,7 +128,7 @@ function Incidents() {
       }
 
       const response = await window.api.getIncidents(filters) as any;
-      
+
       // Handle both paginated and non-paginated responses
       if (Array.isArray(response)) {
         // Non-paginated response (legacy)
@@ -169,7 +169,7 @@ function Incidents() {
       if (!sortConfig) return 0;
       const aValue = a[sortConfig.key] || '';
       const bValue = b[sortConfig.key] || '';
-      
+
       if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
       return 0;
@@ -185,7 +185,7 @@ function Incidents() {
   const getPageNumbers = () => {
     const pages: (number | string)[] = [];
     const maxVisible = 5;
-    
+
     if (totalPages <= maxVisible) {
       for (let i = 1; i <= totalPages; i++) pages.push(i);
     } else {
@@ -209,12 +209,16 @@ function Incidents() {
   };
 
   const getAgencyBadgeClass = (agency: string) => {
-    switch (agency.toLowerCase()) {
+    switch (agency.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency.toLowerCase()) {
       case 'pnp': return 'bg-blue-600';
       case 'bfp': return 'bg-red-600';
-      case 'pdrrmo': return 'bg-cyan-600';
+      case 'mdrrmo': return 'bg-cyan-600';
       default: return 'bg-gray-600';
     }
+  };
+
+  const formatAgency = (agency: string) => {
+    return (agency?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency).toUpperCase();
   };
 
   const getStatusBadgeClass = (status: string) => {
@@ -246,7 +250,7 @@ function Incidents() {
       barangay: filterBarangay,
       search: debouncedSearch
     };
-    
+
     const doc = exportIncidentsToPDF(incidents, filters);
     const filename = `Incident_Reports_${new Date().toISOString().split('T')[0]}.pdf`;
     doc.save(filename);
@@ -306,7 +310,7 @@ function Incidents() {
               <option value="">All Agencies</option>
               <option value="pnp">PNP</option>
               <option value="bfp">BFP</option>
-              <option value="pdrrmo">PDRRMO</option>
+              <option value="mdrrmo">MDRRMO</option>
             </select>
           </div>
 
@@ -389,32 +393,32 @@ function Incidents() {
           <table className="w-full">
             <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-100 dark:border-gray-700">
               <tr>
-                <th 
+                <th
                   className="text-left px-6 py-4 text-sm font-medium text-gray-500 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                   onClick={() => handleSort('id')}
                 >
                   ID {sortConfig?.key === 'id' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                 </th>
-                <th 
+                <th
                   className="text-left px-6 py-4 text-sm font-medium text-gray-500 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                   onClick={() => handleSort('agency_type')}
                 >
                   Agency {sortConfig?.key === 'agency_type' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                 </th>
                 <th className="text-left px-6 py-4 text-sm font-medium text-gray-500 dark:text-gray-300">Description</th>
-                <th 
+                <th
                   className="text-left px-6 py-4 text-sm font-medium text-gray-500 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                   onClick={() => handleSort('reporter_name')}
                 >
                   Reporter {sortConfig?.key === 'reporter_name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                 </th>
-                <th 
+                <th
                   className="text-left px-6 py-4 text-sm font-medium text-gray-500 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                   onClick={() => handleSort('status')}
                 >
                   Status {sortConfig?.key === 'status' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                 </th>
-                <th 
+                <th
                   className="text-left px-6 py-4 text-sm font-medium text-gray-500 dark:text-gray-300 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
                   onClick={() => handleSort('created_at')}
                 >
@@ -438,7 +442,7 @@ function Incidents() {
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       <span className={`px-2 py-1 rounded text-xs font-medium text-white ${getAgencyBadgeClass(incident.agency_type)}`}>
-                        {incident.agency_type.toUpperCase()}
+                        {formatAgency(incident.agency_type)}
                       </span>
                       {incident.is_multi_agency && (
                         <span className="px-2 py-1 rounded text-xs font-medium bg-purple-600 text-white flex items-center gap-1">
@@ -486,7 +490,7 @@ function Incidents() {
           <div className="text-sm text-gray-500 dark:text-gray-400">
             Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, totalItems)} of {totalItems} incidents
           </div>
-          
+
           <div className="flex items-center gap-1">
             {/* First page */}
             <button
@@ -497,7 +501,7 @@ function Incidents() {
             >
               <ChevronsLeft size={16} className="text-gray-600 dark:text-gray-400" />
             </button>
-            
+
             {/* Previous page */}
             <button
               onClick={() => goToPage(currentPage - 1)}
@@ -507,18 +511,17 @@ function Incidents() {
             >
               <ChevronLeft size={16} className="text-gray-600 dark:text-gray-400" />
             </button>
-            
+
             {/* Page numbers */}
             {getPageNumbers().map((page, index) => (
               typeof page === 'number' ? (
                 <button
                   key={index}
                   onClick={() => goToPage(page)}
-                  className={`px-3 py-1 rounded-lg border text-sm font-medium ${
-                    currentPage === page
+                  className={`px-3 py-1 rounded-lg border text-sm font-medium ${currentPage === page
                       ? 'bg-blue-600 text-white border-blue-600'
                       : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-                  }`}
+                    }`}
                 >
                   {page}
                 </button>
@@ -526,7 +529,7 @@ function Incidents() {
                 <span key={index} className="px-2 text-gray-400">...</span>
               )
             ))}
-            
+
             {/* Next page */}
             <button
               onClick={() => goToPage(currentPage + 1)}
@@ -536,7 +539,7 @@ function Incidents() {
             >
               <ChevronRight size={16} className="text-gray-600 dark:text-gray-400" />
             </button>
-            
+
             {/* Last page */}
             <button
               onClick={() => goToPage(totalPages)}

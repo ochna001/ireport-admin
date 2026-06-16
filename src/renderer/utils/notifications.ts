@@ -130,6 +130,7 @@ export async function exportFinalReportToPDF(incident: any, finalReport: any, ag
   const agencyColors: { [key: string]: [number, number, number] } = {
     pnp: [220, 38, 38],      // Red
     bfp: [249, 115, 22],     // Orange
+    mdrrmo: [6, 182, 212],   // Cyan
     mdrrmo: [6, 182, 212]    // Cyan
   };
   
@@ -220,7 +221,7 @@ export async function exportFinalReportToPDF(incident: any, finalReport: any, ag
     renderBFPReport(doc, details, margin, yPos, pageWidth);
   } else if (agencyType === 'mdrrmo') {
     renderMDRRMOReport(doc, details, margin, yPos, pageWidth);
-  } else if (agencyType === 'mdrrmo_disaster') {
+  } else if (agencyType === 'mdrrmo' || agencyType === 'mdrrmo_disaster') {
     renderMDRRMOReport(doc, details, margin, yPos, pageWidth);
   }
   
@@ -808,12 +809,10 @@ function renderMDRRMOReport(doc: jsPDF, details: any, margin: number, startY: nu
       const narrativeLines = doc.splitTextToSize(details.narrative, pageWidth - 2 * margin - 4);
       doc.text(narrativeLines, margin + 2, yPos);
     }
-  } else if (details.disaster_type || details.disasterType) {
-    renderMDRRMODisasterReport(doc, details, margin, yPos, pageWidth);
   }
 }
 
-function renderMDRRMODisasterReport(doc: jsPDF, details: any, margin: number, startY: number, pageWidth: number) {
+function renderMDRRMOReport(doc: jsPDF, details: any, margin: number, startY: number, pageWidth: number) {
   let yPos = startY;
   
   const fields = [

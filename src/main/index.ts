@@ -83,6 +83,235 @@ const supabase = createClient(supabaseUrl || '', supabaseKey || '', {
   }
 });
 
+ipcMain.handle('calls:listSessions', async (_event, payload?: {
+  status?: string;
+  limit?: number;
+}) => {
+  try {
+    const limit = Math.min(Math.max(Number(payload?.limit) || 50, 1), 200);
+    const status = String(payload?.status || '').trim().toLowerCase();
+
+    let query = supabase
+      .from('call_sessions')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  } catch (error: any) {
+    console.error('[Admin] Failed to list call sessions:', error);
+    throw new Error(error.message || 'Failed to list call sessions');
+  }
+});
+
+ipcMain.handle('calls:updateSessionStatus', async (_event, payload: {
+  sessionId: string;
+  status: 'initiated' | 'ringing' | 'active' | 'ended' | 'cancelled' | 'failed';
+  receiverUserId?: string;
+}) => {
+  try {
+    const sessionId = String(payload?.sessionId || '').trim();
+    const status = String(payload?.status || '').trim().toLowerCase();
+    const receiverUserId = String(payload?.receiverUserId || '').trim() || null;
+    const allowedStatuses = new Set(['initiated', 'ringing', 'active', 'ended', 'cancelled', 'failed']);
+    if (!sessionId) throw new Error('Missing sessionId');
+    if (!status) throw new Error('Missing status');
+    if (!allowedStatuses.has(status)) throw new Error('Invalid status');
+
+    const { data: currentSession, error: currentError } = await supabase
+      .from('call_sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .single();
+    if (currentError) throw currentError;
+    if (!currentSession) throw new Error('Call session not found');
+
+    const currentReceiver = String(currentSession.receiver_user_id || '').trim() || null;
+
+    if (status === 'active') {
+      if (!receiverUserId) {
+        throw new Error('receiverUserId is required to accept a call');
+      }
+
+      if (currentSession.status === 'active' && currentReceiver === receiverUserId) {
+        return currentSession;
+      }
+
+      if (currentReceiver && currentReceiver !== receiverUserId) {
+        throw new Error('Call already claimed by another dispatcher');
+      }
+
+      if (!['initiated', 'ringing', 'active'].includes(String(currentSession.status || ''))) {
+        throw new Error(`Cannot accept call in status ${currentSession.status}`);
+      }
+    }
+
+    if (['ended', 'cancelled', 'failed'].includes(status) && receiverUserId && currentReceiver && currentReceiver !== receiverUserId) {
+      throw new Error('Only the assigned dispatcher can end this call');
+    }
+
+    const updates: any = {
+      status,
+      updated_at: new Date().toISOString(),
+    };
+    if (status === 'active') {
+      updates.receiver_user_id = receiverUserId;
+      updates.started_at = currentSession.started_at || new Date().toISOString();
+    }
+    if (status === 'ended' || status === 'cancelled' || status === 'failed') {
+      updates.ended_at = new Date().toISOString();
+    }
+
+    let result = await supabase
+      .from('call_sessions')
+      .update(updates)
+      .eq('id', sessionId)
+      .eq('updated_at', currentSession.updated_at)
+      .select('*')
+      .single();
+
+    // If FK fails (e.g. Admin PIN user not in auth.users), retry without receiver_user_id
+    // and store dispatcher identity in metadata instead.
+    if (result.error && result.error.message?.includes('violates foreign key constraint')) {
+      console.warn('[Admin] FK violation on receiver_user_id; falling back to metadata for dispatcher:', receiverUserId);
+      delete updates.receiver_user_id;
+
+      const meta = { ...(currentSession.metadata || {}) };
+      meta.dispatcher_id = receiverUserId;
+      meta.dispatcher_role = 'Admin PIN';
+      meta.claimed_at = new Date().toISOString();
+      updates.metadata = meta;
+
+      result = await supabase
+        .from('call_sessions')
+        .update(updates)
+        .eq('id', sessionId)
+        .eq('updated_at', currentSession.updated_at)
+        .select('*')
+        .single();
+    }
+
+    if (result.error) {
+      if (result.error.code === 'PGRST116') {
+        throw new Error('Call state changed by another dispatcher. Refresh and retry.');
+      }
+      throw result.error;
+    }
+    return result.data;
+  } catch (error: any) {
+    console.error('[Admin] Failed to update call session status:', error);
+    throw new Error(error.message || 'Failed to update call session status');
+  }
+});
+
+ipcMain.handle('calls:listTranscripts', async (_event, payload: {
+  sessionId: string;
+}) => {
+  try {
+    const sessionId = String(payload?.sessionId || '').trim();
+    if (!sessionId) throw new Error('Missing sessionId');
+
+    const { data, error } = await supabase
+      .from('call_transcripts')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true })
+      .limit(2000);
+
+    if (error) throw error;
+    return data || [];
+  } catch (error: any) {
+    console.error('[Admin] Failed to list call transcripts:', error);
+    throw new Error(error.message || 'Failed to list call transcripts');
+  }
+});
+
+ipcMain.handle('calls:addTranscriptLine', async (_event, payload: {
+  sessionId: string;
+  room?: string;
+  speaker: 'caller' | 'receiver' | 'dispatcher' | 'system';
+  text: string;
+  isFinal?: boolean;
+}) => {
+  try {
+    const sessionId = String(payload?.sessionId || '').trim();
+    const speaker = String(payload?.speaker || '').trim().toLowerCase();
+    const text = String(payload?.text || '').trim();
+    const allowedSpeakers = new Set(['caller', 'receiver', 'dispatcher', 'system']);
+    if (!sessionId) throw new Error('Missing sessionId');
+    if (!speaker || !allowedSpeakers.has(speaker)) throw new Error('Invalid speaker');
+    if (!text) throw new Error('Missing text');
+    if (text.length > 3000) throw new Error('Transcript line exceeds 3000 characters');
+
+    let room = String(payload?.room || '').trim();
+    if (!room) {
+      const { data: sessionData, error: sessionError } = await supabase
+        .from('call_sessions')
+        .select('room')
+        .eq('id', sessionId)
+        .single();
+      if (sessionError) throw sessionError;
+      room = String(sessionData?.room || '').trim();
+    }
+
+    const { data, error } = await supabase
+      .from('call_transcripts')
+      .insert({
+        session_id: sessionId,
+        room,
+        speaker,
+        text,
+        is_final: payload?.isFinal !== false,
+      })
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error: any) {
+    console.error('[Admin] Failed to add call transcript line:', error);
+    throw new Error(error.message || 'Failed to add call transcript line');
+  }
+});
+
+ipcMain.handle('calls:getTranscriptText', async (_event, payload: {
+  sessionId: string;
+}) => {
+  try {
+    const sessionId = String(payload?.sessionId || '').trim();
+    if (!sessionId) throw new Error('Missing sessionId');
+
+    const { data, error } = await supabase
+      .from('call_transcripts')
+      .select('speaker,text,created_at')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true })
+      .limit(4000);
+
+    if (error) throw error;
+
+    const transcript = (data || [])
+      .map((line: any) => `${String(line.speaker || 'caller')}: ${String(line.text || '').trim()}`)
+      .filter((line: string) => line.trim().length > 0)
+      .join('\n');
+
+    return {
+      sessionId,
+      transcript,
+      lines: data || [],
+    };
+  } catch (error: any) {
+    console.error('[Admin] Failed to build call transcript text:', error);
+    throw new Error(error.message || 'Failed to build call transcript text');
+  }
+});
+
 // Initialize push notification service
 const pushService = new PushNotificationService(supabase, supabaseKey);
 
@@ -127,8 +356,8 @@ function createWindow() {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           process.env.NODE_ENV === 'development'
-            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host https://router.project-osrm.org ws://localhost:*; frame-src 'self' https://www.openstreetmap.org https://maps.google.com;"
-            : "default-src 'self'; script-src 'self' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host https://router.project-osrm.org; frame-src 'self' https://www.openstreetmap.org https://maps.google.com;"
+            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host https://router.project-osrm.org https://*.ochana0101.click https://call.ochana0101.click https://ireport-call-test.onrender.com https://*.onrender.com wss://*.livekit.cloud https://*.livekit.cloud ws://localhost:* http://75.119.142.12:* http://127.0.0.1:* http://localhost:*; frame-src 'self' https://www.openstreetmap.org https://maps.google.com; media-src 'self' blob: mediastream:;"
+            : "default-src 'self'; script-src 'self' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://exp.host https://router.project-osrm.org https://*.ochana0101.click https://call.ochana0101.click https://ireport-call-test.onrender.com https://*.onrender.com wss://*.livekit.cloud https://*.livekit.cloud http://75.119.142.12:* http://127.0.0.1:* http://localhost:*; frame-src 'self' https://www.openstreetmap.org https://maps.google.com; media-src 'self' blob: mediastream:;"
         ]
       }
     });
@@ -151,30 +380,30 @@ function createWindow() {
     },
     show: false,
   });
-  
+
   // Remove menu bar completely on Windows
   mainWindow.setMenuBarVisibility(false);
 
   // Load the app
   if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL('http://127.0.0.1:5174');
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
-    
+
     // In production, disable DevTools by default
     // Block keyboard shortcuts for DevTools
     mainWindow.webContents.on('before-input-event', (event, input) => {
       // Block F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U (view source)
       if (!debugModeEnabled) {
-        if (input.key === 'F12' || 
-            (input.control && input.shift && (input.key === 'I' || input.key === 'i' || input.key === 'J' || input.key === 'j')) ||
-            (input.control && (input.key === 'U' || input.key === 'u'))) {
+        if (input.key === 'F12' ||
+          (input.control && input.shift && (input.key === 'I' || input.key === 'i' || input.key === 'J' || input.key === 'j')) ||
+          (input.control && (input.key === 'U' || input.key === 'u'))) {
           event.preventDefault();
         }
       }
     });
-    
+
     // Disable right-click context menu in production (unless debug mode)
     mainWindow.webContents.on('context-menu', (event) => {
       if (!debugModeEnabled) {
@@ -190,8 +419,12 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    pushService.setMainWindow(null);
   });
-  
+
+  // Wire push service to this window so it can send IPC events
+  pushService.setMainWindow(mainWindow);
+
   // Always focus window when it's shown (e.g., after logout)
   mainWindow.on('show', () => {
     mainWindow?.focus();
@@ -200,7 +433,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   createWindow();
-  
+
   // Start the push notification service
   pushService.start();
   console.log('[Admin] Push notification service started');
@@ -215,7 +448,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   // Stop the push notification service
   pushService.stop();
-  
+
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -224,7 +457,7 @@ app.on('window-all-closed', () => {
 // IPC Handlers - Debug Mode
 ipcMain.handle('app:setDebugMode', async (_event, enabled: boolean) => {
   debugModeEnabled = enabled;
-  
+
   if (mainWindow) {
     if (enabled) {
       // Open DevTools when debug mode is enabled
@@ -234,7 +467,7 @@ ipcMain.handle('app:setDebugMode', async (_event, enabled: boolean) => {
       mainWindow.webContents.closeDevTools();
     }
   }
-  
+
   return { success: true, debugMode: enabled };
 });
 
@@ -279,13 +512,13 @@ ipcMain.handle('app:confirm', async (_event, params: { message: string; detail?:
 // IPC Handlers - using Supabase directly
 // Municipality detection now uses GeoJSON polygons via geoUtils.ts for accurate boundary detection
 
-ipcMain.handle('db:getIncidents', async (_event, filters: { 
-  agency?: string; 
-  status?: string; 
-  municipality?: string; 
-  barangay?: string; 
-  incident_type?: string; 
-  limit?: number; 
+ipcMain.handle('db:getIncidents', async (_event, filters: {
+  agency?: string;
+  status?: string;
+  municipality?: string;
+  barangay?: string;
+  incident_type?: string;
+  limit?: number;
   stationId?: number;
   page?: number;
   pageSize?: number;
@@ -296,7 +529,8 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
   const offset = (page - 1) * pageSize;
 
   // Build query with count - include lat/lng for coordinate-based filtering
-  let query = supabase.from('incidents').select('*', { count: 'exact' });
+  // Always exclude ai_routing incidents (fast reports awaiting AI triage)
+  let query = supabase.from('incidents').select('*', { count: 'exact' }).neq('status', 'ai_routing');
 
   const sanitize = (value?: string) => value?.trim().replace(/,/g, ' ') || '';
 
@@ -307,16 +541,16 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
   // Handle agency filter - include both primary agency and multi-agency incidents
   if (filters.agency) {
     console.log('[Admin] Filtering incidents for agency:', filters.agency);
-    
+
     // Get agency ID from short_name
     const { data: agencyData, error: agencyError } = await supabase
       .from('agencies')
       .select('id')
       .ilike('short_name', filters.agency)
       .single();
-    
+
     console.log('[Admin] Agency lookup result:', agencyData, 'error:', agencyError);
-    
+
     if (agencyData) {
       // Get incident IDs where this agency is a supporting/lead agency
       const { data: multiAgencyIncidents, error: multiError } = await supabase
@@ -324,11 +558,11 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
         .select('incident_id')
         .eq('agency_id', agencyData.id)
         .not('acknowledged_at', 'is', null); // Only include acknowledged agencies
-      
+
       console.log('[Admin] Multi-agency incidents for agency ID', agencyData.id, ':', multiAgencyIncidents, 'error:', multiError);
-      
+
       multiAgencyIncidentIds = multiAgencyIncidents?.map(ia => ia.incident_id) || [];
-      
+
       // Filter to include: primary agency OR in multi-agency list
       if (multiAgencyIncidentIds.length > 0) {
         const orFilter = `agency_type.eq.${filters.agency},id.in.(${multiAgencyIncidentIds.join(',')})`;
@@ -358,14 +592,14 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
   if (filters.status) {
     query = query.eq('status', filters.status);
   }
-  
+
   // For municipality/barangay filtering, we need to handle both address-based and coordinate-based
   // First, apply address-based filter if barangay is specified
   if (filters.barangay) {
     const barangay = sanitize(filters.barangay);
     query = query.ilike('location_address', `%${barangay}%`);
   }
-  
+
   // Full-text search using search_vector column
   if (filters.search) {
     let searchTerm = sanitize(filters.search);
@@ -374,12 +608,12 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
     // Check if search starts with # (short code search)
     const shortCodePattern = /^#?([0-9a-fA-F]{2,8})$/;
     const shortCodeMatch = searchTerm.match(shortCodePattern);
-    
+
     if (shortCodeMatch) {
       // Short code search (e.g., #1f, #1f2a, 1f, 1f2a)
       const code = shortCodeMatch[1].toLowerCase();
       console.log('[Admin] Short code search:', code);
-      
+
       // Search by short_code column (hex approach) with prefix matching
       // This allows typing "75" to find "75ec"
       query = query.ilike('short_code', `${code}%`);
@@ -387,7 +621,7 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
       // Check if it's a UUID pattern (full or partial)
       const fullUuidPattern = /^[0-9a-fA-F-]{36}$/;
       const partialUuidPattern = /^[0-9a-fA-F-]{8,}$/;
-      
+
       if (fullUuidPattern.test(searchTerm)) {
         // Exact UUID match - use direct ID filter
         console.log('[Admin] Exact UUID search:', searchTerm);
@@ -401,7 +635,7 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
         // Use websearch_to_tsquery for natural language queries
         // This supports: phrases ("fire incident"), AND (fire daet), OR (fire | water)
         console.log('[Admin] Full-text search:', searchTerm);
-        
+
         try {
           // Use textSearch method with websearch type for natural language
           query = query.textSearch('search_vector', searchTerm, {
@@ -418,7 +652,7 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
   }
 
   query = query.order('created_at', { ascending: false });
-  
+
   // Apply pagination or limit
   if (filters.limit) {
     // Legacy support for limit-only queries (used by Reports)
@@ -428,7 +662,7 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
       console.error('[Admin] getIncidents error', error);
       throw new Error(error.message || 'Failed to get incidents');
     }
-    
+
     // For municipality filtering with coordinates, filter in memory using GeoJSON polygons
     let filteredData = data || [];
     if (filters.municipality && !filters.barangay) {
@@ -449,7 +683,7 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
         return false;
       });
     }
-    
+
     // Enrich with multi-agency information
     const enrichedData = await enrichIncidentsWithMultiAgency(filteredData);
     return enrichedData;
@@ -464,7 +698,7 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
         console.error('[Admin] getIncidents error', error);
         throw new Error(error.message || 'Failed to get incidents');
       }
-      
+
       // Filter by municipality (address or coordinates) using GeoJSON polygons
       const municipality = filters.municipality;
       const filteredData = (data || []).filter((incident: any) => {
@@ -482,14 +716,14 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
         }
         return false;
       });
-      
+
       // Apply pagination in memory
       const total = filteredData.length;
       const paginatedData = filteredData.slice(offset, offset + pageSize);
-      
+
       // Enrich with multi-agency information
       const enrichedData = await enrichIncidentsWithMultiAgency(paginatedData);
-      
+
       return {
         data: enrichedData,
         total,
@@ -498,7 +732,7 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
         totalPages: Math.ceil(total / pageSize)
       };
     }
-    
+
     // Standard paginated query without municipality filter
     query = query.range(offset, offset + pageSize - 1);
     const { data, error, count } = await query;
@@ -506,10 +740,10 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
       console.error('[Admin] getIncidents error', error);
       throw new Error(error.message || 'Failed to get incidents');
     }
-    
+
     // Enrich incidents with multi-agency information
     const enrichedData = await enrichIncidentsWithMultiAgency(data || []);
-    
+
     return {
       data: enrichedData,
       total: count || 0,
@@ -523,22 +757,22 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
 // Helper function to enrich incidents with multi-agency info
 async function enrichIncidentsWithMultiAgency(incidents: any[]): Promise<any[]> {
   if (incidents.length === 0) return incidents;
-  
+
   const incidentIds = incidents.map(i => i.id);
-  
+
   // Get agency counts for all incidents
   const { data: agencyCounts } = await supabase
     .from('incident_agencies')
     .select('incident_id')
     .in('incident_id', incidentIds)
     .not('acknowledged_at', 'is', null);
-  
+
   // Count agencies per incident
   const countMap: Record<string, number> = {};
   agencyCounts?.forEach(ia => {
     countMap[ia.incident_id] = (countMap[ia.incident_id] || 0) + 1;
   });
-  
+
   // Enrich incidents
   return incidents.map(incident => ({
     ...incident,
@@ -555,7 +789,7 @@ ipcMain.handle('db:getIncident', async (_event, id: string) => {
       .select('*')
       .eq('id', id)
       .single();
-    
+
     if (incidentError) {
       console.error('[Admin] Failed to get incident:', incidentError);
       throw new Error(incidentError.message || 'Failed to get incident');
@@ -579,23 +813,59 @@ ipcMain.handle('db:getIncident', async (_event, id: string) => {
   }
 });
 
-ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, stationId, officerIds, resourceIds, casualtiesCategory, casualtiesCount }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => {
+ipcMain.handle('db:getIncidentAIReport', async (_event, incidentId: string) => {
+  try {
+    const { data: aiReport, error } = await supabase
+      .from('incident_ai_reports')
+      .select('*')
+      .eq('incident_id', incidentId)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null; // Zero rows = no AI report yet
+      console.error('[Admin] Failed to get AI Report:', error);
+      return null;
+    }
+    return aiReport;
+  } catch (error: any) {
+    console.error('[Admin] Error in getIncidentAIReport:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, stationId, officerIds, primaryOfficerId, resourceIds, casualtiesCategory, casualtiesCount }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => {
   const now = new Date().toISOString();
 
   try {
+    // Admin PIN logins generate a random UUID that is NOT in profiles.
+    // FK-constrained columns must use NULL when the UUID is invalid.
+    const validUserId = await resolveValidProfileId(updatedById);
+
+    const isTerminalStatus = status === 'resolved' || status === 'closed';
+
     // Get current incident to check assignments and status
     const { data: currentIncident } = await supabase
       .from('incidents')
-      .select('agency_type, assigned_station_id, status, assigned_officer_ids, assigned_resource_ids')
+      .select('agency_type, assigned_station_id, status, first_response_at, assigned_officer_ids, assigned_resource_ids')
       .eq('id', id)
       .single();
 
+    // Check if current incident is already terminal (resolved or closed)
+    // Terminal incidents cannot be modified without being explicitly re-opened
+    const currentStatus = currentIncident?.status;
+    if (currentStatus === 'resolved' || currentStatus === 'closed') {
+      console.warn(`[Admin] Rejected update attempt on terminal incident ${id} (current status: ${currentStatus})`);
+      throw new Error(`incident_is_locked: Incident is already ${currentStatus} and cannot be modified.`);
+    }
+
     // Build update object
-    const updateData: any = { 
-      status, 
+    const updateData: any = {
+      status,
       updated_at: now,
       updated_by: updatedBy  // Sync with incident_status_history
     };
+    const oldOfficerIds: string[] = currentIncident?.assigned_officer_ids || [];
+    const oldResourceIds: number[] = currentIncident?.assigned_resource_ids || [];
 
     // Handle casualties fields
     if (casualtiesCategory !== undefined) {
@@ -606,9 +876,22 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
     }
 
     // Handle officer assignment (multiple officers supported)
-    // Store as array - primary officer is first in list
-    if (officerIds !== undefined) { // Only if explicitly provided
-      updateData.assigned_officer_id = officerIds.length > 0 ? officerIds[0] : null; // Primary officer for backward compatibility
+    if (isTerminalStatus) {
+      const oldOfficerIds: string[] = currentIncident?.assigned_officer_ids || [];
+      const providedOfficerIds: string[] = officerIds || [];
+      const officerIdsToRelease = Array.from(new Set([...oldOfficerIds, ...providedOfficerIds]));
+
+      updateData.assigned_officer_id = null;
+      updateData.assigned_officer_ids = [];
+
+      if (officerIdsToRelease.length > 0) {
+        await supabase.from('profiles').update({ status: 'available' }).in('id', officerIdsToRelease);
+      }
+    } else if (officerIds !== undefined) { // Only if explicitly provided
+      const leadOfficerId = primaryOfficerId && officerIds.includes(primaryOfficerId)
+        ? primaryOfficerId
+        : officerIds.length > 0 ? officerIds[0] : null;
+      updateData.assigned_officer_id = leadOfficerId;
       updateData.assigned_officer_ids = officerIds; // All assigned officers
 
       // Manage Officer Availability Status
@@ -621,22 +904,35 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
         await supabase.from('profiles').update({ status: 'available' }).in('id', removedOfficers);
       }
 
-      // Officers added -> set to busy
+      // Officers added -> set to busy (only if currently available)
       const addedOfficers = newOfficerIds.filter(oid => !oldOfficerIds.includes(oid));
       if (addedOfficers.length > 0) {
-        await supabase.from('profiles').update({ status: 'busy' }).in('id', addedOfficers);
+        const { data: addedProfiles } = await supabase
+          .from('profiles')
+          .select('id, status')
+          .in('id', addedOfficers);
+        const availableToBusy = (addedProfiles || [])
+          .filter((p: any) => p.status === 'available')
+          .map((p: any) => p.id);
+        if (availableToBusy.length > 0) {
+          await supabase.from('profiles').update({ status: 'busy' }).in('id', availableToBusy);
+        }
       }
-      
-      // If incident is resolved/closed, free all officers
-      if (status === 'resolved' || status === 'closed') {
-         if (newOfficerIds.length > 0) {
-            await supabase.from('profiles').update({ status: 'available' }).in('id', newOfficerIds);
-         }
-      }
+
     }
 
     // Handle resource assignment
-    if (resourceIds !== undefined) {
+    if (isTerminalStatus) {
+      const oldResourceIds: number[] = currentIncident?.assigned_resource_ids || [];
+      const providedResourceIds: number[] = resourceIds || [];
+      const resourceIdsToRelease = Array.from(new Set([...oldResourceIds, ...providedResourceIds]));
+
+      updateData.assigned_resource_ids = [];
+
+      if (resourceIdsToRelease.length > 0) {
+        await supabase.from('agency_resources').update({ status: 'available', updated_at: now }).in('id', resourceIdsToRelease);
+      }
+    } else if (resourceIds !== undefined) {
       updateData.assigned_resource_ids = resourceIds;
 
       // Manage Resource Availability Status
@@ -649,27 +945,30 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
         await supabase.from('agency_resources').update({ status: 'available', updated_at: now }).in('id', removedResources);
       }
 
-      // Resources added -> set to deployed
+      // Resources added -> set to deployed (only if currently available)
       const addedResources = newResourceIds.filter(rid => !oldResourceIds.includes(rid));
       if (addedResources.length > 0) {
-        await supabase.from('agency_resources').update({ status: 'deployed', updated_at: now }).in('id', addedResources);
+        const { data: addedResStatuses } = await supabase
+          .from('agency_resources')
+          .select('id, status')
+          .in('id', addedResources);
+        const availableToDeploy = (addedResStatuses || [])
+          .filter((r: any) => r.status === 'available')
+          .map((r: any) => r.id);
+        if (availableToDeploy.length > 0) {
+          await supabase.from('agency_resources').update({ status: 'deployed', updated_at: now }).in('id', availableToDeploy);
+        }
       }
 
-      // If incident is resolved/closed, free all resources
-      if (status === 'resolved' || status === 'closed') {
-         if (newResourceIds.length > 0) {
-            await supabase.from('agency_resources').update({ status: 'available', updated_at: now }).in('id', newResourceIds);
-         }
-      }
     }
 
     // Set resolved_at when status changes to resolved or closed
-    if (status === 'resolved' || status === 'closed') {
+    if (isTerminalStatus) {
       updateData.resolved_at = now;
     }
 
-    // Set first_response_at when first moving from pending
-    if (currentIncident?.status === 'pending' && status !== 'pending') {
+    // Set first_response_at only on first responder arrival state transition
+    if (!currentIncident?.first_response_at && (status === 'in_progress' || status === 'responding')) {
       updateData.first_response_at = now;
     }
 
@@ -678,62 +977,61 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       // Explicit station assignment provided by admin
       updateData.assigned_station_id = stationId;
       console.log('[Admin] Explicit station assignment:', stationId);
-    } else if (!currentIncident?.assigned_station_id && status !== 'pending') {
+    } else if (!currentIncident?.assigned_station_id && status !== 'pending' && !isTerminalStatus) {
       // Auto-assign to CLOSEST station of matching agency if not already assigned
       console.log('[Admin] Attempting auto-assignment for incident:', id);
       console.log('[Admin] Current incident agency:', currentIncident?.agency_type);
       console.log('[Admin] Status:', status);
-      
+
       const agencyNameMap: Record<string, string> = {
         'pnp': 'PNP',
-        'bfp': 'BFP', 
-        'pdrrmo': 'PDRRMO',
+        'bfp': 'BFP',
         'mdrrmo': 'MDRRMO'
       };
       const agencyShortName = agencyNameMap[currentIncident?.agency_type?.toLowerCase()] || currentIncident?.agency_type?.toUpperCase();
-      
+
       console.log('[Admin] Looking for agency with short_name:', agencyShortName);
-      
+
       // Find agency by short_name (matches agency_type) - case insensitive
       const { data: agency, error: agencyError } = await supabase
         .from('agencies')
         .select('id')
         .ilike('short_name', agencyShortName)
         .single();
-      
+
       if (agencyError) {
         console.error('[Admin] Agency lookup failed:', agencyError);
       }
-      
+
       if (agency) {
         console.log('[Admin] Found agency:', agency);
-        
+
         // Get incident coordinates for distance calculation
         const { data: incident } = await supabase
           .from('incidents')
           .select('latitude, longitude')
           .eq('id', id)
           .single();
-        
+
         console.log('[Admin] Incident coordinates:', incident?.latitude, incident?.longitude);
-        
+
         if (incident?.latitude && incident?.longitude) {
           // Get all stations for this agency
           const { data: stations } = await supabase
             .from('agency_stations')
             .select('id, name, latitude, longitude')
             .eq('agency_id', agency.id);
-          
+
           console.log('[Admin] Found', stations?.length || 0, 'stations for agency');
-          
+
           if (stations && stations.length > 0) {
             // Calculate distance to each station and find closest
             const incLat = parseFloat(incident.latitude);
             const incLng = parseFloat(incident.longitude);
-            
+
             let closestStation = stations[0];
             let minDistance = Infinity;
-            
+
             for (const station of stations) {
               const stationLat = parseFloat(station.latitude);
               const stationLng = parseFloat(station.longitude);
@@ -741,18 +1039,18 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
               const R = 6371; // Earth's radius in km
               const dLat = (stationLat - incLat) * Math.PI / 180;
               const dLng = (stationLng - incLng) * Math.PI / 180;
-              const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                        Math.cos(incLat * Math.PI / 180) * Math.cos(stationLat * Math.PI / 180) *
-                        Math.sin(dLng/2) * Math.sin(dLng/2);
-              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+              const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(incLat * Math.PI / 180) * Math.cos(stationLat * Math.PI / 180) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
               const distance = R * c;
-              
+
               if (distance < minDistance) {
                 minDistance = distance;
                 closestStation = station;
               }
             }
-            
+
             updateData.assigned_station_id = closestStation.id;
             console.log(`[Admin] ✅ Auto-assigned to closest station: ${closestStation.name || closestStation.id} (${minDistance.toFixed(2)}km away)`);
           } else {
@@ -781,6 +1079,64 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       throw new Error(updateError.message || 'Failed to update incident status');
     }
 
+    const newOfficerIds: string[] = isTerminalStatus ? [] : (officerIds || oldOfficerIds);
+    const newResourceIds: number[] = isTerminalStatus ? [] : (resourceIds || oldResourceIds);
+    const newStationId = updateData.assigned_station_id !== undefined
+      ? updateData.assigned_station_id
+      : currentIncident?.assigned_station_id || null;
+
+    const sameItems = <T,>(a: T[], b: T[]) => {
+      if (a.length !== b.length) return false;
+      return a.every(item => b.includes(item));
+    };
+
+    const officersChanged = (officerIds !== undefined || isTerminalStatus) && !sameItems(oldOfficerIds, newOfficerIds);
+    const resourcesChanged = (resourceIds !== undefined || isTerminalStatus) && !sameItems(oldResourceIds, newResourceIds);
+    const stationChanged = updateData.assigned_station_id !== undefined &&
+      updateData.assigned_station_id !== currentIncident?.assigned_station_id;
+
+    if (status !== currentIncident?.status || officersChanged || resourcesChanged || stationChanged) {
+      const { data: incidentAgencies } = await supabase
+        .from('incident_agencies')
+        .select('agency_id')
+        .eq('incident_id', id);
+
+      const agencyIds = Array.from(new Set((incidentAgencies || [])
+        .map((record: any) => record.agency_id)
+        .filter((agencyId: any) => agencyId !== null && agencyId !== undefined)));
+
+      const historyReasons = [
+        isTerminalStatus ? 'terminal_release' : null,
+        officersChanged ? 'officers_changed' : null,
+        resourcesChanged ? 'resources_changed' : null,
+        stationChanged ? 'station_changed' : null
+      ].filter(Boolean);
+
+      const { error: assignmentHistoryError } = await supabase
+        .from('incident_assignment_history')
+        .insert({
+          incident_id: id,
+          from_status: currentIncident?.status || null,
+          to_status: status,
+          previous_station_id: currentIncident?.assigned_station_id || null,
+          new_station_id: newStationId,
+          previous_officer_ids: oldOfficerIds,
+          new_officer_ids: newOfficerIds,
+          previous_resource_ids: oldResourceIds,
+          new_resource_ids: newResourceIds,
+          agency_ids: agencyIds,
+          reason: historyReasons.length > 0 ? historyReasons.join(',') : 'status_changed',
+          changed_by: validUserId,
+          changed_by_label: updatedBy,
+          notes: notes || null,
+          created_at: now
+        });
+
+      if (assignmentHistoryError) {
+        console.error('[Admin] Failed to save assignment history:', assignmentHistoryError);
+      }
+    }
+
     // Insert into incident_status_history (this syncs with incidents.updated_by and resolved_at)
     const { error: historyError } = await supabase
       .from('incident_status_history')
@@ -802,11 +1158,11 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
         .from('incident_updates')
         .insert({
           incident_id: id,
-          author_id: updatedById || null,
+          author_id: validUserId,
           update_text: `Status changed to ${status}: ${notes}`,
           created_at: now
         });
-        
+
       if (noteError) {
         console.error('[Admin] Failed to save note:', noteError);
       }
@@ -819,10 +1175,156 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
     // Invalidate stats cache since status changed
     clearCache('stats');
 
+    // Determine what actually changed for better logging
+    const statusChanged = status !== currentIncident?.status;
+
+    // Fetch officer names if officers were changed
+    let officerNames: string[] = [];
+    if (officersChanged && officerIds && officerIds.length > 0) {
+      const { data: officers } = await supabase
+        .from('profiles')
+        .select('display_name')
+        .in('id', officerIds);
+      officerNames = officers?.map(o => o.display_name) || [];
+    }
+
+    // Determine the most specific action type
+    let actionType = 'incident_updated';
+    let actionDescription: any = {
+      incident_id: id,
+      notes: notes || undefined
+    };
+
+    if (statusChanged) {
+      actionType = 'incident_status_changed';
+      actionDescription.old_status = currentIncident?.status;
+      actionDescription.new_status = status;
+    }
+
+    if (officersChanged) {
+      actionType = statusChanged ? 'incident_status_and_officers_changed' : 'incident_officers_assigned';
+      actionDescription.officer_count = newOfficerIds.length;
+      actionDescription.officer_names = officerNames;
+      actionDescription.officer_ids = newOfficerIds;
+      actionDescription.primary_officer_id = primaryOfficerId;
+    }
+
+    if (resourcesChanged) {
+      actionType = 'incident_resources_assigned';
+      actionDescription.resource_count = newResourceIds.length;
+      actionDescription.resource_ids = newResourceIds;
+    }
+
+    if (stationChanged) {
+      actionDescription.assigned_station_id = updateData.assigned_station_id;
+      // Fetch station name
+      const { data: station } = await supabase
+        .from('agency_stations')
+        .select('name')
+        .eq('id', updateData.assigned_station_id)
+        .single();
+      if (station) {
+        actionDescription.station_name = station.name;
+      }
+    }
+
+    // Log security action with specific type
+    await logSecurityAction(
+      actionType,
+      actionDescription,
+      updatedById,
+      updatedBy,
+      'incident',
+      id
+    );
+
     return { success: true };
   } catch (error: any) {
     console.error('[Admin] Error in updateIncidentStatus:', error);
     throw new Error(error.message || 'Failed to update incident status');
+  }
+});
+
+ipcMain.handle('incidents:reopen', async (_event, { id, updatedBy, updatedById, notes }: { id: string; updatedBy: string; updatedById?: string; notes?: string }) => {
+  const now = new Date().toISOString();
+  try {
+    // 1. Validate permissions - MUST be an Admin
+    // Admin PIN logins generate a UUID that is NOT in profiles, so a missing
+    // profile is expected for admin users and should not block the action.
+    const validUserId = await resolveValidProfileId(updatedById);
+    if (updatedById && validUserId) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', updatedById).single();
+      if (profile && profile.role !== 'Admin') {
+        throw new Error('Permission denied: Only administrators can re-open incidents.');
+      }
+    }
+
+    // 2. Get current incident
+    const { data: incident, error: fetchError } = await supabase
+      .from('incidents')
+      .select('status')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !incident) {
+      throw new Error('Incident not found');
+    }
+
+    const currentStatus = incident.status;
+    if (currentStatus !== 'closed' && currentStatus !== 'resolved') {
+      throw new Error(`Only closed or resolved incidents can be re-opened. Current status: ${currentStatus}`);
+    }
+
+    // 3. Update incident status
+    const { error: updateError } = await supabase
+      .from('incidents')
+      .update({
+        status: 'in_progress',
+        updated_at: now,
+        updated_by: updatedBy,
+        resolved_at: null // Clear resolved timestamp
+      })
+      .eq('id', id);
+
+    if (updateError) throw updateError;
+
+    // 4. Record history
+    await supabase.from('incident_status_history').insert({
+      incident_id: id,
+      status: 'in_progress',
+      notes: notes || 'Incident explicitly re-opened by administrator.',
+      changed_by: updatedById || updatedBy,
+      changed_at: now
+    });
+
+    await supabase.from('incident_assignment_history').insert({
+      incident_id: id,
+      from_status: currentStatus,
+      to_status: 'in_progress',
+      reason: 'reopened',
+      changed_by: validUserId,
+      changed_by_label: updatedBy,
+      notes: notes || 'Incident explicitly re-opened by administrator.',
+      created_at: now
+    });
+
+    // 5. Invalidate cache
+    clearCache('stats');
+
+    // 6. Log security action
+    await logSecurityAction(
+      'incident_reopened',
+      { incident_id: id, old_status: currentStatus, notes: notes || 'Administrative re-opening' },
+      updatedById,
+      updatedBy,
+      'incident',
+      id
+    );
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('[Admin] Error reopening incident:', error);
+    throw new Error(error.message || 'Failed to re-open incident');
   }
 });
 
@@ -842,7 +1344,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
 
   console.log('[Admin] Fetching stats from Supabase...');
   console.log('[Admin] Using URL:', supabaseUrl);
-  
+
   try {
     // Get incidents for stats including location_address for area aggregation and created_at for trends
     let query = supabase
@@ -863,7 +1365,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     }
 
     const { data: incidents, error, count } = await query;
-    
+
     console.log('[Admin] Query result - data:', incidents?.length, 'error:', error, 'count:', count);
 
     if (error) {
@@ -892,12 +1394,12 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     const areaMap = new Map<string, number>();
     incidents?.forEach(i => {
       let area: string | null = null;
-      
+
       if (i.location_address && i.location_address.trim()) {
         const addr = i.location_address.trim();
         // Check if address looks like coordinates (starts with numbers and contains comma)
         const looksLikeCoords = /^-?\d+\.?\d*\s*,\s*-?\d+\.?\d*$/.test(addr);
-        
+
         if (!looksLikeCoords) {
           // Extract municipality/barangay from address (last 2-3 parts typically)
           const parts = addr.split(',').map((p: string) => p.trim()).filter((p: string) => p.length > 0);
@@ -905,7 +1407,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
           area = parts.length >= 2 ? parts.slice(-2).join(', ') : addr;
         }
       }
-      
+
       // Fallback: group by rounded coordinates if no valid address
       if (!area && i.latitude != null && i.longitude != null) {
         // Round to 2 decimal places for grouping nearby incidents
@@ -913,13 +1415,13 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
         const lng = parseFloat(i.longitude).toFixed(2);
         area = `Near ${lat}°N, ${lng}°E`;
       }
-      
+
       if (area) {
         const count = areaMap.get(area) || 0;
         areaMap.set(area, count + 1);
       }
     });
-    
+
     // Find the area with most incidents
     let mostActiveArea = null;
     let maxCount = 0;
@@ -954,7 +1456,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
           .limit(10);
 
         const { data: historyData, error: historyError } = await historyQuery;
-        
+
         if (!historyError && historyData) {
           // Fetch profiles for UUIDs in changed_by
           const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -982,7 +1484,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
             const incidentMeta = incidentMetaMap.get(h.incident_id);
             const changedBy = String(h.changed_by || 'System').trim();
             const changedByLower = changedBy.toLowerCase();
-            
+
             // Use display name if UUID found in profiles, otherwise use the value as-is
             const displayName = uuidRegex.test(changedBy) && profileMap.has(changedByLower)
               ? profileMap.get(changedByLower)
@@ -1005,16 +1507,16 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     // Calculate performance metrics directly from incidents table (more reliable)
     let avgResponseTime: number | null = null;
     let avgResolutionTime: number | null = null;
-    
+
     try {
       // Use first_response_at and resolved_at from incidents table directly
       const responseTimes: number[] = [];
       const resolutionTimes: number[] = [];
-      
+
       // Get ALL resolved/closed incidents to check for resolution times
       const resolvedIncidents = incidents?.filter(i => i.status === 'resolved' || i.status === 'closed') || [];
       const resolvedIncidentIds = resolvedIncidents.map(i => i.id);
-      
+
       // Fetch resolution times from status history for ALL resolved incidents (as primary or fallback)
       let statusHistoryMap = new Map<string, string>();
       if (resolvedIncidentIds.length > 0) {
@@ -1024,7 +1526,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
           .in('incident_id', resolvedIncidentIds)
           .in('status', ['resolved', 'closed'])
           .order('changed_at', { ascending: true });
-        
+
         if (historyData) {
           // Get first resolution time for each incident
           historyData.forEach(h => {
@@ -1034,7 +1536,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
           });
         }
       }
-      
+
       incidents?.forEach(i => {
         // Calculate response time (created_at to first_response_at)
         if (i.first_response_at && i.created_at) {
@@ -1046,14 +1548,14 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
             responseTimes.push(diffMinutes);
           }
         }
-        
+
         // Calculate resolution time (created_at to resolved_at)
         // Prefer status history (more reliable), fallback to resolved_at column
         let resolvedAt: string | null = null;
         if (i.status === 'resolved' || i.status === 'closed') {
           resolvedAt = statusHistoryMap.get(i.id) || i.resolved_at || null;
         }
-        
+
         if (resolvedAt && i.created_at) {
           const createdAt = new Date(i.created_at).getTime();
           const resolvedTime = new Date(resolvedAt).getTime();
@@ -1064,11 +1566,11 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
           }
         }
       });
-      
+
       if (responseTimes.length > 0) {
         avgResponseTime = Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length);
       }
-      
+
       if (resolutionTimes.length > 0) {
         avgResolutionTime = Math.round(resolutionTimes.reduce((a, b) => a + b, 0) / resolutionTimes.length);
       }
@@ -1122,7 +1624,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
           .select('id')
           .ilike('short_name', filters.agency)
           .single();
-        
+
         if (agencyData) {
           // Count incidents where this agency is a supporting/lead agency
           const { data: multiAgencyIncidents } = await supabase
@@ -1130,7 +1632,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
             .select('incident_id', { count: 'exact' })
             .eq('agency_id', agencyData.id)
             .not('acknowledged_at', 'is', null);
-          
+
           multiAgencyCount = multiAgencyIncidents?.length || 0;
         }
       } catch (e) {
@@ -1151,7 +1653,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
       dailyTrend,
       multiAgencyCount,   // count of multi-agency incidents for this agency
     };
-    
+
     console.log('[Admin] Stats result:', result);
     if (!filters?.skipCache) {
       setCache(cacheKey, result); // Cache the result
@@ -1169,7 +1671,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
       byAgency: [
         { agency_type: 'pnp', count: 2 },
         { agency_type: 'bfp', count: 2 },
-        { agency_type: 'pdrrmo', count: 1 },
+        { agency_type: 'mdrrmo', count: 1 },
       ],
       mostActiveArea: null,
       recentActivity: [],
@@ -1229,7 +1731,7 @@ ipcMain.handle('db:getAuditLog', async (_event, incidentId: string) => {
     const enrichedHistory = historyData.map(entry => {
       const changedBy = String(entry.changed_by).trim();
       const changedByLower = changedBy.toLowerCase();
-      
+
       // If changed_by is a UUID and we have a profile, use the display_name
       if (uuidRegex.test(changedBy) && profileMap.has(changedByLower)) {
         return {
@@ -1253,6 +1755,85 @@ ipcMain.handle('db:getAuditLog', async (_event, incidentId: string) => {
   }
 });
 
+ipcMain.handle('db:getIncidentAssignmentHistory', async (_event, incidentId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('incident_assignment_history')
+      .select('*')
+      .eq('incident_id', incidentId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[Admin] Failed to fetch assignment history:', error);
+      return [];
+    }
+
+    if (!data || data.length === 0) {
+      return [];
+    }
+
+    const stationIds = Array.from(new Set(
+      data
+        .flatMap((entry: any) => [entry.previous_station_id, entry.new_station_id])
+        .filter((stationId: any) => stationId !== null && stationId !== undefined)
+    ));
+    const officerIds = Array.from(new Set(
+      data
+        .flatMap((entry: any) => [...(entry.previous_officer_ids || []), ...(entry.new_officer_ids || [])])
+        .filter(Boolean)
+    ));
+    const resourceIds = Array.from(new Set(
+      data
+        .flatMap((entry: any) => [...(entry.previous_resource_ids || []), ...(entry.new_resource_ids || [])])
+        .filter((resourceId: any) => resourceId !== null && resourceId !== undefined)
+    ));
+    const agencyIds = Array.from(new Set(
+      data
+        .flatMap((entry: any) => entry.agency_ids || [])
+        .filter((agencyId: any) => agencyId !== null && agencyId !== undefined)
+    ));
+
+    const [stationsResult, officersResult, resourcesResult, agenciesResult] = await Promise.all([
+      stationIds.length > 0
+        ? supabase.from('agency_stations').select('id, name').in('id', stationIds)
+        : Promise.resolve({ data: [], error: null }),
+      officerIds.length > 0
+        ? supabase.from('profiles').select('id, display_name, email, role').in('id', officerIds)
+        : Promise.resolve({ data: [], error: null }),
+      resourceIds.length > 0
+        ? supabase.from('agency_resources').select('id, name, type').in('id', resourceIds)
+        : Promise.resolve({ data: [], error: null }),
+      agencyIds.length > 0
+        ? supabase.from('agencies').select('id, name, short_name').in('id', agencyIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (stationsResult.error) console.error('[Admin] Failed to enrich assignment history stations:', stationsResult.error);
+    if (officersResult.error) console.error('[Admin] Failed to enrich assignment history officers:', officersResult.error);
+    if (resourcesResult.error) console.error('[Admin] Failed to enrich assignment history resources:', resourcesResult.error);
+    if (agenciesResult.error) console.error('[Admin] Failed to enrich assignment history agencies:', agenciesResult.error);
+
+    const stationMap = new Map((stationsResult.data || []).map((station: any) => [station.id, station]));
+    const officerMap = new Map((officersResult.data || []).map((officer: any) => [officer.id, officer]));
+    const resourceMap = new Map((resourcesResult.data || []).map((resource: any) => [resource.id, resource]));
+    const agencyMap = new Map((agenciesResult.data || []).map((agency: any) => [agency.id, agency]));
+
+    return data.map((entry: any) => ({
+      ...entry,
+      previous_station: entry.previous_station_id ? stationMap.get(entry.previous_station_id) || null : null,
+      new_station: entry.new_station_id ? stationMap.get(entry.new_station_id) || null : null,
+      previous_officers: (entry.previous_officer_ids || []).map((officerId: string) => officerMap.get(officerId) || { id: officerId }),
+      new_officers: (entry.new_officer_ids || []).map((officerId: string) => officerMap.get(officerId) || { id: officerId }),
+      previous_resources: (entry.previous_resource_ids || []).map((resourceId: number) => resourceMap.get(resourceId) || { id: resourceId }),
+      new_resources: (entry.new_resource_ids || []).map((resourceId: number) => resourceMap.get(resourceId) || { id: resourceId }),
+      agencies: (entry.agency_ids || []).map((agencyId: number) => agencyMap.get(agencyId) || { id: agencyId }),
+    }));
+  } catch (err) {
+    console.error('[Admin] Error in getIncidentAssignmentHistory:', err);
+    return [];
+  }
+});
+
 ipcMain.handle('db:getAgencyStations', async () => {
   // First try to get from database
   const cached = getCached<any>('agencyStations');
@@ -1264,17 +1845,18 @@ ipcMain.handle('db:getAgencyStations', async () => {
     .from('agency_stations')
     .select(`
       *,
-      agencies (name, short_name)
+      agencies!inner (name, short_name)
     `)
+    .neq('agencies.short_name', 'pdrrmo')
     .order('name');
 
   if (error) throw error;
-  
+
   if (data && data.length > 0) {
     setCache('agencyStations', data);
     return data;
   }
-  
+
   return []; // Return empty if no stations in DB
 });
 
@@ -1287,7 +1869,7 @@ ipcMain.handle('db:getNearbyServices', async (_event, { latitude, longitude, rad
   }
 
   const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-  
+
   if (!GOOGLE_API_KEY) {
     console.warn('[Admin] No Google Maps API key found. Add GOOGLE_MAPS_API_KEY to .env');
     return [];
@@ -1295,7 +1877,7 @@ ipcMain.handle('db:getNearbyServices', async (_event, { latitude, longitude, rad
 
   try {
     const allStations: any[] = [];
-    
+
     // Search for different types of emergency services
     const placeTypes = [
       { type: 'police', agencyType: 'PNP', icon: '🚔' },
@@ -1306,12 +1888,12 @@ ipcMain.handle('db:getNearbyServices', async (_event, { latitude, longitude, rad
 
     for (const { type, agencyType, icon } of placeTypes) {
       const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=${radius}&type=${type}&key=${GOOGLE_API_KEY}`;
-      
+
       const response = await fetch(url);
       if (!response.ok) continue;
-      
+
       const data = await response.json();
-      
+
       if (data.results) {
         const stations = data.results.map((place: any) => ({
           id: place.place_id,
@@ -1326,7 +1908,7 @@ ipcMain.handle('db:getNearbyServices', async (_event, { latitude, longitude, rad
           rating: place.rating,
           open_now: place.opening_hours?.open_now
         }));
-        
+
         allStations.push(...stations);
       }
     }
@@ -1346,10 +1928,10 @@ ipcMain.handle('sync:status', async () => {
 
 ipcMain.handle('sync:now', async () => {
   console.log('[Admin] Manual sync triggered - clearing all caches');
-  
+
   // Clear all caches to force fresh data
   cache.clear();
-  
+
   // Notify renderer that sync is complete
   if (mainWindow) {
     mainWindow.webContents.send('sync-status', {
@@ -1359,7 +1941,7 @@ ipcMain.handle('sync:now', async () => {
       syncing: false
     });
   }
-  
+
   console.log('[Admin] Sync complete - caches cleared');
   return { success: true };
 });
@@ -1416,7 +1998,7 @@ ipcMain.handle('auth:loginChief', async (_event, { email, password }: { email: s
   console.log(`[Admin] Station address from DB: "${stationAddress}"`);
   const municipalities = ['Basud', 'Capalonga', 'Daet', 'Jose Panganiban', 'Labo', 'Mercedes', 'Paracale', 'San Lorenzo Ruiz', 'San Vicente', 'Santa Elena', 'Talisay', 'Vinzons'];
   let stationMunicipality = '';
-  
+
   // First try to extract from address
   for (const muni of municipalities) {
     if (stationAddress.toLowerCase().includes(muni.toLowerCase())) {
@@ -1425,7 +2007,7 @@ ipcMain.handle('auth:loginChief', async (_event, { email, password }: { email: s
       break;
     }
   }
-  
+
   // If not found in address, try using coordinates with GeoJSON
   if (!stationMunicipality && profile.agency_stations?.latitude && profile.agency_stations?.longitude) {
     const lat = parseFloat(profile.agency_stations.latitude);
@@ -1436,6 +2018,16 @@ ipcMain.handle('auth:loginChief', async (_event, { email, password }: { email: s
       console.log(`[Admin] Detected municipality from station coordinates: ${detectedMuni}`);
     }
   }
+
+  // Log security action
+  await logSecurityAction(
+    'login',
+    { role: profile.role, email: profile.email, agency: profile.agencies?.short_name },
+    authData.user.id,
+    profile.email,
+    'auth',
+    authData.user.id
+  );
 
   return {
     ...profile,
@@ -1462,6 +2054,16 @@ ipcMain.handle('auth:loginOfficer', async (_event, { email, password }: { email:
     throw new Error(authError?.message || 'Invalid credentials');
   }
 
+  // Log security action
+  await logSecurityAction(
+    'login',
+    { email },
+    authData.user.id,
+    email,
+    'auth',
+    authData.user.id
+  );
+
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select(`
@@ -1484,14 +2086,14 @@ ipcMain.handle('auth:loginOfficer', async (_event, { email, password }: { email:
   const stationAddress = profile.agency_stations?.address || '';
   const municipalities = ['Basud', 'Capalonga', 'Daet', 'Jose Panganiban', 'Labo', 'Mercedes', 'Paracale', 'San Lorenzo Ruiz', 'San Vicente', 'Santa Elena', 'Talisay', 'Vinzons'];
   let stationMunicipality = '';
-  
+
   for (const muni of municipalities) {
     if (stationAddress.toLowerCase().includes(muni.toLowerCase())) {
       stationMunicipality = muni;
       break;
     }
   }
-  
+
   if (!stationMunicipality && profile.agency_stations?.latitude && profile.agency_stations?.longitude) {
     const lat = parseFloat(profile.agency_stations.latitude);
     const lng = parseFloat(profile.agency_stations.longitude);
@@ -1513,7 +2115,8 @@ ipcMain.handle('auth:loginOfficer', async (_event, { email, password }: { email:
 ipcMain.handle('users:getAll', async (_event, filters: { role?: string; agency?: string; stationId?: number; search?: string } = {}) => {
   let query = supabase.from('profiles').select(`
     *,
-    agencies (name, short_name)
+    agencies (name, short_name),
+    agency_stations:station_id (id, name, agency_id)
   `);
 
   if (filters.role) {
@@ -1522,7 +2125,7 @@ ipcMain.handle('users:getAll', async (_event, filters: { role?: string; agency?:
   if (filters.agency) {
     query = query.eq('agency_id', filters.agency);
   }
-   if (filters.stationId) {
+  if (filters.stationId) {
     query = query.eq('station_id', filters.stationId);
   }
   if (filters.search) {
@@ -1539,10 +2142,10 @@ ipcMain.handle('users:getAll', async (_event, filters: { role?: string; agency?:
 ipcMain.handle('users:getById', async (_event, id: string) => {
   const { data, error } = await supabase
     .from('profiles')
-    .select(`*, agencies (name, short_name)`)
+    .select(`*, agencies (name, short_name), agency_stations:station_id (id, name, agency_id)`)
     .eq('id', id)
     .single();
-  
+
   if (error) throw error;
   return data;
 });
@@ -1550,7 +2153,7 @@ ipcMain.handle('users:getById', async (_event, id: string) => {
 ipcMain.handle('users:update', async (_event, { id, updates }: { id: string; updates: any }) => {
   // Calculate age from date_of_birth if provided
   const finalUpdates = { ...updates };
-  
+
   if (updates.date_of_birth) {
     const today = new Date();
     const birthDate = new Date(updates.date_of_birth);
@@ -1579,6 +2182,7 @@ ipcMain.handle('users:getAgencies', async () => {
   const { data, error } = await supabase
     .from('agencies')
     .select('*')
+    .neq('short_name', 'pdrrmo')
     .order('name');
 
   if (error) throw error;
@@ -1598,6 +2202,17 @@ ipcMain.handle('stations:create', async (_event, stationData: any) => {
     .single();
 
   if (error) throw error;
+
+  // Log security action
+  await logSecurityAction(
+    'station_created',
+    { station_id: data.id, name: stationData.name, agency_id: stationData.agency_id },
+    undefined,
+    undefined,
+    'station',
+    String(data.id)
+  );
+
   clearCache('agencyStations');
   return data;
 });
@@ -1609,6 +2224,17 @@ ipcMain.handle('stations:update', async (_event, { id, updates }: { id: number; 
     .eq('id', id);
 
   if (error) throw error;
+
+  // Log security action
+  await logSecurityAction(
+    'station_updated',
+    { station_id: id, updates },
+    undefined,
+    undefined,
+    'station',
+    String(id)
+  );
+
   clearCache('agencyStations');
   return { success: true };
 });
@@ -1620,6 +2246,17 @@ ipcMain.handle('stations:delete', async (_event, id: number) => {
     .eq('id', id);
 
   if (error) throw error;
+
+  // Log security action
+  await logSecurityAction(
+    'station_deleted',
+    { station_id: id },
+    undefined,
+    undefined,
+    'station',
+    String(id)
+  );
+
   clearCache('agencyStations');
   return { success: true };
 });
@@ -1641,7 +2278,7 @@ ipcMain.handle('resources:getAll', async () => {
     console.error('[Admin] Failed to fetch resources:', error);
     return [];
   }
-  
+
   setCache('resources', data || []);
   return data || [];
 });
@@ -1654,6 +2291,17 @@ ipcMain.handle('resources:create', async (_event, resourceData: any) => {
     .single();
 
   if (error) throw error;
+
+  // Log security action
+  await logSecurityAction(
+    'resource_created',
+    { resource_id: data.id, name: resourceData.name, type: resourceData.type },
+    undefined,
+    undefined,
+    'resource',
+    String(data.id)
+  );
+
   clearCache('resources');
   return data;
 });
@@ -1665,6 +2313,17 @@ ipcMain.handle('resources:update', async (_event, { id, updates }: { id: number;
     .eq('id', id);
 
   if (error) throw error;
+
+  // Log security action
+  await logSecurityAction(
+    'resource_updated',
+    { resource_id: id, updates },
+    undefined,
+    undefined,
+    'resource',
+    String(id)
+  );
+
   clearCache('resources');
   return { success: true };
 });
@@ -1676,6 +2335,17 @@ ipcMain.handle('resources:delete', async (_event, id: number) => {
     .eq('id', id);
 
   if (error) throw error;
+
+  // Log security action
+  await logSecurityAction(
+    'resource_deleted',
+    { resource_id: id },
+    undefined,
+    undefined,
+    'resource',
+    String(id)
+  );
+
   clearCache('resources');
   return { success: true };
 });
@@ -1685,24 +2355,34 @@ ipcMain.handle('resources:delete', async (_event, id: number) => {
 // ============================================
 
 ipcMain.handle('export:incidents', async (_event, { format, filters }: { format: 'csv' | 'json'; filters?: any }) => {
-  let query = supabase.from('incidents').select('*');
-  
+  let query = supabase.from('incidents').select('*').neq('status', 'ai_routing');
+
   if (filters?.status) query = query.eq('status', filters.status);
   if (filters?.agency) query = query.eq('agency_type', filters.agency);
   if (filters?.stationId) query = query.eq('assigned_station_id', filters.stationId);
   if (filters?.dateFrom) query = query.gte('created_at', filters.dateFrom);
   if (filters?.dateTo) query = query.lte('created_at', filters.dateTo);
-  
+
   query = query.order('created_at', { ascending: false });
 
   const { data, error } = await query;
   if (error) throw error;
 
+  // Log security action
+  await logSecurityAction(
+    'incidents_exported',
+    { format, filters, count: data?.length || 0 },
+    undefined,
+    undefined,
+    'export',
+    undefined
+  );
+
   if (format === 'csv') {
     const headers = ['ID', 'Agency', 'Status', 'Description', 'Reporter', 'Location', 'Created At'];
     const rows = (data || []).map(i => [
       i.id,
-      i.agency_type.toUpperCase(),
+      (i.agency_type?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : i.agency_type).toUpperCase(),
       i.status,
       `"${(i.description || '').replace(/"/g, '""')}"`,
       i.reporter_name,
@@ -1711,7 +2391,7 @@ ipcMain.handle('export:incidents', async (_event, { format, filters }: { format:
     ]);
     return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   }
-  
+
   return JSON.stringify(data, null, 2);
 });
 
@@ -1756,12 +2436,22 @@ ipcMain.handle('settings:update', async (_event, settings) => {
   try {
     await fsPromises.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
     console.log('[Admin] Settings saved to:', SETTINGS_FILE);
-    
+
     // Notify windows of update if needed
     if (mainWindow) {
       mainWindow.webContents.send('settings-updated', settings);
     }
-    
+
+    // Log security action
+    await logSecurityAction(
+      'settings_updated',
+      { settings },
+      undefined,
+      undefined,
+      'settings',
+      undefined
+    );
+
     return { success: true };
   } catch (error) {
     console.error('[Admin] Failed to save settings:', error);
@@ -1927,45 +2617,44 @@ ipcMain.handle('officers:getByAgency', async (_event, agencyType: string) => {
     const agencyMap: Record<string, string> = {
       'pnp': 'PNP',
       'bfp': 'BFP',
-      'pdrrmo': 'PDRRMO',
       'mdrrmo': 'MDRRMO'
     };
     const shortName = agencyMap[agencyType?.toLowerCase()] || agencyType?.toUpperCase();
-    
+
     console.log('[Main] Loading officers for agency type:', agencyType, '→ short_name:', shortName);
-    
+
     // Get agency ID first (case-insensitive match)
     const { data: agency, error: agencyError } = await supabase
       .from('agencies')
       .select('id, name, short_name')
       .ilike('short_name', shortName)
       .single();
-    
+
     if (agencyError) {
       console.error('[Main] Agency lookup error:', agencyError);
       return [];
     }
-    
+
     if (!agency) {
       console.warn('[Main] ⚠️ No agency found for short_name:', shortName);
       return [];
     }
-    
+
     console.log('[Main] Found agency:', agency);
-    
+
     // Get officers (Desk Officer, Field Officer, or Chief) for this agency
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, display_name, email, role, phone_number, station_id, agency_id')
+      .select('id, display_name, email, role, phone_number, station_id, agency_id, status')
       .eq('agency_id', agency.id)
       .in('role', ['Desk Officer', 'Field Officer', 'Chief'])
       .order('display_name');
-    
+
     if (error) {
       console.error('[Main] Officers query error:', error);
       throw error;
     }
-    
+
     console.log('[Main] Found', data?.length || 0, 'officers for agency', shortName);
     if (data && data.length > 0) {
       console.log('[Main] Officers:', data.map(o => ({
@@ -1977,7 +2666,7 @@ ipcMain.handle('officers:getByAgency', async (_event, agencyType: string) => {
     } else {
       console.warn('[Main] ⚠️ No officers found with roles [Desk Officer, Field Officer, Chief] for agency_id:', agency.id);
     }
-    
+
     return data || [];
   } catch (error) {
     console.error('[Admin] Failed to get officers:', error);
@@ -1992,7 +2681,13 @@ ipcMain.handle('officers:getByAgency', async (_event, agencyType: string) => {
 ipcMain.handle('finalReports:create', async (_event, { incidentId, reportDetails, completedBy }: { incidentId: string; reportDetails: any; completedBy: string }) => {
   try {
     const now = new Date().toISOString();
-    
+
+    // Check if incident is already terminal
+    const { data: statusCheck } = await supabase.from('incidents').select('status').eq('id', incidentId).single();
+    if (statusCheck?.status === 'closed' || statusCheck?.status === 'resolved') {
+      throw new Error(`incident_is_locked: Cannot create final report for incident that is already ${statusCheck.status}.`);
+    }
+
     const { data, error } = await supabase
       .from('final_reports')
       .insert({
@@ -2003,9 +2698,9 @@ ipcMain.handle('finalReports:create', async (_event, { incidentId, reportDetails
       })
       .select()
       .single();
-    
+
     if (error) throw error;
-    
+
     // Update incident status to 'closed' and set resolved_at
     await supabase
       .from('incidents')
@@ -2016,7 +2711,7 @@ ipcMain.handle('finalReports:create', async (_event, { incidentId, reportDetails
         updated_by: 'System'
       })
       .eq('id', incidentId);
-    
+
     // Add to incident_status_history
     await supabase
       .from('incident_status_history')
@@ -2027,10 +2722,17 @@ ipcMain.handle('finalReports:create', async (_event, { incidentId, reportDetails
         changed_by: 'System',
         changed_at: now
       });
-    
+
     // Log security action
-    await logSecurityAction('final_report_created', { incident_id: incidentId });
-    
+    await logSecurityAction(
+      'final_report_created',
+      { incident_id: incidentId, completed_by: completedBy },
+      completedBy,
+      undefined,
+      'report',
+      incidentId
+    );
+
     return data;
   } catch (error: any) {
     console.error('[Admin] Failed to create final report:', error);
@@ -2045,7 +2747,7 @@ ipcMain.handle('finalReports:get', async (_event, incidentId: string) => {
       .select('*')
       .eq('incident_id', incidentId)
       .single();
-    
+
     if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows
     return data || null;
   } catch (error) {
@@ -2061,7 +2763,7 @@ ipcMain.handle('unitReports:getByIncident', async (_event, incidentId: string) =
       .select('*, profiles!unit_reports_responder_id_fkey(display_name, email)')
       .eq('incident_id', incidentId)
       .order('created_at', { ascending: false });
-    
+
     if (error) throw error;
     return data || [];
   } catch (error) {
@@ -2076,15 +2778,38 @@ ipcMain.handle('unitReports:getByIncident', async (_event, incidentId: string) =
 
 ipcMain.handle('notifications:getByUser', async (_event, userId: string) => {
   try {
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*, incidents(id, agency_type, description)')
-      .eq('recipient_id', userId)
+    // Admin PIN logins generate a UUID that is NOT in profiles, so they should
+    // see ALL notifications (not just ones addressed to their generated ID).
+    const isAdmin = await isAdminGeneratedId(userId);
+    const baseQuery = !isAdmin && userId
+      ? supabase.from('notifications').select('*, incidents(id, agency_type, description)').eq('recipient_id', userId)
+      : supabase.from('notifications').select('*, incidents(id, agency_type, description)');
+
+    const { data, error } = await baseQuery
       .order('created_at', { ascending: false })
       .limit(50);
-    
-    if (error) throw error;
-    return data || [];
+
+    // If join query returned rows, use them; otherwise fall back to simple query
+    // (RLS on incidents can silently filter rows via inner join behaviour)
+    if (!error && data && data.length > 0) {
+      return data;
+    }
+
+    if (error) {
+      console.warn('[Admin] notifications:getByUser join query error:', error);
+    }
+
+    // Fallback: query without join in case incidents RLS blocks it
+    const simpleBase = !isAdmin && userId
+      ? supabase.from('notifications').select('*').eq('recipient_id', userId)
+      : supabase.from('notifications').select('*');
+
+    const { data: simpleData, error: simpleError } = await simpleBase
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (simpleError) throw simpleError;
+    return simpleData || [];
   } catch (error) {
     console.error('[Admin] Failed to get notifications:', error);
     return [];
@@ -2097,7 +2822,7 @@ ipcMain.handle('notifications:markAsRead', async (_event, notificationId: number
       .from('notifications')
       .update({ is_read: true })
       .eq('id', notificationId);
-    
+
     if (error) throw error;
     return { success: true };
   } catch (error: any) {
@@ -2108,12 +2833,12 @@ ipcMain.handle('notifications:markAsRead', async (_event, notificationId: number
 
 ipcMain.handle('notifications:markAllAsRead', async (_event, userId: string) => {
   try {
-    const { error } = await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('recipient_id', userId)
-      .eq('is_read', false);
-    
+    const isAdmin = await isAdminGeneratedId(userId);
+    const query = !isAdmin && userId
+      ? supabase.from('notifications').update({ is_read: true }).eq('recipient_id', userId).eq('is_read', false)
+      : supabase.from('notifications').update({ is_read: true }).eq('is_read', false);
+
+    const { error } = await query;
     if (error) throw error;
     return { success: true };
   } catch (error: any) {
@@ -2124,12 +2849,13 @@ ipcMain.handle('notifications:markAllAsRead', async (_event, userId: string) => 
 
 ipcMain.handle('notifications:getUnreadCount', async (_event, userId: string) => {
   try {
-    const { count, error } = await supabase
-      .from('notifications')
-      .select('*', { count: 'exact', head: true })
-      .eq('recipient_id', userId)
-      .eq('is_read', false);
-    
+    const isAdmin = await isAdminGeneratedId(userId);
+    const query = !isAdmin && userId
+      ? supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('recipient_id', userId).eq('is_read', false)
+      : supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('is_read', false);
+
+    const { count, error } = await query;
+
     if (error) throw error;
     return count || 0;
   } catch (error) {
@@ -2144,7 +2870,7 @@ ipcMain.handle('notifications:getUnreadCount', async (_event, userId: string) =>
 
 interface DraftSaveParams {
   incidentId: string;
-  agencyType: 'pnp' | 'bfp' | 'pdrrmo';
+  agencyType: 'pnp' | 'bfp' | 'mdrrmo';
   draftDetails: any;
   status?: 'draft' | 'ready_for_review';
   authorId?: string;
@@ -2157,7 +2883,7 @@ ipcMain.handle('finalReportDrafts:get', async (_event, incidentId: string) => {
       .select('*, profiles!final_report_drafts_author_id_fkey(display_name, email)')
       .eq('incident_id', incidentId)
       .single();
-    
+
     if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows
     return data || null;
   } catch (error) {
@@ -2168,8 +2894,17 @@ ipcMain.handle('finalReportDrafts:get', async (_event, incidentId: string) => {
 
 ipcMain.handle('finalReportDrafts:save', async (_event, params: DraftSaveParams) => {
   const { incidentId, agencyType, draftDetails, status = 'draft', authorId } = params;
-  
+
   try {
+    // Check if incident is already terminal
+    const { data: statusCheck } = await supabase.from('incidents').select('status').eq('id', incidentId).single();
+    if (statusCheck?.status === 'closed' || statusCheck?.status === 'resolved') {
+      throw new Error(`incident_is_locked: Cannot save draft for incident that is already ${statusCheck.status}.`);
+    }
+
+    // Admin PIN logins generate a UUID that is NOT in profiles.
+    const validAuthorId = await resolveValidProfileId(authorId);
+
     // Upsert: insert or update based on incident_id
     const { data, error } = await supabase
       .from('final_report_drafts')
@@ -2178,14 +2913,14 @@ ipcMain.handle('finalReportDrafts:save', async (_event, params: DraftSaveParams)
         agency_type: agencyType.toLowerCase(),
         draft_details: draftDetails,
         status,
-        author_id: authorId || null,
+        author_id: validAuthorId,
         updated_at: new Date().toISOString()
       }, {
         onConflict: 'incident_id'
       })
       .select()
       .single();
-    
+
     if (error) throw error;
     return { success: true, draft: data };
   } catch (error: any) {
@@ -2197,21 +2932,27 @@ ipcMain.handle('finalReportDrafts:save', async (_event, params: DraftSaveParams)
 ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorId }: { incidentId: string; authorId?: string }) => {
   try {
     const now = new Date().toISOString();
-    
+
+    // Check if incident is already terminal
+    const { data: statusCheck } = await supabase.from('incidents').select('status').eq('id', incidentId).single();
+    if (statusCheck?.status === 'closed' || statusCheck?.status === 'resolved') {
+      throw new Error(`incident_is_locked: Cannot promote draft for incident that is already ${statusCheck.status}.`);
+    }
+
     // 1. Get the draft
     const { data: draft, error: draftError } = await supabase
       .from('final_report_drafts')
       .select('*')
       .eq('incident_id', incidentId)
       .single();
-    
+
     if (draftError || !draft) {
       throw new Error('Draft not found');
     }
-    
+
     // Use draft author_id as fallback if authorId not provided
     let completedByUserId = authorId || draft.author_id;
-    
+
     // If still missing (e.g. Admin PIN login), try to get from incident's assigned officer
     if (!completedByUserId) {
       const { data: incidentData } = await supabase
@@ -2219,32 +2960,32 @@ ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorI
         .select('assigned_officer_id')
         .eq('id', incidentId)
         .single();
-        
+
       if (incidentData?.assigned_officer_id) {
         completedByUserId = incidentData.assigned_officer_id;
         console.log('[Admin] Using incident assigned officer as report author:', completedByUserId);
       }
     }
-    
+
     // If still missing, try to find ANY valid officer profile to use as system fallback
     // This is required because the database enforces a valid user ID for the report
     if (!completedByUserId) {
-       const { data: profiles } = await supabase
-         .from('profiles')
-         .select('id')
-         .in('role', ['Chief', 'Field Officer', 'Desk Officer'])
-         .limit(1);
-         
-       if (profiles && profiles.length > 0) {
-         completedByUserId = profiles[0].id;
-         console.log('[Admin] Using fallback profile as report author:', completedByUserId);
-       }
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id')
+        .in('role', ['Chief', 'Field Officer', 'Desk Officer'])
+        .limit(1);
+
+      if (profiles && profiles.length > 0) {
+        completedByUserId = profiles[0].id;
+        console.log('[Admin] Using fallback profile as report author:', completedByUserId);
+      }
     }
 
     if (!completedByUserId) {
       throw new Error('Author ID is required to publish the report. Please ensure there is at least one registered officer in the system.');
     }
-    
+
     // 2. Upsert into final_reports
     const { error: finalError } = await supabase
       .from('final_reports')
@@ -2256,9 +2997,9 @@ ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorI
       }, {
         onConflict: 'incident_id'
       });
-    
+
     if (finalError) throw finalError;
-    
+
     // 3. Update incident status to 'closed' and set resolved_at
     await supabase
       .from('incidents')
@@ -2269,7 +3010,7 @@ ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorI
         updated_by: 'System'
       })
       .eq('id', incidentId);
-    
+
     // 4. Add to incident_status_history
     await supabase
       .from('incident_status_history')
@@ -2280,13 +3021,13 @@ ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorI
         changed_by: 'System',
         changed_at: now
       });
-    
+
     // 5. Delete the draft
     await supabase
       .from('final_report_drafts')
       .delete()
       .eq('incident_id', incidentId);
-    
+
     return { success: true };
   } catch (error: any) {
     console.error('[Admin] Failed to promote draft:', error);
@@ -2300,7 +3041,7 @@ ipcMain.handle('finalReportDrafts:delete', async (_event, incidentId: string) =>
       .from('final_report_drafts')
       .delete()
       .eq('incident_id', incidentId);
-    
+
     if (error) throw error;
     return { success: true };
   } catch (error: any) {
@@ -2319,7 +3060,7 @@ ipcMain.handle('finalReportDrafts:list', async (_event, filters?: { agencyType?:
         profiles!final_report_drafts_author_id_fkey(display_name, email)
       `)
       .order('updated_at', { ascending: false });
-    
+
     if (filters?.agencyType) {
       query = query.eq('agency_type', filters.agencyType.toLowerCase());
     }
@@ -2329,9 +3070,9 @@ ipcMain.handle('finalReportDrafts:list', async (_event, filters?: { agencyType?:
     if (filters?.stationId) {
       query = query.eq('incidents.assigned_station_id', filters.stationId);
     }
-    
+
     const { data, error } = await query;
-    
+
     if (error) throw error;
     return data || [];
   } catch (error) {
@@ -2346,17 +3087,23 @@ ipcMain.handle('finalReportDrafts:list', async (_event, filters?: { agencyType?:
 
 ipcMain.handle('media:upload', async (_event, { incidentId, filePath, fileName, mediaType }: { incidentId: string; filePath: string; fileName: string; mediaType: 'photo' | 'video' }) => {
   try {
+    // Check if incident is already terminal
+    const { data: statusCheck } = await supabase.from('incidents').select('status').eq('id', incidentId).single();
+    if (statusCheck?.status === 'closed' || statusCheck?.status === 'resolved') {
+      throw new Error(`incident_is_locked: Cannot upload media for incident that is already ${statusCheck.status}.`);
+    }
+
     const fs = await import('fs');
     const path = await import('path');
-    
+
     // Read file as buffer
     const fileBuffer = fs.readFileSync(filePath);
-    
+
     // Generate unique storage path
     const ext = path.extname(fileName).toLowerCase();
     const timestamp = Date.now();
     const storagePath = `incidents/${incidentId}/${timestamp}_${fileName}`;
-    
+
     // Upload to Supabase Storage
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('incident-media')
@@ -2364,19 +3111,19 @@ ipcMain.handle('media:upload', async (_event, { incidentId, filePath, fileName, 
         contentType: mediaType === 'video' ? 'video/mp4' : 'image/jpeg',
         upsert: false
       });
-    
+
     if (uploadError) {
       console.error('[Admin] Storage upload error:', uploadError);
       throw new Error(uploadError.message || 'Failed to upload file to storage');
     }
-    
+
     // Get public URL
     const { data: urlData } = supabase.storage
       .from('incident-media')
       .getPublicUrl(storagePath);
-    
+
     const publicUrl = urlData?.publicUrl;
-    
+
     // Insert into media table
     const { data: mediaRecord, error: mediaError } = await supabase
       .from('media')
@@ -2388,29 +3135,39 @@ ipcMain.handle('media:upload', async (_event, { incidentId, filePath, fileName, 
       })
       .select()
       .single();
-    
+
     if (mediaError) {
       console.error('[Admin] Media record insert error:', mediaError);
       // Don't throw - file is uploaded, just log the error
     }
-    
+
     // Also append to incidents.media_urls array for backward compatibility
     const { data: incident } = await supabase
       .from('incidents')
       .select('media_urls')
       .eq('id', incidentId)
       .single();
-    
+
     const currentUrls = incident?.media_urls || [];
     const updatedUrls = Array.isArray(currentUrls) ? [...currentUrls, publicUrl] : [publicUrl];
-    
+
     await supabase
       .from('incidents')
       .update({ media_urls: updatedUrls })
       .eq('id', incidentId);
-    
+
     console.log(`[Admin] Media uploaded: ${storagePath}`);
-    
+
+    // Log security action
+    await logSecurityAction(
+      'media_uploaded',
+      { incident_id: incidentId, media_type: mediaType, file_name: fileName, media_id: mediaRecord?.id },
+      undefined,
+      undefined,
+      'media',
+      String(mediaRecord?.id || storagePath)
+    );
+
     return {
       success: true,
       storagePath,
@@ -2430,9 +3187,9 @@ ipcMain.handle('media:getByIncident', async (_event, incidentId: string) => {
       .select('*')
       .eq('incident_id', incidentId)
       .order('uploaded_at', { ascending: false });
-    
+
     if (error) throw error;
-    
+
     // Get public URLs for each media item
     const mediaWithUrls = (data || []).map(item => {
       const { data: urlData } = supabase.storage
@@ -2443,7 +3200,7 @@ ipcMain.handle('media:getByIncident', async (_event, incidentId: string) => {
         publicUrl: urlData?.publicUrl
       };
     });
-    
+
     return mediaWithUrls;
   } catch (error) {
     console.error('[Admin] Failed to get media:', error);
@@ -2457,19 +3214,29 @@ ipcMain.handle('media:delete', async (_event, { mediaId, storagePath }: { mediaI
     const { error: storageError } = await supabase.storage
       .from('incident-media')
       .remove([storagePath]);
-    
+
     if (storageError) {
       console.error('[Admin] Storage delete error:', storageError);
     }
-    
+
     // Delete from media table
     const { error: dbError } = await supabase
       .from('media')
       .delete()
       .eq('id', mediaId);
-    
+
     if (dbError) throw dbError;
-    
+
+    // Log security action
+    await logSecurityAction(
+      'media_deleted',
+      { media_id: mediaId, storage_path: storagePath },
+      undefined,
+      undefined,
+      'media',
+      String(mediaId)
+    );
+
     return { success: true };
   } catch (error: any) {
     console.error('[Admin] Media delete failed:', error);
@@ -2487,11 +3254,11 @@ ipcMain.handle('dialog:openFile', async (_event, options?: { filters?: any[] }) 
         { name: 'All Files', extensions: ['*'] }
       ]
     });
-    
+
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
       return { canceled: true };
     }
-    
+
     return {
       canceled: false,
       filePath: result.filePaths[0]
@@ -2506,25 +3273,74 @@ ipcMain.handle('dialog:openFile', async (_event, options?: { filters?: any[] }) 
 // SECURITY LOGGING
 // ============================================
 
-async function logSecurityAction(action: string, details: any, userId?: string) {
+interface LogSecurityParams {
+  action: string;
+  details: any;
+  userId?: string;
+  userEmail?: string;
+  entityType?: string;
+  entityId?: string;
+}
+
+async function logSecurityAction(
+  action: string,
+  details: any,
+  userId?: string,
+  userEmail?: string,
+  entityType?: string,
+  entityId?: string
+) {
   try {
-    await supabase
+    const { error } = await supabase
       .from('security_logs')
       .insert({
         user_id: userId || null,
+        user_email: userEmail || null,
         action,
         details,
+        entity_type: entityType || null,
+        entity_id: entityId || null,
         ip_address: 'admin-app',
         created_at: new Date().toISOString()
       });
+
+    if (error) {
+      throw error;
+    }
+
     console.log(`[Security] Logged action: ${action}`);
   } catch (error) {
     console.error('[Security] Failed to log action:', error);
   }
 }
 
-ipcMain.handle('security:log', async (_event, { action, details, userId }: { action: string; details: any; userId?: string }) => {
-  await logSecurityAction(action, details, userId);
+// ---------------------------------------------------------------------------
+// Profile validation helpers (admin PIN logins use generated UUIDs that
+// are NOT in the profiles table, so FK-constrained columns must fall back
+// to NULL and notification queries must fall back to "all recipients".)
+// ---------------------------------------------------------------------------
+
+async function resolveValidProfileId(userId?: string): Promise<string | null> {
+  if (!userId) return null;
+  const { data } = await supabase.from('profiles').select('id').eq('id', userId).single();
+  return data ? userId : null;
+}
+
+async function isAdminGeneratedId(userId?: string): Promise<boolean> {
+  if (!userId) return true; // No userId => legacy admin mode, treat as admin
+  const { data } = await supabase.from('profiles').select('id').eq('id', userId).single();
+  return !data; // If UUID is NOT in profiles, it's an admin-generated ID
+}
+
+ipcMain.handle('security:log', async (_event, params: LogSecurityParams) => {
+  await logSecurityAction(
+    params.action,
+    params.details,
+    params.userId,
+    params.userEmail,
+    params.entityType,
+    params.entityId
+  );
   return { success: true };
 });
 
@@ -2534,7 +3350,7 @@ ipcMain.handle('security:getLogs', async (_event, filters: { limit?: number; act
       .from('security_logs')
       .select('*')
       .order('created_at', { ascending: false });
-    
+
     if (filters.action) {
       query = query.eq('action', filters.action);
     }
@@ -2543,7 +3359,7 @@ ipcMain.handle('security:getLogs', async (_event, filters: { limit?: number; act
     } else {
       query = query.limit(100);
     }
-    
+
     const { data, error } = await query;
     if (error) throw error;
     return data || [];
@@ -2553,15 +3369,65 @@ ipcMain.handle('security:getLogs', async (_event, filters: { limit?: number; act
   }
 });
 
+interface ActivityLogFilters {
+  fromDate?: string;
+  toDate?: string;
+  entityType?: string;
+  action?: string;
+  userEmail?: string;
+  search?: string;
+  offset?: number;
+  limit?: number;
+}
+
+ipcMain.handle('security:getActivityLogs', async (_event, filters: ActivityLogFilters = {}) => {
+  try {
+    let query = supabase
+      .from('security_logs')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (filters.fromDate) {
+      query = query.gte('created_at', filters.fromDate);
+    }
+    if (filters.toDate) {
+      query = query.lte('created_at', filters.toDate);
+    }
+    if (filters.entityType) {
+      query = query.eq('entity_type', filters.entityType);
+    }
+    if (filters.action) {
+      query = query.eq('action', filters.action);
+    }
+    if (filters.userEmail) {
+      query = query.ilike('user_email', `%${filters.userEmail}%`);
+    }
+    if (filters.search) {
+      query = query.or(`action.ilike.%${filters.search}%,details::text.ilike.%${filters.search}%,user_email.ilike.%${filters.search}%`);
+    }
+
+    const offset = filters.offset || 0;
+    const limit = Math.min(filters.limit || 50, 100);
+    query = query.range(offset, offset + limit - 1);
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+    return { data: data || [], total: count || 0 };
+  } catch (error) {
+    console.error('[Admin] Failed to get activity logs:', error);
+    return { data: [], total: 0 };
+  }
+});
+
 // ============================================
 // USER/OFFICER CREATION
 // ============================================
 
-ipcMain.handle('users:create', async (_event, userData: { 
-  email: string; 
-  password: string; 
-  displayName: string; 
-  role: string; 
+ipcMain.handle('users:create', async (_event, userData: {
+  email: string;
+  password: string;
+  displayName: string;
+  role: string;
   agencyId?: number;
   stationId?: number;
   phoneNumber?: string;
@@ -2574,7 +3440,7 @@ ipcMain.handle('users:create', async (_event, userData: {
       .select('id, email')
       .eq('email', userData.email.toLowerCase())
       .single();
-    
+
     if (existingProfile) {
       throw new Error('A user with this email already exists');
     }
@@ -2590,7 +3456,7 @@ ipcMain.handle('users:create', async (_event, userData: {
         role: userData.role
       }
     });
-    
+
     if (authError) {
       // Check if user exists in auth but not in profiles (orphaned auth user)
       if (authError.message?.includes('already been registered')) {
@@ -2599,7 +3465,7 @@ ipcMain.handle('users:create', async (_event, userData: {
       throw authError;
     }
     if (!authData.user) throw new Error('Failed to create user');
-    
+
     // Calculate age from date of birth
     let age: number | null = null;
     if (userData.dateOfBirth) {
@@ -2627,21 +3493,28 @@ ipcMain.handle('users:create', async (_event, userData: {
         age: age,
         created_at: new Date().toISOString()
       }, { onConflict: 'id' });
-    
+
     if (profileError) {
       // Rollback: delete auth user if profile creation fails
       console.error('[Admin] Profile creation failed, rolling back auth user:', profileError);
       await supabase.auth.admin.deleteUser(authData.user.id);
       throw profileError;
     }
-    
+
     // Log security action
-    await logSecurityAction('user_created', { 
-      new_user_id: authData.user.id, 
-      email: userData.email, 
-      role: userData.role 
-    });
-    
+    await logSecurityAction(
+      'user_created',
+      {
+        new_user_id: authData.user.id,
+        email: userData.email,
+        role: userData.role
+      },
+      undefined,
+      userData.email,
+      'user',
+      authData.user.id
+    );
+
     clearCache('users');
     return { success: true, userId: authData.user.id };
   } catch (error: any) {
@@ -2664,10 +3537,24 @@ ipcMain.handle('users:delete', async (_event, userId: string) => {
       .from('profiles')
       .update({ role: 'Disabled' })
       .eq('id', userId);
-    
+
     if (profileError) throw profileError;
-    
-    await logSecurityAction('user_disabled', { disabled_user_id: userId });
+
+    // Get user email before logging
+    const { data: userData } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('id', userId)
+      .single();
+
+    await logSecurityAction(
+      'user_disabled',
+      { disabled_user_id: userId },
+      userId,
+      userData?.email,
+      'user',
+      userId
+    );
     clearCache('users');
     return { success: true };
   } catch (error: any) {
@@ -2681,8 +3568,22 @@ ipcMain.handle('users:resetPassword', async (_event, { userId, newPassword }: { 
       password: newPassword
     });
     if (error) throw error;
-    
-    await logSecurityAction('password_reset', { user_id: userId });
+
+    // Get user email before logging
+    const { data: userData } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('id', userId)
+      .single();
+
+    await logSecurityAction(
+      'password_reset',
+      { user_id: userId },
+      userId,
+      userData?.email,
+      'user',
+      userId
+    );
     return { success: true };
   } catch (error: any) {
     console.error('[Admin] Failed to reset password:', error);
@@ -2732,6 +3633,17 @@ ipcMain.handle('report:save-pdf', async (_event, { html, filename }) => {
     if (!result.canceled && result.filePath) {
       writeFileSync(result.filePath, pdfData);
       console.log('[Admin] PDF saved to:', result.filePath);
+
+      // Log security action
+      await logSecurityAction(
+        'pdf_export_saved',
+        { filename, path: result.filePath },
+        undefined,
+        undefined,
+        'export',
+        undefined
+      );
+
       return { success: true, path: result.filePath };
     }
 
@@ -2768,7 +3680,7 @@ ipcMain.handle('incidentAgencies:get', async (_event, incidentId: string) => {
 ipcMain.handle('incidentAgencies:add', async (_event, { incidentId, agencyId, role }: { incidentId: string; agencyId: number; role: 'primary' | 'lead' | 'supporting' }) => {
   try {
     const now = new Date().toISOString();
-    
+
     // Check if this agency is already added to this incident
     const { data: existing } = await supabase
       .from('incident_agencies')
@@ -2838,6 +3750,16 @@ ipcMain.handle('incidentAgencies:add', async (_event, { incidentId, agencyId, ro
       }
     }
 
+    // Log security action
+    await logSecurityAction(
+      'incident_agency_added',
+      { incident_id: incidentId, agency_id: agencyId, role, agency_name: agency?.short_name },
+      undefined,
+      undefined,
+      'agency',
+      incidentId
+    );
+
     return data;
   } catch (error: any) {
     console.error('[Admin] Failed to add incident agency:', error);
@@ -2869,6 +3791,17 @@ ipcMain.handle('incidentAgencies:updateRole', async (_event, { id, role }: { id:
       .eq('id', id);
 
     if (error) throw error;
+
+    // Log security action
+    await logSecurityAction(
+      'incident_agency_role_updated',
+      { incident_agency_id: id, role, incident_id: current?.incident_id },
+      undefined,
+      undefined,
+      'agency',
+      String(id)
+    );
+
     return { success: true };
   } catch (error: any) {
     console.error('[Admin] Failed to update incident agency role:', error);
@@ -2884,6 +3817,17 @@ ipcMain.handle('incidentAgencies:acknowledge', async (_event, id: number) => {
       .eq('id', id);
 
     if (error) throw error;
+
+    // Log security action
+    await logSecurityAction(
+      'incident_agency_acknowledged',
+      { incident_agency_id: id },
+      undefined,
+      undefined,
+      'agency',
+      String(id)
+    );
+
     return { success: true };
   } catch (error: any) {
     console.error('[Admin] Failed to acknowledge incident agency:', error);
@@ -2899,6 +3843,17 @@ ipcMain.handle('incidentAgencies:remove', async (_event, id: number) => {
       .eq('id', id);
 
     if (error) throw error;
+
+    // Log security action
+    await logSecurityAction(
+      'incident_agency_removed',
+      { incident_agency_id: id },
+      undefined,
+      undefined,
+      'agency',
+      String(id)
+    );
+
     return { success: true };
   } catch (error: any) {
     console.error('[Admin] Failed to remove incident agency:', error);
@@ -2932,5 +3887,647 @@ ipcMain.handle('incidentAgencies:getAvailable', async (_event, incidentId: strin
   } catch (error: any) {
     console.error('[Admin] Failed to get available agencies:', error);
     throw new Error(error.message || 'Failed to get available agencies');
+  }
+});
+
+// ============================================
+// BACKUP REQUESTS (Phase 2 Workflow)
+// ============================================
+
+ipcMain.handle('backupRequests:getByIncident', async (_event, incidentId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('backup_requests')
+      .select(`
+        *,
+        requester:requested_by (id, display_name, email, role),
+        acknowledged_user:acknowledged_by (id, display_name),
+        assigned_user:assigned_by (id, display_name),
+        resolved_user:resolved_by (id, display_name),
+        cancelled_user:cancelled_by (id, display_name),
+        requested_agency:requested_agency_id (id, name, short_name),
+        target_agency:target_agency_id (id, name, short_name),
+        requested_station:requested_station_id (id, name),
+        target_station:target_station_id (id, name)
+      `)
+      .eq('incident_id', incidentId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error: any) {
+    console.error('[Admin] Failed to get backup requests:', error);
+    throw new Error(error.message || 'Failed to get backup requests');
+  }
+});
+
+ipcMain.handle(
+  'backupRequests:updateStatus',
+  async (
+    _event,
+    {
+      id,
+      status,
+      handledById,
+      notes,
+      targetAgencyId,
+      targetStationId,
+    }: {
+      id: number;
+      status: 'pending' | 'acknowledged' | 'assigned' | 'resolved' | 'cancelled' | 'rejected';
+      handledById?: string;
+      notes?: string;
+      targetAgencyId?: number | null;
+      targetStationId?: number | null;
+    }
+  ) => {
+    try {
+      const now = new Date().toISOString();
+      const updateData: any = {
+        status,
+      };
+
+      if (notes !== undefined) {
+        updateData.admin_notes = notes;
+      }
+
+      if (targetAgencyId !== undefined) {
+        updateData.target_agency_id = targetAgencyId;
+      }
+
+      if (targetStationId !== undefined) {
+        updateData.target_station_id = targetStationId;
+      }
+
+      if (status === 'acknowledged') {
+        updateData.acknowledged_at = now;
+        updateData.acknowledged_by = handledById || null;
+      }
+
+      if (status === 'assigned') {
+        updateData.assigned_at = now;
+        updateData.assigned_by = handledById || null;
+      }
+
+      if (status === 'resolved') {
+        updateData.resolved_at = now;
+        updateData.resolved_by = handledById || null;
+      }
+
+      if (status === 'cancelled' || status === 'rejected') {
+        updateData.cancelled_at = now;
+        updateData.cancelled_by = handledById || null;
+      }
+
+      const { error } = await supabase
+        .from('backup_requests')
+        .update(updateData)
+        .eq('id', id);
+
+      if (error) throw error;
+
+      // Log security action
+      await logSecurityAction(
+        'backup_request_status_updated',
+        {
+          backup_request_id: id,
+          status,
+          handled_by_id: handledById,
+          notes,
+          target_agency_id: targetAgencyId,
+          target_station_id: targetStationId
+        },
+        handledById,
+        undefined,
+        'backup_request',
+        String(id)
+      );
+
+      return { success: true };
+    } catch (error: any) {
+      console.error('[Admin] Failed to update backup request status:', error);
+      throw new Error(error.message || 'Failed to update backup request status');
+    }
+  }
+);
+
+// ============================================
+// AI WORKER IPC HANDLERS
+// ============================================
+
+let aiWorkerUrl = process.env.AI_WORKER_URL || 'http://127.0.0.1:8000';
+// VPS fallback: when the primary worker is offline, unreachable, or missing
+// cloud API keys (GROQ etc.), call endpoints transparently retry against this
+// host. Keeps the apps usable when the operator's local PC drops off.
+//
+// IMPORTANT: this MUST be the FastAPI AI worker (ireport-vps/ai_worker.py),
+// NOT the Express LiveKit bridge at call.ochana0101.click — the bridge only
+// implements /token and /transcribe and 404s on /call/summarize, /analyze,
+// /chat, /config, /health.
+let aiFallbackWorkerUrl = process.env.AI_FALLBACK_WORKER_URL || 'http://75.119.142.12:8000';
+
+const normalizeAIWorkerUrl = (url: string) => {
+  const trimmed = (url || '').trim();
+  if (!trimmed) return 'http://127.0.0.1:8000';
+  return trimmed.replace(/\/+$/, '');
+};
+
+const normalizeFallbackUrl = (url: string) => (url || '').trim().replace(/\/+$/, '');
+
+/**
+ * Decide whether a response from the primary worker warrants retrying on the
+ * fallback. Network errors and 5xx are always retried. 4xx responses are also
+ * retried when they look like a missing-key / not-configured failure, since
+ * the fallback (VPS) usually has the cloud keys.
+ */
+const shouldFailoverOnResponse = async (response: Response): Promise<boolean> => {
+  if (response.status >= 500) return true;
+  if (response.status === 503 || response.status === 502 || response.status === 504) return true;
+  if (response.status >= 400 && response.status < 500) {
+    try {
+      const cloned = response.clone();
+      const text = await cloned.text();
+      const lower = text.toLowerCase();
+      if (
+        lower.includes('not configured') ||
+        lower.includes('not set') ||
+        lower.includes('groq_api_key') ||
+        lower.includes('gemini_api_key') ||
+        lower.includes('ollama') ||
+        lower.includes('model unavailable')
+      ) {
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+};
+
+interface FetchWithFallbackOptions {
+  /**
+   * When true (default), failures on the primary trigger a retry on the
+   * fallback URL. Disable for handlers where a remote fallback would be wrong
+   * (e.g. /config writes that must hit the user's local worker).
+   */
+  allowFallback?: boolean;
+  /** Per-attempt timeout in milliseconds. Defaults to 90 s. */
+  timeoutMs?: number;
+}
+
+interface FetchWithFallbackResult {
+  response: Response;
+  usedFallback: boolean;
+  origin: string;
+}
+
+const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs: number): Promise<Response> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Build the URL list to try for a given path. Always primary first, then
+ * fallback if it's set and different from primary.
+ */
+const buildWorkerUrls = (path: string, allowFallback: boolean): string[] => {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const urls = [`${aiWorkerUrl}${cleanPath}`];
+  if (allowFallback) {
+    const fallback = normalizeFallbackUrl(aiFallbackWorkerUrl);
+    if (fallback && fallback !== aiWorkerUrl) {
+      urls.push(`${fallback}${cleanPath}`);
+    }
+  }
+  return urls;
+};
+
+const fetchWithFallback = async (
+  path: string,
+  init: RequestInit,
+  options: FetchWithFallbackOptions = {},
+): Promise<FetchWithFallbackResult> => {
+  const allowFallback = options.allowFallback !== false;
+  const timeoutMs = options.timeoutMs ?? 90000;
+  const urls = buildWorkerUrls(path, allowFallback);
+  let lastError: any = null;
+  let lastResponse: Response | null = null;
+  let lastOrigin = '';
+
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
+    const isFallback = i > 0;
+    let origin = url;
+    try {
+      origin = new URL(url).origin;
+    } catch {}
+    try {
+      const response = await fetchWithTimeout(url, init, timeoutMs);
+      if (response.ok) {
+        return { response, usedFallback: isFallback, origin };
+      }
+      // Non-ok: decide whether to try the next URL
+      if (i < urls.length - 1) {
+        const failover = await shouldFailoverOnResponse(response);
+        if (failover) {
+          lastResponse = response;
+          lastOrigin = origin;
+          console.warn(`[Admin][AI] primary ${origin} returned ${response.status}, trying fallback`);
+          continue;
+        }
+      }
+      return { response, usedFallback: isFallback, origin };
+    } catch (err: any) {
+      lastError = err;
+      lastOrigin = origin;
+      console.warn(`[Admin][AI] request to ${origin} failed: ${err?.message || err}`);
+      if (i === urls.length - 1) break;
+      // network error or timeout — try the next URL
+    }
+  }
+
+  if (lastResponse) {
+    return { response: lastResponse, usedFallback: urls.length > 1, origin: lastOrigin };
+  }
+  throw lastError || new Error('AI worker unreachable');
+};
+
+ipcMain.handle('ai:getWorkerUrl', async () => aiWorkerUrl);
+
+ipcMain.handle('ai:setWorkerUrl', async (_event, url: string) => {
+  aiWorkerUrl = normalizeAIWorkerUrl(url);
+  return { success: true };
+});
+
+ipcMain.handle('ai:getFallbackWorkerUrl', async () => aiFallbackWorkerUrl);
+
+ipcMain.handle('ai:setFallbackWorkerUrl', async (_event, url: string) => {
+  aiFallbackWorkerUrl = normalizeFallbackUrl(url);
+  return { success: true };
+});
+
+ipcMain.handle('ai:checkWorkerHealth', async () => {
+  try {
+    const { response, usedFallback, origin } = await fetchWithFallback('/health', { method: 'GET' }, { timeoutMs: 8000 });
+    if (!response.ok) throw new Error(`AI worker error ${response.status}`);
+    const body = await response.json();
+    return { ...body, _origin: origin, _usedFallback: usedFallback };
+  } catch (error: any) {
+    console.error('[Admin] Failed to check AI worker health:', error);
+    throw new Error(error.message || 'Failed to check AI worker health');
+  }
+});
+
+ipcMain.handle('ai:getRecords', async (_event, filters: { status?: string; search?: string; page?: number; limit?: number } = {}) => {
+  try {
+    const { status, search, page = 1, limit = 20 } = filters;
+    let query = supabase
+      .from('incident_ai_reports')
+      .select('*, incidents!inner(description, location_address, status, created_at)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range((page - 1) * limit, page * limit - 1);
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+    if (search) {
+      query = query.or(`incident_id.ilike.%${search}%,summary.ilike.%${search}%`);
+    }
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+    return { data: data || [], total: count || 0 };
+  } catch (error: any) {
+    console.error('[Admin] Failed to get AI records:', error);
+    throw new Error(error.message || 'Failed to get AI records');
+  }
+});
+
+ipcMain.handle('ai:listIncidents', async (_event, filters: { search?: string; limit?: number } = {}) => {
+  try {
+    const { search, limit = 50 } = filters;
+    let query = supabase
+      .from('incidents')
+      .select('id, description, location_address, agency_type, status, created_at, is_fast_report')
+      .neq('status', 'ai_routing')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (search?.trim()) {
+      const term = search.trim();
+      query = query.or(`id.ilike.%${term}%,description.ilike.%${term}%,location_address.ilike.%${term}%`);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  } catch (error: any) {
+    console.error('[Admin] Failed to list incidents for AI manual analysis:', error);
+    throw new Error(error.message || 'Failed to list incidents');
+  }
+});
+
+ipcMain.handle('ai:triggerReanalysis', async (_event, incidentId: string) => {
+  try {
+    const { response } = await fetchWithFallback('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ incident_id: incidentId, force: true }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`AI worker error ${response.status}: ${text}`);
+    }
+    const result = await response.json().catch(() => ({}));
+    return { success: true, ...result };
+  } catch (error: any) {
+    console.error('[Admin] Failed to trigger reanalysis:', error);
+    throw new Error(error.message || 'Failed to trigger reanalysis');
+  }
+});
+
+ipcMain.handle('ai:getModelConfig', async () => {
+  try {
+    // Read should never silently fall back — operator wants to see the local
+    // worker's config when local is selected. Try fallback only on hard failure.
+    const { response, usedFallback, origin } = await fetchWithFallback('/config', { method: 'GET' }, { timeoutMs: 10000 });
+    if (!response.ok) throw new Error(`AI worker error ${response.status}`);
+    const body = await response.json();
+    return { ...body, _origin: origin, _usedFallback: usedFallback };
+  } catch (error: any) {
+    console.error('[Admin] Failed to get model config:', error);
+    throw new Error(error.message || 'Failed to get model config');
+  }
+});
+
+ipcMain.handle('ai:setModelConfig', async (_event, config: any) => {
+  try {
+    // Writing config must hit the primary worker only — falling back would
+    // silently update a different machine.
+    const { response } = await fetchWithFallback('/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }, { allowFallback: false });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`AI worker error ${response.status}: ${text}`);
+    }
+    const result = await response.json().catch(() => ({}));
+    if (result?.status === 'error') {
+      throw new Error(result.reason || 'AI worker rejected config update');
+    }
+    return { success: true, ...result };
+  } catch (error: any) {
+    console.error('[Admin] Failed to set model config:', error);
+    throw new Error(error.message || 'Failed to set model config');
+  }
+});
+
+ipcMain.handle('ai:sendChatPrompt', async (_event, payload: any) => {
+  try {
+    const { response } = await fetchWithFallback('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`AI worker error ${response.status}: ${text}`);
+    }
+    return await response.json();
+  } catch (error: any) {
+    console.error('[Admin] Failed to send chat prompt:', error);
+    throw new Error(error.message || 'Failed to send chat prompt');
+  }
+});
+
+ipcMain.handle('ai:summarizeCallTranscript', async (_event, payload: {
+  transcript: Array<{ speaker?: string; text?: string }> | string;
+  reporter_name?: string;
+  reporter_phone?: string;
+  incident_location?: string;
+  reporter_location?: string;
+  dispatcher_notes?: string;
+  call_started_at?: string;
+  call_ended_at?: string;
+}) => {
+  try {
+    const { response, usedFallback, origin } = await fetchWithFallback('/call/summarize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`AI worker error ${response.status}: ${text}`);
+    }
+    const result = await response.json();
+    return { ...result, _origin: origin, _usedFallback: usedFallback };
+  } catch (error: any) {
+    console.error('[Admin] Failed to summarize call transcript:', error);
+    throw new Error(error.message || 'Failed to summarize call transcript');
+  }
+});
+
+ipcMain.handle('ai:createIncidentFromCallDraft', async (_event, payload: {
+  summary: {
+    description?: string;
+    recommended_agency?: string;
+    hazards?: string[];
+    severity?: number;
+    confidence?: number;
+    missing_info?: string[];
+  };
+  reporter_id?: string | null;
+  reporter_name?: string;
+  reporter_age?: number;
+  reporter_phone?: string;
+  incident_latitude?: number;
+  incident_longitude?: number;
+  reporter_latitude?: number;
+  reporter_longitude?: number;
+  location_address?: string;
+  dispatcher_notes?: string;
+}) => {
+  try {
+    const summary = payload?.summary || {};
+    const description = String(summary.description || '').trim();
+    if (!description) {
+      throw new Error('Missing summary.description');
+    }
+
+    const allowedAgencies = new Set(['pnp', 'bfp', 'mdrrmo']);
+    const requestedAgency = String(summary.recommended_agency || '').toLowerCase();
+    const agencyType = allowedAgencies.has(requestedAgency) ? requestedAgency : 'mdrrmo';
+
+    // Schema requires reporter_age NOT NULL and a trigger enforces 13–120.
+    // Call drafts often don't capture the caller's age, so default to 18
+    // (a valid sentinel meaning "unknown"). The dispatcher can override later
+    // if they collected the real age.
+    const ageInput = Number(payload?.reporter_age);
+    const ageProvided = Number.isFinite(ageInput) && ageInput >= 13 && ageInput <= 120;
+    const reporterAge = ageProvided ? Math.floor(ageInput) : 18;
+
+    // The validate_incident_data() Postgres trigger enforces:
+    //   reporter_name 2–100 chars, description 10–5000 chars,
+    //   latitude 4.0–22.0, longitude 116.0–127.0, media_urls ≤ 10.
+    // Call drafts frequently lack precise GPS (caller never granted location,
+    // or only the dispatcher's voice was on the line), so we fall back to a
+    // Camarines Norte LGU centroid. This keeps the row valid; the dispatcher
+    // can refine the location once on-scene units report back.
+    const PH_LAT_MIN = 4.0;
+    const PH_LAT_MAX = 22.0;
+    const PH_LON_MIN = 116.0;
+    const PH_LON_MAX = 127.0;
+    // Daet, Camarines Norte (provincial capital) — within the LGU service area.
+    const DEFAULT_LAT = 14.1124;
+    const DEFAULT_LON = 122.9550;
+
+    const isInPhBounds = (lat: number, lon: number): boolean =>
+      Number.isFinite(lat) && Number.isFinite(lon)
+        && lat >= PH_LAT_MIN && lat <= PH_LAT_MAX
+        && lon >= PH_LON_MIN && lon <= PH_LON_MAX;
+
+    const incidentLatRaw = Number(payload?.incident_latitude);
+    const incidentLonRaw = Number(payload?.incident_longitude);
+    const reporterLatRaw = Number(payload?.reporter_latitude);
+    const reporterLonRaw = Number(payload?.reporter_longitude);
+
+    let incidentLat: number;
+    let incidentLon: number;
+    let locationFallbackUsed = false;
+    if (isInPhBounds(incidentLatRaw, incidentLonRaw)) {
+      incidentLat = incidentLatRaw;
+      incidentLon = incidentLonRaw;
+    } else if (isInPhBounds(reporterLatRaw, reporterLonRaw)) {
+      // No incident GPS, but we have the reporter's GPS — best available proxy.
+      incidentLat = reporterLatRaw;
+      incidentLon = reporterLonRaw;
+      locationFallbackUsed = true;
+    } else {
+      incidentLat = DEFAULT_LAT;
+      incidentLon = DEFAULT_LON;
+      locationFallbackUsed = true;
+    }
+
+    const reporterLat: number | null = isInPhBounds(reporterLatRaw, reporterLonRaw)
+      ? reporterLatRaw
+      : null;
+    const reporterLon: number | null = isInPhBounds(reporterLatRaw, reporterLonRaw)
+      ? reporterLonRaw
+      : null;
+
+    const missingInfo = Array.isArray(summary.missing_info) ? summary.missing_info.filter(Boolean) : [];
+    const hazards = Array.isArray(summary.hazards) ? summary.hazards.filter(Boolean) : [];
+    const dispatcherNotes = String(payload?.dispatcher_notes || '').trim();
+
+    const descriptionSuffixParts: string[] = [];
+    if (hazards.length > 0) {
+      descriptionSuffixParts.push(`Hazards: ${hazards.join(', ')}`);
+    }
+    if (missingInfo.length > 0) {
+      descriptionSuffixParts.push(`Missing info: ${missingInfo.join(', ')}`);
+    }
+    if (!ageProvided) {
+      // Make it explicit in the description that the age is a placeholder so
+      // dispatchers know to follow up.
+      descriptionSuffixParts.push('Reporter age: unknown (default 18 used)');
+    }
+    if (locationFallbackUsed) {
+      descriptionSuffixParts.push(
+        `Location: approximate (${incidentLat.toFixed(4)}, ${incidentLon.toFixed(4)}) — refine when known`,
+      );
+    }
+    if (dispatcherNotes) {
+      descriptionSuffixParts.push(`Dispatcher notes: ${dispatcherNotes}`);
+    }
+
+    let finalDescription = descriptionSuffixParts.length > 0
+      ? `${description}\n\n${descriptionSuffixParts.join('\n')}`
+      : description;
+    // The trigger requires description ≥ 10 chars after TRIM. Pad if the AI
+    // somehow produced something shorter.
+    if (finalDescription.trim().length < 10) {
+      finalDescription = (finalDescription.trim() + ' (call summary too brief; review transcript).').trim();
+    }
+    if (finalDescription.length > 5000) {
+      finalDescription = finalDescription.slice(0, 4990) + '… [truncated]';
+    }
+
+    // reporter_name: 2–100 chars after TRIM.
+    let reporterName = String(payload?.reporter_name || '').trim();
+    if (reporterName.length < 2) reporterName = 'Call Reporter';
+    if (reporterName.length > 100) reporterName = reporterName.slice(0, 100);
+
+    const incidentInsert: any = {
+      agency_type: agencyType,
+      reporter_id: payload?.reporter_id || null,
+      reporter_name: reporterName,
+      reporter_age: reporterAge,
+      reporter_phone: payload?.reporter_phone ? String(payload.reporter_phone).trim() : null,
+      description: finalDescription,
+      latitude: incidentLat,
+      longitude: incidentLon,
+      reporter_latitude: reporterLat,
+      reporter_longitude: reporterLon,
+      location_address: payload?.location_address ? String(payload.location_address).trim() : null,
+      media_urls: [],
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+
+    const { data: createdIncident, error } = await supabase
+      .from('incidents')
+      .insert(incidentInsert)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      incident: createdIncident,
+      draft_meta: {
+        severity: summary.severity,
+        confidence: summary.confidence,
+        missing_info: missingInfo,
+      },
+    };
+  } catch (error: any) {
+    console.error('[Admin] Failed to create incident from call draft:', error);
+    throw new Error(error.message || 'Failed to create incident from call draft');
+  }
+});
+
+// System Settings (AI Worker API keys + tunables stored in Supabase)
+ipcMain.handle('systemSettings:getAll', async () => {
+  try {
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('setting_key,setting_value,updated_at')
+      .order('setting_key');
+    if (error) throw error;
+    return data || [];
+  } catch (error: any) {
+    console.error('[Admin] Failed to get system settings:', error);
+    throw new Error(error.message || 'Failed to get system settings');
+  }
+});
+
+ipcMain.handle('systemSettings:upsert', async (_event, { key, value }: { key: string; value: string }) => {
+  try {
+    const { error } = await supabase
+      .from('system_settings')
+      .upsert({ setting_key: key, setting_value: value, updated_at: new Date().toISOString() }, { onConflict: 'setting_key' });
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) {
+    console.error('[Admin] Failed to update system setting:', error);
+    throw new Error(error.message || 'Failed to update system setting');
   }
 });
