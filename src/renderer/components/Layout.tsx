@@ -410,20 +410,22 @@ function Layout({ onLogout }: LayoutProps) {
                 Calls
               </NavLink>
             </li>
-            <li>
-              <NavLink
-                to="/ai-analysis"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
-                  }`
-                }
-              >
-                <BrainCircuit size={20} />
-                AI Analysis
-              </NavLink>
-            </li>
+            {user?.role === 'Admin' && (
+              <li>
+                <NavLink
+                  to="/ai-analysis"
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-300 hover:bg-gray-800'
+                    }`
+                  }
+                >
+                  <BrainCircuit size={20} />
+                  AI Analysis
+                </NavLink>
+              </li>
+            )}
             <li>
               <NavLink
                 to="/users"

@@ -1,22 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, Navigate } from 'react-router-dom';
 import {
   BrainCircuit,
   RefreshCw,
   Play,
-  MessageSquare,
-  Settings as SettingsIcon,
   FileText,
   AlertTriangle,
   CheckCircle,
   Loader2,
   Search,
-  Send,
   Image as ImageIcon,
-  X,
-  ChevronDown,
-  ChevronUp,
-  Cpu,
   Wifi,
   WifiOff
 } from 'lucide-react';
@@ -67,11 +60,26 @@ interface CallDraftSummary {
   rationale?: string;
 }
 
-type TabType = 'records' | 'manual' | 'pipeline-log' | 'models' | 'prompt-lab';
+type TabType = 'records' | 'manual' | 'pipeline-log';
 
 function AIAnalysis() {
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Admin-only page: dispatchers/chiefs/officers should never see raw model
+  // output or worker internals. Those now live in ireport-service-manager,
+  // a separate operator-only tool. Route-level guard (defense in depth
+  // alongside the hidden nav link in Layout.tsx) — computed here, but the
+  // actual early-out happens at the final return so hooks below still run
+  // unconditionally on every render, per the rules of hooks.
+  let currentUser: any = null;
+  try {
+    currentUser = JSON.parse(localStorage.getItem('ireport_admin_current_user') || 'null');
+  } catch {
+    currentUser = null;
+  }
+  const isAdmin = currentUser?.role === 'Admin';
+
   const [activeTab, setActiveTab] = useState<TabType>('records');
   const [records, setRecords] = useState<AIReportRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
@@ -81,10 +89,6 @@ function AIAnalysis() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const PAGE_SIZE = 20;
-
-  const [workerUrl, setWorkerUrl] = useState('http://127.0.0.1:8000');
-  const [workerHealth, setWorkerHealth] = useState<any>(null);
-  const [healthLoading, setHealthLoading] = useState(false);
 
   const [manualIncidentId, setManualIncidentId] = useState('');
   const [manualRunning, setManualRunning] = useState(false);
@@ -114,59 +118,6 @@ function AIAnalysis() {
   const [callCreating, setCallCreating] = useState(false);
   const [callDraftStatus, setCallDraftStatus] = useState('');
   const [createdCallIncidentId, setCreatedCallIncidentId] = useState('');
-
-  const [modelConfig, setModelConfig] = useState<any>(null);
-  const [configLoading, setConfigLoading] = useState(false);
-  const [newProvider, setNewProvider] = useState('ollama');
-  const [newModel, setNewModel] = useState('');
-  const fallbackModels = newProvider === 'ollama'
-    ? ['gemma3:4b', 'gemma4:e2b-it-q4_K_M', 'qwen3-vl:4b', 'qwen3.5:4b']
-    : ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
-  const availableModels = Array.from(new Set([
-    ...(Array.isArray(modelConfig?.available_models) ? modelConfig.available_models : []),
-    ...fallbackModels
-  ]));
-
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatIncidentId, setChatIncidentId] = useState('');
-  const [chatIncludeContext, setChatIncludeContext] = useState(false);
-  const [chatSending, setChatSending] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // Load worker URL from settings
-  useEffect(() => {
-    window.api.getAIWorkerUrl()
-      .then((url) => {
-        if (url) {
-          setWorkerUrl(url);
-          localStorage.setItem('ireport_admin_ai_worker_url', url);
-        }
-      })
-      .catch(() => {
-        const saved = localStorage.getItem('ireport_admin_ai_worker_url');
-        if (saved) setWorkerUrl(saved);
-      });
-  }, []);
-
-  // Save worker URL
-  const saveWorkerUrl = useCallback(() => {
-    localStorage.setItem('ireport_admin_ai_worker_url', workerUrl);
-    window.api.setAIWorkerUrl(workerUrl).catch(console.error);
-  }, [workerUrl]);
-
-  // Check worker health
-  const checkHealth = useCallback(async () => {
-    setHealthLoading(true);
-    try {
-      await window.api.setAIWorkerUrl(workerUrl);
-      const data = await window.api.getAIModelConfig();
-      setWorkerHealth({ ...data, status: 'ok' });
-    } catch (e) {
-      setWorkerHealth(null);
-    }
-    setHealthLoading(false);
-  }, [workerUrl]);
 
   // Fetch AI records from Supabase via IPC
   const fetchRecords = useCallback(async (reset = false) => {
@@ -199,27 +150,6 @@ function AIAnalysis() {
       fetchRecords(true);
     }
   }, [activeTab, statusFilter]);
-
-  // Fetch model config from worker
-  const fetchModelConfig = useCallback(async () => {
-    setConfigLoading(true);
-    try {
-      await window.api.setAIWorkerUrl(workerUrl);
-      const data = await window.api.getAIModelConfig();
-      setModelConfig(data);
-      setNewProvider(data.vlm_provider || 'ollama');
-      setNewModel(data.vlm_model || '');
-    } catch (e) {
-      setModelConfig(null);
-    }
-    setConfigLoading(false);
-  }, [workerUrl]);
-
-  useEffect(() => {
-    if (activeTab === 'models') {
-      fetchModelConfig();
-    }
-  }, [activeTab]);
 
   // Re-run failed analysis
   const rerunAnalysis = async (incidentId: string) => {
@@ -387,62 +317,6 @@ function AIAnalysis() {
     setCallCreating(false);
   };
 
-  // Update model config
-  const updateModelConfig = async () => {
-    try {
-      await window.api.setAIModelConfig({ vlm_provider: newProvider, vlm_model: newModel || undefined });
-      alert('Model config updated. Changes are active until worker restart.');
-      fetchModelConfig();
-    } catch (e: any) {
-      alert('Error: ' + e.message);
-    }
-  };
-
-  // Chat prompt
-  const sendChatPrompt = async () => {
-    if (!chatInput.trim()) return;
-    const userMsg: ChatMessage = {
-      role: 'user',
-      content: chatInput,
-      timestamp: new Date().toISOString()
-    };
-    setChatMessages(prev => [...prev, userMsg]);
-    setChatSending(true);
-    const promptText = chatInput;
-    const recentHistory = chatMessages.slice(-8).map(msg => ({
-      role: msg.role,
-      content: msg.content
-    }));
-    setChatInput('');
-
-    try {
-      const data = await window.api.sendAIChatPrompt({
-        prompt: promptText,
-        history: recentHistory,
-        include_context: chatIncludeContext,
-        incident_id: chatIncidentId || undefined
-      });
-      const assistantMsg: ChatMessage = {
-        role: 'assistant',
-        content: data.response || JSON.stringify(data),
-        timestamp: new Date().toISOString()
-      };
-      setChatMessages(prev => [...prev, assistantMsg]);
-    } catch (e: any) {
-      const assistantMsg: ChatMessage = {
-        role: 'assistant',
-        content: 'Error: ' + e.message,
-        timestamp: new Date().toISOString()
-      };
-      setChatMessages(prev => [...prev, assistantMsg]);
-    }
-    setChatSending(false);
-  };
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
-
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'completed':
@@ -475,52 +349,21 @@ function AIAnalysis() {
     return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
   };
 
+  // Route-level guard: dispatchers/chiefs/officers should never reach this
+  // page's content, even via direct URL navigation. Model/worker internals
+  // and free-form prompting now live in ireport-service-manager.
+  if (!isAdmin) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
         <BrainCircuit size={28} className="text-blue-600 dark:text-blue-400" />
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">AI Analysis</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Manage AI triage pipeline, review reports, and interact with models</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Review AI triage reports and run manual analysis. Model configuration lives in the Service Manager tool.</p>
         </div>
-      </div>
-
-      {/* Worker Connection Bar */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-4 mb-6 border border-gray-200 dark:border-gray-700 flex items-center gap-4 flex-wrap">
-        <div className="flex items-center gap-2 flex-1 min-w-[300px]">
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">AI Worker URL:</span>
-          <input
-            type="text"
-            value={workerUrl}
-            onChange={(e) => setWorkerUrl(e.target.value)}
-            onBlur={saveWorkerUrl}
-            className="flex-1 min-w-[200px] px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-            placeholder="http://127.0.0.1:8000"
-          />
-        </div>
-        <button
-          onClick={checkHealth}
-          disabled={healthLoading}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-        >
-          {healthLoading ? <Loader2 size={14} className="animate-spin" /> : <Wifi size={14} />}
-          Test Connection
-        </button>
-        {workerHealth && (
-          <div className="flex items-center gap-2 text-sm">
-            <CheckCircle size={14} className="text-green-500" />
-            <span className="text-green-600 dark:text-green-400">Connected</span>
-            <span className="text-gray-400">|</span>
-            <Cpu size={14} className="text-gray-400" />
-            <span className="text-gray-600 dark:text-gray-400">{workerHealth.vlm_model}</span>
-          </div>
-        )}
-        {workerHealth === null && !healthLoading && (
-          <div className="flex items-center gap-2 text-sm text-red-500">
-            <WifiOff size={14} />
-            <span>Unreachable</span>
-          </div>
-        )}
       </div>
 
       {/* Sub-tabs */}
@@ -529,8 +372,6 @@ function AIAnalysis() {
           { key: 'records' as TabType, label: 'Records', icon: FileText },
           { key: 'manual' as TabType, label: 'Manual Analysis', icon: Play },
           { key: 'pipeline-log' as TabType, label: 'Pipeline Log', icon: ImageIcon },
-          { key: 'models' as TabType, label: 'Model Settings', icon: SettingsIcon },
-          { key: 'prompt-lab' as TabType, label: 'Prompt Lab', icon: MessageSquare },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -1091,162 +932,6 @@ function AIAnalysis() {
         </div>
       )}
 
-      {/* Model Settings Tab */}
-      {activeTab === 'models' && (
-        <div className="max-w-xl">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700 space-y-4">
-            {configLoading && (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <Loader2 size={14} className="animate-spin" />
-                Loading config...
-              </div>
-            )}
-            {!configLoading && !modelConfig && (
-              <div className="text-sm text-red-500">Could not reach AI worker. Check the URL above.</div>
-            )}
-            {modelConfig && (
-              <>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-gray-500 dark:text-gray-400">Current VLM Provider</span>
-                    <p className="font-medium text-gray-900 dark:text-white capitalize">{modelConfig.vlm_provider}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500 dark:text-gray-400">Current VLM Model</span>
-                    <p className="font-medium text-gray-900 dark:text-white">{modelConfig.vlm_model}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500 dark:text-gray-400">YOLO Weights</span>
-                    <p className="font-medium text-gray-900 dark:text-white">{modelConfig.yolo_weights}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500 dark:text-gray-400">RAG Enabled</span>
-                    <p className="font-medium text-gray-900 dark:text-white">{modelConfig.rag_enabled ? 'Yes' : 'No'}</p>
-                  </div>
-                </div>
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 space-y-3">
-                  <h3 className="text-sm font-medium text-gray-900 dark:text-white">Switch Model</h3>
-                  <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Provider</label>
-                    <select
-                      value={newProvider}
-                      onChange={(e) => setNewProvider(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                      <option value="ollama">Ollama (Local)</option>
-                      <option value="gemini">Gemini (Cloud)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Model Name</label>
-                    <select
-                      value={newModel}
-                      onChange={(e) => setNewModel(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                      {availableModels.map((model) => (
-                        <option key={model} value={model}>{model}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <button
-                    onClick={updateModelConfig}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
-                  >
-                    <RefreshCw size={14} />
-                    Apply Changes
-                  </button>
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
-                    Changes are volatile and last only until the worker restarts.
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Prompt Lab Tab */}
-      {activeTab === 'prompt-lab' && (
-        <div className="max-w-3xl h-[calc(100vh-280px)] flex flex-col">
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col flex-1 overflow-hidden">
-            {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {chatMessages.length === 0 && (
-                <div className="text-center text-gray-400 dark:text-gray-500 py-8">
-                  <MessageSquare size={32} className="mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">Start a conversation with the AI model</p>
-                  <p className="text-xs mt-1">You can optionally include Supabase incident context</p>
-                </div>
-              )}
-              {chatMessages.map((msg, idx) => (
-                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] rounded-lg p-3 text-sm ${
-                    msg.role === 'user'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
-                  }`}>
-                    <pre className="whitespace-pre-wrap font-sans">{msg.content}</pre>
-                    <span className={`text-[10px] mt-1 block ${msg.role === 'user' ? 'text-blue-200' : 'text-gray-400'}`}>
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                </div>
-              ))}
-              {chatSending && (
-                <div className="flex justify-start">
-                  <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3">
-                    <Loader2 size={14} className="animate-spin text-gray-400" />
-                  </div>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-
-            {/* Chat Input */}
-            <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-3">
-              <div className="flex gap-3 flex-wrap items-center">
-                <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-                  <input
-                    type="checkbox"
-                    checked={chatIncludeContext}
-                    onChange={(e) => setChatIncludeContext(e.target.checked)}
-                    className="rounded border-gray-300"
-                  />
-                  Include incident context
-                </label>
-                {chatIncludeContext && (
-                  <input
-                    type="text"
-                    value={chatIncidentId}
-                    onChange={(e) => setChatIncidentId(e.target.value)}
-                    placeholder="Incident ID"
-                    className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none w-40"
-                  />
-                )}
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendChatPrompt()}
-                  placeholder="Type your prompt..."
-                  disabled={chatSending}
-                  className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                <button
-                  onClick={sendChatPrompt}
-                  disabled={chatSending || !chatInput.trim()}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  <Send size={14} />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

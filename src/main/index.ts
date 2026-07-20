@@ -833,7 +833,7 @@ ipcMain.handle('db:getIncidentAIReport', async (_event, incidentId: string) => {
   }
 });
 
-ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, stationId, officerIds, primaryOfficerId, resourceIds, casualtiesCategory, casualtiesCount }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => {
+ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, stationId, officerIds, primaryOfficerId, resourceIds, casualtiesCategory, casualtiesCount, releaseAssignments }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number; releaseAssignments?: boolean }) => {
   const now = new Date().toISOString();
 
   try {
@@ -858,6 +858,24 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       throw new Error(`incident_is_locked: Incident is already ${currentStatus} and cannot be modified.`);
     }
 
+    // Gate the transition INTO 'closed' on a completed dispatcher final report
+    // already existing for this incident. This closes the gap where some path
+    // other than `finalReports:create` (which inserts the final_reports row and
+    // closes atomically) could set status = 'closed' with no dispatcher-authored
+    // final report at all. Mirrors the `incident_is_locked` error pattern above.
+    if (status === 'closed') {
+      const { data: existingFinalReport } = await supabase
+        .from('final_reports')
+        .select('id')
+        .eq('incident_id', id)
+        .maybeSingle();
+
+      if (!existingFinalReport) {
+        console.warn(`[Admin] Rejected close attempt on incident ${id}: no final report exists`);
+        throw new Error('final_report_required: Cannot close incident without a completed final report. Use the Final Report workflow to close this incident.');
+      }
+    }
+
     // Build update object
     const updateData: any = {
       status,
@@ -876,7 +894,7 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
     }
 
     // Handle officer assignment (multiple officers supported)
-    if (isTerminalStatus) {
+    if (isTerminalStatus && releaseAssignments === true) {
       const oldOfficerIds: string[] = currentIncident?.assigned_officer_ids || [];
       const providedOfficerIds: string[] = officerIds || [];
       const officerIdsToRelease = Array.from(new Set([...oldOfficerIds, ...providedOfficerIds]));
@@ -887,6 +905,10 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       if (officerIdsToRelease.length > 0) {
         await supabase.from('profiles').update({ status: 'available' }).in('id', officerIdsToRelease);
       }
+    } else if (isTerminalStatus) {
+      // Terminal status but release was not explicitly requested — leave
+      // assignments untouched (Bug 4 fix). No-op: updateData is left without
+      // assignment fields so the existing row values are preserved.
     } else if (officerIds !== undefined) { // Only if explicitly provided
       const leadOfficerId = primaryOfficerId && officerIds.includes(primaryOfficerId)
         ? primaryOfficerId
@@ -922,7 +944,7 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
     }
 
     // Handle resource assignment
-    if (isTerminalStatus) {
+    if (isTerminalStatus && releaseAssignments === true) {
       const oldResourceIds: number[] = currentIncident?.assigned_resource_ids || [];
       const providedResourceIds: number[] = resourceIds || [];
       const resourceIdsToRelease = Array.from(new Set([...oldResourceIds, ...providedResourceIds]));
@@ -932,6 +954,10 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       if (resourceIdsToRelease.length > 0) {
         await supabase.from('agency_resources').update({ status: 'available', updated_at: now }).in('id', resourceIdsToRelease);
       }
+    } else if (isTerminalStatus) {
+      // Terminal status but release was not explicitly requested — leave
+      // assignments untouched (Bug 4 fix). No-op: updateData is left without
+      // assignment fields so the existing row values are preserved.
     } else if (resourceIds !== undefined) {
       updateData.assigned_resource_ids = resourceIds;
 
@@ -978,89 +1004,19 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       updateData.assigned_station_id = stationId;
       console.log('[Admin] Explicit station assignment:', stationId);
     } else if (!currentIncident?.assigned_station_id && status !== 'pending' && !isTerminalStatus) {
-      // Auto-assign to CLOSEST station of matching agency if not already assigned
+      // Auto-assign via the single authoritative DB-side function, which internally
+      // defers to find_nearest_station and guards against overwriting an existing
+      // assignment (Bug 1 fix — see assign_station_if_unset migration).
       console.log('[Admin] Attempting auto-assignment for incident:', id);
-      console.log('[Admin] Current incident agency:', currentIncident?.agency_type);
-      console.log('[Admin] Status:', status);
 
-      const agencyNameMap: Record<string, string> = {
-        'pnp': 'PNP',
-        'bfp': 'BFP',
-        'mdrrmo': 'MDRRMO'
-      };
-      const agencyShortName = agencyNameMap[currentIncident?.agency_type?.toLowerCase()] || currentIncident?.agency_type?.toUpperCase();
+      const { data: assignedStationId, error: assignError } = await supabase
+        .rpc('assign_station_if_unset', { incident_id: id });
 
-      console.log('[Admin] Looking for agency with short_name:', agencyShortName);
-
-      // Find agency by short_name (matches agency_type) - case insensitive
-      const { data: agency, error: agencyError } = await supabase
-        .from('agencies')
-        .select('id')
-        .ilike('short_name', agencyShortName)
-        .single();
-
-      if (agencyError) {
-        console.error('[Admin] Agency lookup failed:', agencyError);
-      }
-
-      if (agency) {
-        console.log('[Admin] Found agency:', agency);
-
-        // Get incident coordinates for distance calculation
-        const { data: incident } = await supabase
-          .from('incidents')
-          .select('latitude, longitude')
-          .eq('id', id)
-          .single();
-
-        console.log('[Admin] Incident coordinates:', incident?.latitude, incident?.longitude);
-
-        if (incident?.latitude && incident?.longitude) {
-          // Get all stations for this agency
-          const { data: stations } = await supabase
-            .from('agency_stations')
-            .select('id, name, latitude, longitude')
-            .eq('agency_id', agency.id);
-
-          console.log('[Admin] Found', stations?.length || 0, 'stations for agency');
-
-          if (stations && stations.length > 0) {
-            // Calculate distance to each station and find closest
-            const incLat = parseFloat(incident.latitude);
-            const incLng = parseFloat(incident.longitude);
-
-            let closestStation = stations[0];
-            let minDistance = Infinity;
-
-            for (const station of stations) {
-              const stationLat = parseFloat(station.latitude);
-              const stationLng = parseFloat(station.longitude);
-              // Haversine formula for distance
-              const R = 6371; // Earth's radius in km
-              const dLat = (stationLat - incLat) * Math.PI / 180;
-              const dLng = (stationLng - incLng) * Math.PI / 180;
-              const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(incLat * Math.PI / 180) * Math.cos(stationLat * Math.PI / 180) *
-                Math.sin(dLng / 2) * Math.sin(dLng / 2);
-              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-              const distance = R * c;
-
-              if (distance < minDistance) {
-                minDistance = distance;
-                closestStation = station;
-              }
-            }
-
-            updateData.assigned_station_id = closestStation.id;
-            console.log(`[Admin] ✅ Auto-assigned to closest station: ${closestStation.name || closestStation.id} (${minDistance.toFixed(2)}km away)`);
-          } else {
-            console.warn('[Admin] ⚠️ No stations found for agency');
-          }
-        } else {
-          console.warn('[Admin] ⚠️ Incident missing coordinates - cannot auto-assign');
-        }
-      } else {
-        console.warn('[Admin] ⚠️ Agency not found - cannot auto-assign');
+      if (assignError) {
+        console.error('[Admin] Auto-assignment via assign_station_if_unset failed:', assignError);
+      } else if (assignedStationId) {
+        updateData.assigned_station_id = assignedStationId;
+        console.log(`[Admin] Auto-assigned to station id: ${assignedStationId}`);
       }
     } else if (currentIncident?.assigned_station_id) {
       console.log('[Admin] Station already assigned:', currentIncident.assigned_station_id);
@@ -1079,8 +1035,17 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       throw new Error(updateError.message || 'Failed to update incident status');
     }
 
-    const newOfficerIds: string[] = isTerminalStatus ? [] : (officerIds || oldOfficerIds);
-    const newResourceIds: number[] = isTerminalStatus ? [] : (resourceIds || oldResourceIds);
+    // Derive the post-update officer/resource assignments directly from
+    // updateData — the single source of truth for what was actually written
+    // to the incidents row above. This mirrors the terminal+releaseAssignments
+    // gating so the assignment-history row (written below) never records a
+    // clear that didn't actually happen (Bug 4 fix).
+    const newOfficerIds: string[] = updateData.assigned_officer_ids !== undefined
+      ? updateData.assigned_officer_ids
+      : oldOfficerIds;
+    const newResourceIds: number[] = updateData.assigned_resource_ids !== undefined
+      ? updateData.assigned_resource_ids
+      : oldResourceIds;
     const newStationId = updateData.assigned_station_id !== undefined
       ? updateData.assigned_station_id
       : currentIncident?.assigned_station_id || null;
@@ -1106,7 +1071,7 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
         .filter((agencyId: any) => agencyId !== null && agencyId !== undefined)));
 
       const historyReasons = [
-        isTerminalStatus ? 'terminal_release' : null,
+        (isTerminalStatus && releaseAssignments === true) ? 'terminal_release' : null,
         officersChanged ? 'officers_changed' : null,
         resourcesChanged ? 'resources_changed' : null,
         stationChanged ? 'station_changed' : null
@@ -1288,7 +1253,7 @@ ipcMain.handle('incidents:reopen', async (_event, { id, updatedBy, updatedById, 
 
     if (updateError) throw updateError;
 
-    // 4. Record history
+    // 4. Record status history
     await supabase.from('incident_status_history').insert({
       incident_id: id,
       status: 'in_progress',
@@ -1297,31 +1262,132 @@ ipcMain.handle('incidents:reopen', async (_event, { id, updatedBy, updatedById, 
       changed_at: now
     });
 
+    // 5. Attempt to restore the prior officer/resource assignment (Bug 4 fix).
+    // Find the most recent assignment-history row that recorded the
+    // transition INTO the terminal status being reopened from — that row's
+    // previous_officer_ids/previous_resource_ids hold what was assigned
+    // immediately before the terminal release (the restore source).
+    let restoredOfficerIds: string[] = [];
+    let restoredResourceIds: number[] = [];
+    let unavailableOfficerIds: string[] = [];
+    let unavailableResourceIds: number[] = [];
+
+    const { data: lastTerminalHistory, error: historyFetchError } = await supabase
+      .from('incident_assignment_history')
+      .select('previous_officer_ids, previous_resource_ids')
+      .eq('incident_id', id)
+      .in('to_status', ['resolved', 'closed'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (historyFetchError) {
+      console.error('[Admin] Failed to fetch prior assignment history for reopen restore:', historyFetchError);
+    }
+
+    const priorOfficerIds: string[] = lastTerminalHistory?.previous_officer_ids || [];
+    const priorResourceIds: number[] = lastTerminalHistory?.previous_resource_ids || [];
+
+    if (priorOfficerIds.length > 0 || priorResourceIds.length > 0) {
+      // Check current availability of the previously-assigned officers/resources.
+      const [officersResult, resourcesResult] = await Promise.all([
+        priorOfficerIds.length > 0
+          ? supabase.from('profiles').select('id, status').in('id', priorOfficerIds)
+          : Promise.resolve({ data: [], error: null }),
+        priorResourceIds.length > 0
+          ? supabase.from('agency_resources').select('id, status').in('id', priorResourceIds)
+          : Promise.resolve({ data: [], error: null })
+      ]);
+
+      const officerStatusMap = new Map((officersResult.data || []).map((p: any) => [p.id, p.status]));
+      const resourceStatusMap = new Map((resourcesResult.data || []).map((r: any) => [r.id, r.status]));
+
+      restoredOfficerIds = priorOfficerIds.filter(oid => officerStatusMap.get(oid) === 'available');
+      unavailableOfficerIds = priorOfficerIds.filter(oid => officerStatusMap.get(oid) !== 'available');
+
+      restoredResourceIds = priorResourceIds.filter(rid => resourceStatusMap.get(rid) === 'available');
+      unavailableResourceIds = priorResourceIds.filter(rid => resourceStatusMap.get(rid) !== 'available');
+
+      if (restoredOfficerIds.length > 0 || restoredResourceIds.length > 0) {
+        const restoreUpdate: any = {};
+        if (restoredOfficerIds.length > 0) {
+          restoreUpdate.assigned_officer_id = restoredOfficerIds[0];
+          restoreUpdate.assigned_officer_ids = restoredOfficerIds;
+        }
+        if (restoredResourceIds.length > 0) {
+          restoreUpdate.assigned_resource_ids = restoredResourceIds;
+        }
+
+        const { error: restoreError } = await supabase
+          .from('incidents')
+          .update(restoreUpdate)
+          .eq('id', id);
+
+        if (restoreError) {
+          console.error('[Admin] Failed to restore prior assignments on reopen:', restoreError);
+          // Roll back what we thought we restored so history/response stay accurate.
+          restoredOfficerIds = [];
+          restoredResourceIds = [];
+          unavailableOfficerIds = priorOfficerIds;
+          unavailableResourceIds = priorResourceIds;
+        } else {
+          if (restoredOfficerIds.length > 0) {
+            await supabase.from('profiles').update({ status: 'busy' }).in('id', restoredOfficerIds);
+          }
+          if (restoredResourceIds.length > 0) {
+            await supabase.from('agency_resources').update({ status: 'deployed', updated_at: now }).in('id', restoredResourceIds);
+          }
+        }
+      }
+    }
+
+    const hasUnavailable = unavailableOfficerIds.length > 0 || unavailableResourceIds.length > 0;
+
+    // 6. Record assignment history for the reopen itself, reflecting whatever
+    // was actually restored above.
     await supabase.from('incident_assignment_history').insert({
       incident_id: id,
       from_status: currentStatus,
       to_status: 'in_progress',
-      reason: 'reopened',
+      previous_officer_ids: [],
+      new_officer_ids: restoredOfficerIds,
+      previous_resource_ids: [],
+      new_resource_ids: restoredResourceIds,
+      reason: hasUnavailable ? 'reopened_partial_restore' : (restoredOfficerIds.length > 0 || restoredResourceIds.length > 0) ? 'reopened_restored' : 'reopened',
       changed_by: validUserId,
       changed_by_label: updatedBy,
       notes: notes || 'Incident explicitly re-opened by administrator.',
       created_at: now
     });
 
-    // 5. Invalidate cache
+    // 7. Invalidate cache
     clearCache('stats');
 
-    // 6. Log security action
+    // 8. Log security action
     await logSecurityAction(
       'incident_reopened',
-      { incident_id: id, old_status: currentStatus, notes: notes || 'Administrative re-opening' },
+      {
+        incident_id: id,
+        old_status: currentStatus,
+        notes: notes || 'Administrative re-opening',
+        restored_officer_ids: restoredOfficerIds,
+        restored_resource_ids: restoredResourceIds,
+        unavailable_officer_ids: unavailableOfficerIds,
+        unavailable_resource_ids: unavailableResourceIds
+      },
       updatedById,
       updatedBy,
       'incident',
       id
     );
 
-    return { success: true };
+    return {
+      success: true,
+      restoredOfficerIds,
+      restoredResourceIds,
+      unavailableOfficerIds,
+      unavailableResourceIds
+    };
   } catch (error: any) {
     console.error('[Admin] Error reopening incident:', error);
     throw new Error(error.message || 'Failed to re-open incident');

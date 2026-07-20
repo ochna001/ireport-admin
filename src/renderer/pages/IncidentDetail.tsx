@@ -203,6 +203,8 @@ const STATUS_OPTIONS = [
   { value: 'in_progress', label: 'In Progress', color: 'bg-orange-500' },
   { value: 'resolved', label: 'Resolved', color: 'bg-green-500' },
   { value: 'closed', label: 'Closed', color: 'bg-gray-500' },
+  { value: 'rejected', label: 'Rejected', color: 'bg-red-500' },
+  { value: 'ai_routing', label: 'AI Routing', color: 'bg-purple-500' },
 ];
 
 const VALID_STATUSES = new Set(STATUS_OPTIONS.map((option) => option.value));
@@ -919,7 +921,7 @@ function IncidentDetail() {
     setReopening(true);
     setShowReopenConfirmModal(false);
     try {
-      await window.api.reopenIncident({
+      const result = await window.api.reopenIncident({
         id,
         updatedBy: scope.displayName || 'Administrator',
         updatedById: scope.userId,
@@ -933,7 +935,41 @@ function IncidentDetail() {
         loadAssignmentHistory()
       ]);
 
-      alert('Incident has been re-opened.');
+      const restoredOfficerIds = result?.restoredOfficerIds || [];
+      const restoredResourceIds = result?.restoredResourceIds || [];
+      const unavailableOfficerIds = result?.unavailableOfficerIds || [];
+      const unavailableResourceIds = result?.unavailableResourceIds || [];
+
+      if (unavailableOfficerIds.length > 0 || unavailableResourceIds.length > 0) {
+        const unavailableNames = [
+          ...unavailableOfficerIds.map(officerId => {
+            const officer = officers.find(o => o.id === officerId);
+            return officer?.display_name || officer?.email || officerId;
+          }),
+          ...unavailableResourceIds.map(resourceId => {
+            const resource = resources.find(r => r.id === resourceId);
+            return resource?.name || `Resource #${resourceId}`;
+          })
+        ];
+        alert(
+          `Incident has been re-opened. Previously assigned [${unavailableNames.join(', ')}] ` +
+          `are no longer available and were not restored — please reassign.`
+        );
+      } else if (restoredOfficerIds.length > 0 || restoredResourceIds.length > 0) {
+        const restoredNames = [
+          ...restoredOfficerIds.map(officerId => {
+            const officer = officers.find(o => o.id === officerId);
+            return officer?.display_name || officer?.email || officerId;
+          }),
+          ...restoredResourceIds.map(resourceId => {
+            const resource = resources.find(r => r.id === resourceId);
+            return resource?.name || `Resource #${resourceId}`;
+          })
+        ];
+        alert(`Incident has been re-opened. Previously assigned [${restoredNames.join(', ')}] were restored.`);
+      } else {
+        alert('Incident has been re-opened.');
+      }
     } catch (error: any) {
       console.error('Failed to re-open incident:', error);
       alert(error.message || 'Failed to re-open incident. Please try again.');
@@ -1122,6 +1158,9 @@ function IncidentDetail() {
     const entries = Object.entries(details).filter(([key, value]) => {
       // Skip internal fields and empty values
       if (key === 'timestamp' || key.endsWith('_data')) return false;
+      // Skip responder-submission metadata tags (added when draft_details originates
+      // from the responder app) - these are provenance metadata, not report content
+      if (key === 'source' || key === 'submitted_by_user_id' || key === 'title') return false;
       if (value === '' || value === '0' || value === null || value === undefined) return false;
       return true;
     });
@@ -1823,16 +1862,29 @@ function IncidentDetail() {
                 ) : draftReport ? (
                   <div className="bg-gradient-to-br from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 rounded-lg p-4 border border-yellow-200 dark:border-yellow-800">
                     <div className="flex items-center justify-between mb-3">
-                      <span className={`text-xs px-2 py-1 rounded ${draftReport.status === 'ready_for_review'
-                        ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
-                        : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
-                        }`}>
-                        {draftReport.status === 'ready_for_review' ? 'Ready for Review' : 'Draft In Progress'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs px-2 py-1 rounded ${draftReport.status === 'ready_for_review'
+                          ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
+                          : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+                          }`}>
+                          {draftReport.status === 'ready_for_review' ? 'Ready for Review' : 'Draft In Progress'}
+                        </span>
+                        {draftReport.draft_details?.source === 'responder' && (
+                          <span className="text-xs px-2 py-1 bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 rounded">
+                            📱 Submitted by Responder
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-gray-500 dark:text-gray-400">
                         Last saved: {draftReport.updated_at ? new Date(draftReport.updated_at).toLocaleDateString() : 'N/A'}
                       </span>
                     </div>
+
+                    {draftReport.draft_details?.source === 'responder' && draftReport.draft_details?.title && (
+                      <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-3">
+                        {draftReport.draft_details.title}
+                      </p>
+                    )}
 
                     <div className="space-y-4 opacity-80">
                       {formatReportDetails(draftReport.draft_details)?.slice(0, 3).map(([key, value]) => (

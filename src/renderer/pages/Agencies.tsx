@@ -24,8 +24,8 @@ import { getSessionScope, isStationScoped } from '../utils/sessionScope';
 import { parseResourcesCSV, generateResourcesCSVTemplate, downloadFile } from '../utils/exportUtils';
 import { StationDetailView } from './StationDetailView';
 
-// Google Maps API Key from main process
-const GOOGLE_MAPS_API_KEY = 'AIzaSyBuylnOdkYntsIFYVDbsQFemeyqya1TaTc';
+// Google Maps API Key from Vite environment (set VITE_GOOGLE_MAPS_API_KEY in .env)
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 
 // Extend Window interface for Google Maps
 declare global {

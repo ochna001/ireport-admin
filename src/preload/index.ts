@@ -311,7 +311,7 @@ export interface ElectronAPI {
   getIncident: (id: string) => Promise<any>;
   getIncidentAIReport: (id: string) => Promise<any>;
   updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => Promise<{ success: boolean }>;
-  reopenIncident: (params: { id: string; updatedBy: string; updatedById?: string; notes?: string }) => Promise<{ success: boolean }>;
+  reopenIncident: (params: { id: string; updatedBy: string; updatedById?: string; notes?: string }) => Promise<{ success: boolean; restoredOfficerIds?: string[]; restoredResourceIds?: number[]; unavailableOfficerIds?: string[]; unavailableResourceIds?: number[] }>;
   getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => Promise<any>;
   getAuditLog: (incidentId: string) => Promise<any[]>;
   getIncidentAssignmentHistory: (incidentId: string) => Promise<any[]>;

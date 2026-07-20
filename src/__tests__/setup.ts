@@ -40,10 +40,14 @@ const mockApi = {
   getSyncStatus: vi.fn(),
 };
 
-// @ts-ignore - Mock window for tests
-(global as any).window = {
-  api: mockApi,
-};
+// Attach the mock api to the EXISTING jsdom window rather than replacing it.
+// Replacing window with a bare object breaks react-dom's renderer (component
+// tests fail with "Should not already be working."). Augmenting preserves the
+// real DOM while still exposing window.api for renderer tests.
+if (typeof (globalThis as any).window === 'undefined') {
+  (globalThis as any).window = {};
+}
+(globalThis as any).window.api = mockApi;
 
 export { mockApi };
 
