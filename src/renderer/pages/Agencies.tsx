@@ -1,7 +1,9 @@
 import {
   AlertCircle,
+  ArrowRight,
   Building2,
   CheckCircle,
+  ChevronRight,
   Download,
   Edit,
   Flame,
@@ -23,6 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getSessionScope, isStationScoped } from '../utils/sessionScope';
 import { parseResourcesCSV, generateResourcesCSVTemplate, downloadFile } from '../utils/exportUtils';
 import { StationDetailView } from './StationDetailView';
+import { ConfirmDialog } from '../components/ui';
 
 // Google Maps API Key from Vite environment (set VITE_GOOGLE_MAPS_API_KEY in .env)
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
@@ -161,16 +164,27 @@ function Agencies() {
   const [stations, setStations] = useState<Station[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [stationSearchQuery, setStationSearchQuery] = useState('');
+  const [resourceSearchQuery, setResourceSearchQuery] = useState('');
   const [agencyFilter, setAgencyFilter] = useState('');
+  const [resourceView, setResourceView] = useState<'stations' | 'all'>('stations');
+  const [resourceStatusFilter, setResourceStatusFilter] = useState<Resource['status'] | ''>('');
+  const [expandedStations, setExpandedStations] = useState<Record<number, boolean>>({});
 
   // Modal states
+  const [showAgencyModal, setShowAgencyModal] = useState(false);
   const [showStationModal, setShowStationModal] = useState(false);
   const [showResourceModal, setShowResourceModal] = useState(false);
+  const [editingAgency, setEditingAgency] = useState<Agency | null>(null);
   const [editingStation, setEditingStation] = useState<Station | null>(null);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
   const [detailStation, setDetailStation] = useState<Station | null>(null);
   const [showBatchImportModal, setShowBatchImportModal] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    kind: 'agency' | 'station' | 'resource';
+    id: number;
+    name: string;
+  } | null>(null);
   const [importingResources, setImportingResources] = useState(false);
   const [importPreview, setImportPreview] = useState<any[]>([]);
 
@@ -221,7 +235,7 @@ function Agencies() {
       case 'PNP': return 'bg-blue-500';
       case 'BFP': return 'bg-red-500';
       case 'MDRRMO': return 'bg-teal-500';
-      default: return 'bg-gray-500';
+      default: return 'bg-slate-500';
     }
   };
 
@@ -230,7 +244,7 @@ function Agencies() {
       case 'PNP': return 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800';
       case 'BFP': return 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800';
       case 'MDRRMO': return 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800';
-      default: return 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
+      default: return 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700';
     }
   };
 
@@ -239,7 +253,7 @@ function Agencies() {
       case 'available': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
       case 'deployed': return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400';
       case 'maintenance': return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
-      default: return 'bg-gray-100 text-gray-700';
+      default: return 'bg-slate-100 text-slate-700';
     }
   };
 
@@ -250,8 +264,8 @@ function Agencies() {
       if (scope.agencyId && station.agency_id !== scope.agencyId) return false;
     }
 
-    const matchesSearch = station.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      station.address?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = station.name.toLowerCase().includes(stationSearchQuery.toLowerCase()) ||
+      station.address?.toLowerCase().includes(stationSearchQuery.toLowerCase());
     const matchesAgency = !agencyFilter || station.agency_id.toString() === agencyFilter;
     return matchesSearch && matchesAgency;
   });
@@ -259,6 +273,14 @@ function Agencies() {
   const stationsForModal = stationScopeActive && scope.stationId
     ? stations.filter((station) => station.id === scope.stationId)
     : stations;
+  const selectedAgencyId = agencyFilter ? Number(agencyFilter) : undefined;
+  const agencyScopedStations = selectedAgencyId
+    ? stationsForModal.filter((station) => station.agency_id === selectedAgencyId)
+    : stationsForModal;
+  const resourceStationsForModal = editingResource ? stationsForModal : agencyScopedStations;
+  const defaultResourceStationId = stationScopeActive
+    ? scope.stationId
+    : agencyScopedStations.length === 1 ? agencyScopedStations[0].id : undefined;
 
   const filteredResources = resources.filter(resource => {
     const station = stations.find(s => s.id === resource.station_id);
@@ -269,14 +291,84 @@ function Agencies() {
       if (scope.agencyId && station?.agency_id !== scope.agencyId) return false;
     }
 
-    const matchesSearch = resource.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      resource.description?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = resource.name.toLowerCase().includes(resourceSearchQuery.toLowerCase()) ||
+      resource.description?.toLowerCase().includes(resourceSearchQuery.toLowerCase());
     const matchesAgency = !agencyFilter || station?.agency_id.toString() === agencyFilter;
-    return matchesSearch && matchesAgency;
+    const matchesStatus = !resourceStatusFilter || resource.status === resourceStatusFilter;
+    return matchesSearch && matchesAgency && matchesStatus;
   });
+
+  const resourceGroups = stations
+    .map((station) => {
+      const stationResources = filteredResources.filter((resource) => resource.station_id === station.id);
+      const agency = agencies.find((item) => item.id === station.agency_id);
+      return {
+        station,
+        agency,
+        resources: stationResources,
+        attentionCount: stationResources.filter((resource) => resource.status !== 'available').length,
+      };
+    })
+    .filter((group) => group.resources.length > 0)
+    .sort((a, b) => b.attentionCount - a.attentionCount || a.station.name.localeCompare(b.station.name));
+
+  // Agency handlers
+  const handleAddAgency = () => {
+    setEditingAgency(null);
+    setShowAgencyModal(true);
+  };
+
+  const handleEditAgency = (agency: Agency) => {
+    setEditingAgency(agency);
+    setShowAgencyModal(true);
+  };
+
+  const handleSaveAgency = async (data: Pick<Agency, 'name' | 'short_name'>) => {
+    try {
+      if (editingAgency) {
+        await window.api.updateAgency({ id: editingAgency.id, updates: data });
+        showToast('success', 'Agency updated successfully');
+      } else {
+        await window.api.createAgency(data);
+        showToast('success', 'Agency created successfully');
+      }
+      setShowAgencyModal(false);
+      setEditingAgency(null);
+      await loadData();
+    } catch (error: any) {
+      console.error('Failed to save agency:', error);
+      showToast('error', error.message || 'Failed to save agency');
+      throw error;
+    }
+  };
+
+  const requestDeleteAgency = (agency: Agency) => {
+    const stationCount = stations.filter((station) => station.agency_id === agency.id).length;
+    if (stationCount > 0) {
+      showToast('error', `Cannot delete ${agency.short_name} while it has ${stationCount} station${stationCount === 1 ? '' : 's'}. Remove or reassign stations first.`);
+      return;
+    }
+    setDeleteConfirmation({ kind: 'agency', id: agency.id, name: agency.name });
+  };
+
+  const handleDeleteAgency = async (id: number) => {
+    try {
+      await window.api.deleteAgency(id);
+      showToast('success', 'Agency deleted successfully');
+      if (agencyFilter === id.toString()) setAgencyFilter('');
+      await loadData();
+    } catch (error: any) {
+      console.error('Failed to delete agency:', error);
+      showToast('error', error.message || 'Failed to delete agency');
+    }
+  };
 
   // Station handlers
   const handleAddStation = () => {
+    if (agencies.length === 0) {
+      showToast('error', 'Create an agency before adding a station.');
+      return;
+    }
     setEditingStation(null);
     setShowStationModal(true);
   };
@@ -305,7 +397,7 @@ function Agencies() {
     }
   };
 
-  const handleDeleteStation = async (id: number) => {
+  const requestDeleteStation = (id: number) => {
     const station = stations.find(s => s.id === id);
     const stationResources = resources.filter(r => r.station_id === id);
 
@@ -314,7 +406,11 @@ function Agencies() {
       return;
     }
 
-    if (!confirm(`Are you sure you want to delete "${station?.name}"?`)) return;
+    if (!station) return;
+    setDeleteConfirmation({ kind: 'station', id, name: station.name });
+  };
+
+  const handleDeleteStation = async (id: number) => {
 
     try {
       await window.api.deleteStation(id);
@@ -328,12 +424,24 @@ function Agencies() {
 
   // Resource handlers
   const handleAddResource = () => {
-    if (stations.length === 0) {
+    if (resourceStationsForModal.length === 0) {
       showToast('error', 'Please create a station first before adding resources');
       return;
     }
     setEditingResource(null);
     setShowResourceModal(true);
+  };
+
+  const selectedAgency = agencies.find((agency) => agency.id.toString() === agencyFilter);
+  const clearAgencyScope = () => setAgencyFilter('');
+  const clearStationFilters = () => {
+    setStationSearchQuery('');
+    setAgencyFilter('');
+  };
+  const clearResourceFilters = () => {
+    setResourceSearchQuery('');
+    setAgencyFilter('');
+    setResourceStatusFilter('');
   };
 
   const handleEditResource = (resource: Resource) => {
@@ -360,9 +468,17 @@ function Agencies() {
     }
   };
 
-  const handleDeleteResource = async (id: number) => {
+  const requestDeleteResource = (id: number) => {
     const resource = resources.find(r => r.id === id);
-    if (!confirm(`Are you sure you want to delete "${resource?.name}"?`)) return;
+    if (!resource) return;
+    if (resource.status !== 'available') {
+      showToast('error', `Cannot delete ${resource.name} while it is ${resource.status}. Return it to available first.`);
+      return;
+    }
+    setDeleteConfirmation({ kind: 'resource', id, name: resource.name });
+  };
+
+  const handleDeleteResource = async (id: number) => {
 
     try {
       await window.api.deleteResource(id);
@@ -371,6 +487,19 @@ function Agencies() {
     } catch (error: any) {
       console.error('Failed to delete resource:', error);
       showToast('error', error.message || 'Failed to delete resource');
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirmation) return;
+    const { kind, id } = deleteConfirmation;
+    setDeleteConfirmation(null);
+    if (kind === 'agency') {
+      await handleDeleteAgency(id);
+    } else if (kind === 'station') {
+      await handleDeleteStation(id);
+    } else {
+      await handleDeleteResource(id);
     }
   };
 
@@ -462,11 +591,11 @@ function Agencies() {
   // Show error state if data failed to load
   if (loadError) {
     return (
-      <div className="p-6 dark:bg-gray-950 min-h-full">
+      <div className="min-h-full bg-slate-50 p-4 dark:bg-slate-950 sm:p-6">
         <div className="flex flex-col items-center justify-center h-[60vh]">
           <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
-          <h2 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Failed to Load Data</h2>
-          <p className="text-gray-500 dark:text-gray-400 mb-4">{loadError}</p>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-2">Failed to Load Data</h2>
+          <p className="text-slate-500 dark:text-slate-400 mb-4">{loadError}</p>
           <button
             onClick={loadData}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
@@ -491,7 +620,7 @@ function Agencies() {
   }
 
   return (
-    <div className="p-6 dark:bg-gray-950 min-h-full">
+    <div className="p-6 dark:bg-slate-950 min-h-full">
       {/* Toast Notification */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg transition-all ${toast.type === 'success'
@@ -504,11 +633,11 @@ function Agencies() {
             <AlertCircle className="w-5 h-5" />
           )}
           <span>{toast.message}</span>
-          <button onClick={() => setToast(null)} className="ml-2 hover:opacity-80">
+          <button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)} className="ml-2 rounded p-1 hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">
             <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+           </button>
+         </div>
+       )}
 
       {/* Station Scope Info Banner */}
       {stationScopeActive && (
@@ -520,21 +649,24 @@ function Agencies() {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Operations directory</div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-950 dark:text-white">
             {stationScopeActive ? 'My Station' : 'Agency Management'}
           </h1>
-          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
             {stationScopeActive
               ? 'View your station information and resources'
               : 'Manage agencies, stations, and resources'
             }
           </p>
         </div>
-        <button
-          onClick={loadData}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors dark:text-white"
+          <button
+           type="button"
+           aria-label="Refresh agency data"
+           onClick={loadData}
+           className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
         >
           <RefreshCw className="w-4 h-4" />
           Refresh
@@ -542,53 +674,72 @@ function Agencies() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6 border-b border-gray-200 dark:border-gray-700">
+      <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-800" role="tablist" aria-label="Agency management sections">
         {!stationScopeActive && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'agencies'}
             onClick={() => setActiveTab('agencies')}
-            className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${activeTab === 'agencies'
-              ? 'text-blue-600 border-blue-600'
-              : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
+            className={`-mb-px inline-flex min-h-11 shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${activeTab === 'agencies'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
               }`}
           >
-            <div className="flex items-center gap-2">
-              <Building2 className="w-4 h-4" />
-              Agencies
-            </div>
-          </button>
-        )}
+             <Building2 className="h-4 w-4" /> Agencies ({agencies.length})
+           </button>
+         )}
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'stations'}
           onClick={() => setActiveTab('stations')}
-          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${activeTab === 'stations'
-            ? 'text-blue-600 border-blue-600'
-            : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
+          className={`-mb-px inline-flex min-h-11 shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${activeTab === 'stations'
+            ? 'border-blue-600 text-blue-600'
+            : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
         >
-          <div className="flex items-center gap-2">
-            <MapPin className="w-4 h-4" />
-            Stations ({stations.length})
-          </div>
+          <MapPin className="h-4 w-4" /> Stations ({stations.length})
         </button>
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'resources'}
           onClick={() => setActiveTab('resources')}
-          className={`px-4 py-3 font-medium transition-colors border-b-2 -mb-px ${activeTab === 'resources'
-            ? 'text-blue-600 border-blue-600'
-            : 'text-gray-500 border-transparent hover:text-gray-700 dark:text-gray-400'
+          className={`-mb-px inline-flex min-h-11 shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${activeTab === 'resources'
+            ? 'border-blue-600 text-blue-600'
+            : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
         >
-          <div className="flex items-center gap-2">
-            <Truck className="w-4 h-4" />
-            Resources ({filteredResources.length})
-          </div>
+          <Truck className="h-4 w-4" /> Resources ({filteredResources.length})
         </button>
       </div>
 
+      {selectedAgency && activeTab !== 'agencies' && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+          <span><strong>{selectedAgency.short_name}</strong> scope active. Showing only this agency's {activeTab}.</span>
+          <button type="button" onClick={clearAgencyScope} className="inline-flex min-h-8 items-center gap-1 rounded-md border border-blue-300 px-2 py-1 text-xs font-semibold hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-blue-800 dark:hover:bg-blue-900/40"><X className="h-3.5 w-3.5" /> Clear scope</button>
+        </div>
+      )}
+
       {/* Agencies Tab */}
       {activeTab === 'agencies' && (
-        <div className="grid grid-cols-3 gap-6">
-          {agencies
-            .filter(agency => !scope.agencyId || agency.id === scope.agencyId)
-            .map((agency) => {
+        <div role="tabpanel" aria-label="Agencies">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div>
+              <p className="text-sm font-semibold text-slate-900 dark:text-white">Configured agencies</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Create agency records before adding their stations and resources.</p>
+            </div>
+            {isAdmin && (
+              <button type="button" onClick={handleAddAgency} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+                <Plus className="h-4 w-4" /> Add Agency
+              </button>
+            )}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {agencies
+              .filter(agency => !scope.agencyId || agency.id === scope.agencyId)
+              .map((agency) => {
               const stationCount = stations.filter(s => s.agency_id === agency.id).length;
               const resourceCount = resources.filter(r => {
                 const station = stations.find(s => s.id === r.station_id);
@@ -600,46 +751,72 @@ function Agencies() {
               }).length;
 
               return (
-                <div
+                <article
                   key={agency.id}
-                  className={`rounded-xl p-6 border ${getAgencyBgColor(agency.short_name)}`}
+                  className={`group w-full rounded-xl border p-5 transition-shadow hover:shadow-sm ${getAgencyBgColor(agency.short_name)}`}
                 >
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className={`w-12 h-12 rounded-xl ${getAgencyColor(agency.short_name)} flex items-center justify-center text-white`}>
-                      {getAgencyIcon(agency.short_name)}
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-4">
+                      <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${getAgencyColor(agency.short_name)} text-white`}>
+                        {getAgencyIcon(agency.short_name)}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-slate-800 dark:text-white">{agency.short_name}</h3>
+                        <p className="text-sm leading-5 text-slate-500 dark:text-slate-400">{agency.name}</p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-gray-800 dark:text-white">{agency.short_name}</h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">{agency.name}</p>
-                    </div>
+                    {isAdmin && <div className="flex shrink-0 items-center gap-1">
+                      <button type="button" aria-label={`Edit agency ${agency.name}`} onClick={() => handleEditAgency(agency)} className="rounded-lg p-2 transition-colors hover:bg-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-800"><Edit className="h-4 w-4 text-slate-600 dark:text-slate-300" /></button>
+                      <button type="button" aria-label={`Delete agency ${agency.name}`} onClick={() => requestDeleteAgency(agency)} className="rounded-lg p-2 transition-colors hover:bg-red-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-950/30"><Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" /></button>
+                    </div>}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
-                      <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                     <div className="rounded-lg border border-white/70 bg-white p-3 dark:border-slate-700/70 dark:bg-slate-800">
+                      <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm mb-1">
                         <MapPin className="w-4 h-4" />
                         Stations
                       </div>
-                      <p className="text-2xl font-bold text-gray-800 dark:text-white">{stationCount}</p>
+                      <p className="text-2xl font-bold text-slate-800 dark:text-white">{stationCount}</p>
                     </div>
-                    <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
-                      <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                     <div className="rounded-lg border border-white/70 bg-white p-3 dark:border-slate-700/70 dark:bg-slate-800">
+                      <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm mb-1">
                         <Truck className="w-4 h-4" />
                         Resources
                       </div>
-                      <p className="text-2xl font-bold text-gray-800 dark:text-white">{resourceCount}</p>
+                      <p className="text-2xl font-bold text-slate-800 dark:text-white">{resourceCount}</p>
                     </div>
                   </div>
 
-                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-gray-500 dark:text-gray-400">Available Resources</span>
+                      <span className="text-slate-500 dark:text-slate-400">Available Resources</span>
                       <span className="font-medium text-green-600">{availableResources} / {resourceCount}</span>
                     </div>
                   </div>
-                </div>
+                  <button
+                    type="button"
+                    aria-label={`${agency.name} — View stations`}
+                    onClick={() => {
+                      setAgencyFilter(agency.id.toString());
+                      setActiveTab('stations');
+                    }}
+                    className="mt-4 flex min-h-9 w-full items-center justify-end gap-1 rounded-lg px-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300 dark:hover:bg-slate-800"
+                  >
+                    View stations <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                </article>
               );
-            })}
+              })}
+            {agencies.length === 0 && (
+              <div className="col-span-full rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center dark:border-slate-700 dark:bg-slate-900">
+                <Building2 className="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" />
+                <p className="mt-3 font-medium text-slate-800 dark:text-slate-100">No agencies configured</p>
+                <p className="mt-1 text-sm text-slate-500">Add an agency before creating stations.</p>
+                <button type="button" onClick={handleAddAgency} className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"><Plus className="h-4 w-4" /> Add Agency</button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -647,25 +824,27 @@ function Agencies() {
       {activeTab === 'stations' && (
         <>
           {/* Filters */}
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 mb-6">
-            <div className="flex flex-wrap gap-4">
+           <div className="mb-5 rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900" role="tabpanel" aria-label="Stations">
+             <div className="flex flex-wrap items-center gap-2.5">
               <div className="flex-1 min-w-[250px]">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
                     type="text"
                     placeholder="Search stations..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                     value={stationSearchQuery}
+                     onChange={(e) => setStationSearchQuery(e.target.value)}
+                     aria-label="Search stations"
+                     className="w-full min-h-10 rounded-lg border border-slate-200 bg-white py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   />
                 </div>
               </div>
               {!stationScopeActive && (
-                <select
+               <select
+                  aria-label="Filter stations by agency"
                   value={agencyFilter}
                   onChange={(e) => setAgencyFilter(e.target.value)}
-                  className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                 >
                   <option value="">All Agencies</option>
                   {agencies.map(agency => (
@@ -674,26 +853,29 @@ function Agencies() {
                 </select>
               )}
               {!stationScopeActive && (
-                <button
-                  onClick={handleAddStation}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                 <button
+                   type="button"
+                   onClick={handleAddStation}
+                   className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   <Plus className="w-4 h-4" />
                   Add Station
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Stations Grid */}
-          <div className="grid grid-cols-2 gap-4">
+                            </button>
+               )}
+              {(stationSearchQuery || agencyFilter) && <button type="button" onClick={clearStationFilters} className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"><X className="h-4 w-4" /> Clear</button>}
+             </div>
+           </div>
+           {/* Stations Grid */}
+           <div className="grid gap-4 xl:grid-cols-2">
             {filteredStations.length === 0 ? (
-              <div className="col-span-2 bg-white dark:bg-gray-800 rounded-xl p-12 text-center">
-                <MapPin className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                <p className="text-gray-500 dark:text-gray-400">No stations found</p>
-                <button
-                  onClick={handleAddStation}
-                  className="mt-4 text-blue-600 hover:underline"
+              <div className="col-span-2 bg-white dark:bg-slate-800 rounded-xl p-12 text-center">
+                <MapPin className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-4" />
+                <p className="text-slate-500 dark:text-slate-400">No stations found</p>
+                 <button
+                   type="button"
+                   aria-label="Add your first station"
+                   onClick={handleAddStation}
+                   className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-950/30"
                 >
                   Add your first station
                 </button>
@@ -704,60 +886,73 @@ function Agencies() {
                 const stationResources = resources.filter(r => r.station_id === station.id);
 
                 return (
-                  <div
-                    key={station.id}
-                    onClick={() => setDetailStation(station)}
-                    className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 cursor-pointer hover:shadow-md transition-shadow relative"
-                  >
+                   <div
+                     role="button"
+                     tabIndex={0}
+                     key={station.id}
+                     onClick={() => setDetailStation(station)}
+                     onKeyDown={(event) => {
+                       if (event.key === 'Enter' || event.key === ' ') {
+                         event.preventDefault();
+                         setDetailStation(station);
+                       }
+                     }}
+                     className="relative w-full rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-shadow hover:border-blue-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-800 dark:bg-slate-900"
+                   >
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-lg ${getAgencyColor(agency?.short_name || '')} flex items-center justify-center text-white`}>
                           {getAgencyIcon(agency?.short_name || '')}
                         </div>
                         <div>
-                          <h3 className="font-semibold text-gray-800 dark:text-white">{station.name}</h3>
-                          <span className="text-xs text-gray-500 dark:text-gray-400">{agency?.short_name}</span>
+                          <h3 className="font-semibold text-slate-800 dark:text-white">{station.name}</h3>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">{agency?.short_name}</span>
                         </div>
                       </div>
                       {!stationScopeActive && (
                         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                          <button
+                           <button
+                             type="button"
+                             aria-label={`Edit station ${station.name}`}
                             onClick={() => handleEditStation(station)}
-                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                            className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
                           >
-                            <Edit className="w-4 h-4 text-gray-500" />
+                            <Edit className="w-4 h-4 text-slate-500" />
                           </button>
-                          <button
-                            onClick={() => handleDeleteStation(station.id)}
+                           <button
+                             type="button"
+                             aria-label={`Delete station ${station.name}`}
+                             onClick={() => requestDeleteStation(station.id)}
                             className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                           >
                             <Trash2 className="w-4 h-4 text-red-500" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                           </button>
+                         </div>
+                       )}
+                     </div>
 
                     {station.address && (
-                      <div className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
+                      <div className="flex items-start gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
                         <MapPin className="w-4 h-4 mt-0.5 flex-shrink-0" />
                         <span>{station.address}</span>
                       </div>
                     )}
 
                     {station.contact_number && (
-                      <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-3">
+                      <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-3">
                         <Phone className="w-4 h-4" />
                         <span>{station.contact_number}</span>
                       </div>
                     )}
 
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-700">
-                      <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                     <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-700">
+                      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                         <Truck className="w-4 h-4" />
                         <span>{stationResources.length} resources</span>
                       </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="text-green-600">{stationResources.filter(r => r.status === 'available').length} available</span>
+                       <div className="flex items-center gap-2 text-sm">
+                         <span className="text-green-600">{stationResources.filter(r => r.status === 'available').length} available</span>
+                         <ArrowRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
                       </div>
                     </div>
                   </div>
@@ -772,25 +967,27 @@ function Agencies() {
       {activeTab === 'resources' && (
         <>
           {/* Filters */}
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 mb-6">
-            <div className="flex flex-wrap gap-4">
+           <div className="mb-5 rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900" role="tabpanel" aria-label="Resources">
+             <div className="flex flex-wrap items-center gap-2.5">
               <div className="flex-1 min-w-[250px]">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
                     type="text"
                     placeholder="Search resources..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                     value={resourceSearchQuery}
+                     onChange={(e) => setResourceSearchQuery(e.target.value)}
+                     aria-label="Search resources"
+                     className="w-full min-h-10 rounded-lg border border-slate-200 bg-white py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   />
                 </div>
               </div>
               {!stationScopeActive && (
                 <select
+                  aria-label="Filter resources by agency"
                   value={agencyFilter}
                   onChange={(e) => setAgencyFilter(e.target.value)}
-                  className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                 >
                   <option value="">All Agencies</option>
                   {agencies.map(agency => (
@@ -798,27 +995,46 @@ function Agencies() {
                   ))}
                 </select>
               )}
+              <select
+                aria-label="Filter resources by status"
+                value={resourceStatusFilter}
+                onChange={(event) => setResourceStatusFilter(event.target.value as Resource['status'] | '')}
+                className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              >
+                <option value="">All Statuses</option>
+                <option value="available">Available</option>
+                <option value="deployed">Deployed</option>
+                <option value="maintenance">Maintenance</option>
+              </select>
+              {(resourceSearchQuery || agencyFilter || resourceStatusFilter) && <button type="button" onClick={clearResourceFilters} className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"><X className="h-4 w-4" /> Clear</button>}
               <div className="flex gap-2">
+                <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-950" role="group" aria-label="Resource view">
+                  <button type="button" aria-pressed={resourceView === 'stations'} onClick={() => setResourceView('stations')} className={`min-h-8 rounded-md px-2.5 text-xs font-semibold ${resourceView === 'stations' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-800 dark:text-blue-300' : 'text-slate-500'}`}>By station</button>
+                  <button type="button" aria-pressed={resourceView === 'all'} onClick={() => setResourceView('all')} className={`min-h-8 rounded-md px-2.5 text-xs font-semibold ${resourceView === 'all' ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-800 dark:text-blue-300' : 'text-slate-500'}`}>All resources</button>
+                </div>
                 <button
                   onClick={handleDownloadTemplate}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                   type="button"
+                   className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                 >
                   <Download className="w-4 h-4" />
                   CSV Template
                 </button>
-                <label className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors cursor-pointer">
+                 <label className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors focus-within:ring-2 focus-within:ring-emerald-500 ${agencyFilter ? 'cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700' : 'cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-500'}`} title={agencyFilter ? 'Import resources for the selected agency' : 'Select an agency before importing resources'}>
                   <Upload className="w-4 h-4" />
                   Batch Import
-                  <input
+                   <input
                     type="file"
                     accept=".csv"
                     onChange={handleFileUpload}
+                    disabled={!agencyFilter}
                     className="hidden"
                   />
                 </label>
                 <button
+                  type="button"
                   onClick={handleAddResource}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   <Plus className="w-4 h-4" />
                   Add Resource
@@ -828,75 +1044,99 @@ function Agencies() {
           </div>
 
           {/* Stats Cards */}
-          <div className="grid grid-cols-4 gap-4 mb-6">
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+          <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
                   <Truck className="w-5 h-5 text-blue-600" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-gray-800 dark:text-white">{filteredResources.length}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Total Resources</p>
+                  <p className="text-2xl font-bold text-slate-800 dark:text-white">{filteredResources.length}</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Total Resources</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
                   <Truck className="w-5 h-5 text-green-600" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                  <p className="text-2xl font-bold text-slate-800 dark:text-white">
                     {filteredResources.filter(r => r.status === 'available').length}
                   </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Available</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Available</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-orange-100 dark:bg-orange-900/30 rounded-lg flex items-center justify-center">
                   <Truck className="w-5 h-5 text-orange-600" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                  <p className="text-2xl font-bold text-slate-800 dark:text-white">
                     {filteredResources.filter(r => r.status === 'deployed').length}
                   </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Deployed</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Deployed</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-red-100 dark:bg-red-900/30 rounded-lg flex items-center justify-center">
                   <Truck className="w-5 h-5 text-red-600" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                  <p className="text-2xl font-bold text-slate-800 dark:text-white">
                     {filteredResources.filter(r => r.status === 'maintenance').length}
                   </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Maintenance</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Maintenance</p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Resources Table */}
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-100 dark:border-gray-700">
+          {resourceView === 'stations' && (
+            <div className="space-y-3" aria-label="Resources grouped by station">
+              {resourceGroups.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">No resources match the current filters.</div>
+              ) : resourceGroups.map((group) => {
+                const expanded = expandedStations[group.station.id] ?? group.attentionCount > 0;
+                const counts = {
+                  available: group.resources.filter((resource) => resource.status === 'available').length,
+                  deployed: group.resources.filter((resource) => resource.status === 'deployed').length,
+                  maintenance: group.resources.filter((resource) => resource.status === 'maintenance').length,
+                };
+                return (
+                  <section key={group.station.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <button type="button" aria-expanded={expanded} onClick={() => setExpandedStations((current) => ({ ...current, [group.station.id]: !expanded }))} className="flex w-full flex-wrap items-center justify-between gap-3 p-4 text-left hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-800">
+                      <span className="flex items-center gap-3"><span className={`flex h-9 w-9 items-center justify-center rounded-lg ${getAgencyColor(group.agency?.short_name || '')} text-white`}><Truck className="h-4 w-4" /></span><span><span className="block font-semibold text-slate-950 dark:text-white">{group.station.name}</span><span className="block text-xs text-slate-500">{group.agency?.short_name || 'Agency'} · {group.resources.length} resources</span></span></span>
+                      <span className="flex flex-wrap items-center gap-2 text-xs"><span className="rounded-full bg-emerald-100 px-2 py-1 font-medium text-emerald-700">{counts.available} available</span><span className="rounded-full bg-orange-100 px-2 py-1 font-medium text-orange-700">{counts.deployed} deployed</span><span className="rounded-full bg-red-100 px-2 py-1 font-medium text-red-700">{counts.maintenance} maintenance</span><ChevronRight className={`h-4 w-4 text-slate-400 transition-transform ${expanded ? 'rotate-90' : ''}`} /></span>
+                    </button>
+                    {expanded && <div className="divide-y divide-slate-100 border-t border-slate-200 dark:divide-slate-800 dark:border-slate-800">{group.resources.map((resource) => <div key={resource.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><span className="flex min-w-0 items-center gap-3"><span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${getAgencyColor(group.agency?.short_name || '')} text-white`}><Truck className="h-4 w-4" /></span><span className="min-w-0"><span className="block truncate text-sm font-medium text-slate-900 dark:text-white">{resource.name}</span><span className="block text-xs capitalize text-slate-500">{resource.type}</span></span></span><span className="flex items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize ${getStatusColor(resource.status)}`}>{resource.status}</span><button type="button" aria-label={`Edit resource ${resource.name}`} onClick={() => handleEditResource(resource)} className="rounded-lg p-2 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-800"><Edit className="h-4 w-4 text-slate-500" /></button><button type="button" aria-label={`Delete resource ${resource.name}`} onClick={() => requestDeleteResource(resource.id)} className="rounded-lg p-2 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-950/30"><Trash2 className="h-4 w-4 text-red-500" /></button></span></div>)}</div>}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+
+           {/* Resources Table */}
+          {resourceView === 'all' && <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <table className="w-full min-w-[760px]">
+              <thead className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
                 <tr>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300">Resource</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300">Type</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300">Station</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300">Status</th>
-                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-600 dark:text-gray-300">Actions</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">Resource</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">Type</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">Station</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">Status</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                 {filteredResources.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                    <td colSpan={5} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
                       No resources found
                     </td>
                   </tr>
@@ -906,45 +1146,49 @@ function Agencies() {
                     const agency = agencies.find(a => a.id === station?.agency_id);
 
                     return (
-                      <tr key={resource.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                        <td className="px-6 py-4">
+                      <tr key={resource.id} className="hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                        <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             <div className={`w-10 h-10 rounded-lg ${getAgencyColor(agency?.short_name || '')} flex items-center justify-center text-white`}>
                               <Truck className="w-5 h-5" />
                             </div>
                             <div>
-                              <p className="font-medium text-gray-800 dark:text-white">{resource.name}</p>
+                              <p className="font-medium text-slate-800 dark:text-white">{resource.name}</p>
                               {resource.description && (
-                                <p className="text-sm text-gray-500 dark:text-gray-400">{resource.description}</p>
+                                <p className="text-sm text-slate-500 dark:text-slate-400">{resource.description}</p>
                               )}
                             </div>
                           </div>
                         </td>
-                        <td className="px-6 py-4">
-                          <span className="capitalize text-gray-700 dark:text-gray-300">{resource.type}</span>
+                        <td className="px-4 py-3">
+                          <span className="capitalize text-slate-700 dark:text-slate-300">{resource.type}</span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className={`w-2 h-2 rounded-full ${getAgencyColor(agency?.short_name || '')}`}></div>
-                            <span className="text-gray-700 dark:text-gray-300">{station?.name || '-'}</span>
+                            <span className="text-slate-700 dark:text-slate-300">{station?.name || '-'}</span>
                           </div>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-3">
                           <span className={`px-3 py-1 rounded-full text-xs font-medium capitalize ${getStatusColor(resource.status)}`}>
                             {resource.status}
                           </span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-2">
                             <button
+                              type="button"
+                              aria-label={`Edit resource ${resource.name}`}
                               onClick={() => handleEditResource(resource)}
-                              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                              className="rounded-lg p-2 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-800"
                             >
-                              <Edit className="w-4 h-4 text-gray-500" />
+                              <Edit className="w-4 h-4 text-slate-500" />
                             </button>
                             <button
-                              onClick={() => handleDeleteResource(resource.id)}
-                              className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                              type="button"
+                              aria-label={`Delete resource ${resource.name}`}
+                               onClick={() => requestDeleteResource(resource.id)}
+                              className="rounded-lg p-2 transition-colors hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-900/20"
                             >
                               <Trash2 className="w-4 h-4 text-red-500" />
                             </button>
@@ -956,8 +1200,20 @@ function Agencies() {
                 )}
               </tbody>
             </table>
-          </div>
+           </div>}
         </>
+      )}
+
+      {/* Agency Modal */}
+      {showAgencyModal && (
+        <AgencyModal
+          agency={editingAgency}
+          onClose={() => {
+            setShowAgencyModal(false);
+            setEditingAgency(null);
+          }}
+          onSave={handleSaveAgency}
+        />
       )}
 
       {/* Station Modal */}
@@ -965,6 +1221,7 @@ function Agencies() {
         <StationModal
           station={editingStation}
           agencies={agencies}
+          defaultAgencyId={selectedAgencyId}
           onClose={() => {
             setShowStationModal(false);
             setEditingStation(null);
@@ -977,9 +1234,9 @@ function Agencies() {
       {showResourceModal && (
         <ResourceModal
           resource={editingResource}
-          stations={stationsForModal}
+          stations={resourceStationsForModal}
           agencies={agencies}
-          defaultStationId={stationScopeActive ? scope.stationId : undefined}
+          defaultStationId={defaultResourceStationId}
           onClose={() => {
             setShowResourceModal(false);
             setEditingResource(null);
@@ -999,6 +1256,82 @@ function Agencies() {
         onImport={handleBatchImport}
         importing={importingResources}
       />
+      {deleteConfirmation && (
+        <ConfirmDialog
+          isOpen
+          title={`Delete ${deleteConfirmation.kind}?`}
+          description={<>This will permanently delete <strong>{deleteConfirmation.name}</strong>. This action cannot be undone.</>}
+          confirmLabel="Delete permanently"
+          onCancel={() => setDeleteConfirmation(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
+    </div>
+  );
+}
+
+function AgencyModal({
+  agency,
+  onClose,
+  onSave,
+}: {
+  agency: Agency | null;
+  onClose: () => void;
+  onSave: (data: Pick<Agency, 'name' | 'short_name'>) => Promise<void> | void;
+}) {
+  const [name, setName] = useState(agency?.name || '');
+  const [shortName, setShortName] = useState(agency?.short_name || '');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const normalizedName = name.trim().replace(/\s+/g, ' ');
+    const normalizedCode = shortName.trim().toUpperCase();
+    const nextErrors: Record<string, string> = {};
+    if (normalizedName.length < 3 || normalizedName.length > 120) nextErrors.name = 'Use 3 to 120 characters.';
+    if (!/^[A-Z0-9-]{2,12}$/.test(normalizedCode)) nextErrors.short_name = 'Use 2 to 12 letters, numbers, or hyphens.';
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    setSaving(true);
+    try {
+      await onSave({ name: normalizedName, short_name: normalizedCode });
+    } catch (error: any) {
+      setErrors({ submit: error.message || 'Failed to save agency.' });
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+      <div role="dialog" aria-modal="true" aria-labelledby="agency-modal-title" className="w-full max-w-lg overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5 dark:border-slate-800">
+          <div>
+            <h2 id="agency-modal-title" className="text-lg font-bold text-slate-950 dark:text-white">{agency ? 'Edit Agency' : 'Add Agency'}</h2>
+            <p className="mt-1 text-sm text-slate-500">Agency records organize stations, users, and resources.</p>
+          </div>
+          <button type="button" aria-label="Close agency form" onClick={onClose} disabled={saving} className="rounded-lg p-2 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:hover:bg-slate-800"><X className="h-5 w-5 text-slate-500" /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4 p-5">
+          {errors.submit && <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{errors.submit}</div>}
+          <div>
+            <label htmlFor="agency-name" className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Agency name <span className="text-red-600">*</span></label>
+            <input id="agency-name" autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((current) => ({ ...current, name: '' })); }} maxLength={120} placeholder="e.g., Bureau of Fire Protection" className={`min-h-11 w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white ${errors.name ? 'border-red-500' : 'border-slate-300 dark:border-slate-700'}`} />
+            {errors.name && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.name}</p>}
+          </div>
+          <div>
+            <label htmlFor="agency-code" className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Agency code <span className="text-red-600">*</span></label>
+            <input id="agency-code" value={shortName} onChange={(event) => { setShortName(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '')); setErrors((current) => ({ ...current, short_name: '' })); }} readOnly={Boolean(agency)} maxLength={12} placeholder="e.g., BFP" className={`min-h-11 w-full rounded-lg border px-3 py-2 font-mono text-sm uppercase focus:outline-none focus:ring-2 focus:ring-blue-500 ${agency ? 'cursor-not-allowed bg-slate-100 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400' : 'bg-white text-slate-900 dark:bg-slate-800 dark:text-white'} ${errors.short_name ? 'border-red-500' : 'border-slate-300 dark:border-slate-700'}`} />
+            <p className="mt-1 text-xs text-slate-500">{agency ? 'The code is locked because dispatch and historical records depend on it.' : 'Short, unique code used in station and dispatch records.'}</p>
+            {errors.short_name && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.short_name}</p>}
+          </div>
+          <div className="flex justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <button type="button" onClick={onClose} disabled={saving} className="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+            <button type="submit" disabled={saving} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50">{saving && <Loader2 className="h-4 w-4 animate-spin" />}{saving ? 'Saving...' : agency ? 'Save Changes' : 'Add Agency'}</button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -1007,11 +1340,13 @@ function Agencies() {
 function StationModal({
   station,
   agencies,
+  defaultAgencyId,
   onClose,
   onSave
 }: {
   station: Station | null;
   agencies: Agency[];
+  defaultAgencyId?: number;
   onClose: () => void;
   onSave: (data: Partial<Station>) => void;
 }) {
@@ -1021,7 +1356,7 @@ function StationModal({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({
-    agency_id: station?.agency_id?.toString() || '',
+    agency_id: station?.agency_id?.toString() || defaultAgencyId?.toString() || '',
     name: station?.name || '',
     address: station?.address || '',
     contact_number: station?.contact_number || '',
@@ -1281,13 +1616,13 @@ function StationModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">
             {station ? 'Edit Station' : 'Add Station'}
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-            <X className="w-5 h-5 text-gray-500" />
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+            <X className="w-5 h-5 text-slate-500" />
           </button>
         </div>
 
@@ -1303,14 +1638,14 @@ function StationModal({
 
             {/* Agency Select */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Agency *</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Agency *</label>
               <select
                 value={formData.agency_id}
                 onChange={(e) => {
                   setFormData({ ...formData, agency_id: e.target.value });
                   setErrors(prev => ({ ...prev, agency_id: '' }));
                 }}
-                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.agency_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${errors.agency_id ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                   }`}
               >
                 <option value="">Select Agency</option>
@@ -1327,7 +1662,7 @@ function StationModal({
 
             {/* Station Name */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Station Name *</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Station Name *</label>
               <input
                 type="text"
                 value={formData.name}
@@ -1336,7 +1671,7 @@ function StationModal({
                   setErrors(prev => ({ ...prev, name: '' }));
                 }}
                 placeholder="e.g., Daet Municipal Police Station"
-                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.name ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${errors.name ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                   }`}
               />
               {errors.name && (
@@ -1348,7 +1683,7 @@ function StationModal({
 
             {/* Contact Number */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Contact Number</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Contact Number</label>
               <input
                 type="tel"
                 value={formData.contact_number}
@@ -1357,7 +1692,7 @@ function StationModal({
                   setErrors(prev => ({ ...prev, contact_number: '' }));
                 }}
                 placeholder="+63 XXX XXX XXXX"
-                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.contact_number ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${errors.contact_number ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                   }`}
               />
               {errors.contact_number && (
@@ -1370,8 +1705,8 @@ function StationModal({
             {/* Location Section */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Location * <span className="text-gray-400 font-normal">{useManualEntry ? '(Manual entry)' : '(Click on map or search)'}</span>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Location * <span className="text-slate-400 font-normal">{useManualEntry ? '(Manual entry)' : '(Click on map or search)'}</span>
                 </label>
                 {mapError && !useManualEntry && (
                   <button
@@ -1410,18 +1745,18 @@ function StationModal({
               {useManualEntry ? (
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Address</label>
+                    <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Address</label>
                     <input
                       type="text"
                       value={formData.address}
                       onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                       placeholder="Full address"
-                      className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Latitude *</label>
+                      <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Latitude *</label>
                       <input
                         type="number"
                         step="any"
@@ -1431,12 +1766,12 @@ function StationModal({
                           setErrors(prev => ({ ...prev, location: '' }));
                         }}
                         placeholder="14.1122"
-                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.location ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${errors.location ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                           }`}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Longitude *</label>
+                      <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Longitude *</label>
                       <input
                         type="number"
                         step="any"
@@ -1446,12 +1781,12 @@ function StationModal({
                           setErrors(prev => ({ ...prev, location: '' }));
                         }}
                         placeholder="122.9553"
-                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.location ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+                        className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${errors.location ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                           }`}
                       />
                     </div>
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
                     Tip: You can get coordinates from Google Maps by right-clicking on a location.
                   </p>
                 </div>
@@ -1460,7 +1795,7 @@ function StationModal({
                   {/* Search Input */}
                   <div className="flex gap-2 mb-2">
                     <div className="relative flex-1">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                       <input
                         ref={searchInputRef}
                         type="text"
@@ -1468,7 +1803,7 @@ function StationModal({
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleSearch())}
                         placeholder="Search for a place in Camarines Norte..."
-                        className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                        className="w-full pl-10 pr-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                       />
                     </div>
                     <button
@@ -1482,17 +1817,17 @@ function StationModal({
                   </div>
 
                   {/* Map Container */}
-                  <div className={`relative rounded-lg overflow-hidden border ${errors.location ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`}>
+                  <div className={`relative rounded-lg overflow-hidden border ${errors.location ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'}`}>
                     {mapLoading && (
-                      <div className="absolute inset-0 bg-gray-100 dark:bg-gray-700 flex items-center justify-center z-10">
+                      <div className="absolute inset-0 bg-slate-100 dark:bg-slate-700 flex items-center justify-center z-10">
                         <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
                       </div>
                     )}
                     {mapError && (
-                      <div className="absolute inset-0 bg-gray-100 dark:bg-gray-700 flex items-center justify-center z-10">
+                      <div className="absolute inset-0 bg-slate-100 dark:bg-slate-700 flex items-center justify-center z-10">
                         <div className="text-center p-4">
                           <AlertCircle className="w-8 h-8 text-orange-500 mx-auto mb-2" />
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{mapError}</p>
+                          <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">{mapError}</p>
                           <button
                             type="button"
                             onClick={() => setUseManualEntry(true)}
@@ -1516,14 +1851,14 @@ function StationModal({
 
               {/* Selected Location Info */}
               {formData.latitude !== 0 && formData.longitude !== 0 && !useManualEntry && (
-                <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <div className="mt-2 p-3 bg-slate-50 dark:bg-slate-700 rounded-lg">
                   <div className="flex items-start gap-2">
                     <MapPin className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
                     <div className="text-sm">
-                      <p className="text-gray-800 dark:text-white font-medium">
+                      <p className="text-slate-800 dark:text-white font-medium">
                         {formData.address || 'Selected Location'}
                       </p>
-                      <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">
+                      <p className="text-slate-500 dark:text-slate-400 text-xs mt-1">
                         {formData.latitude.toFixed(6)}, {formData.longitude.toFixed(6)}
                       </p>
                     </div>
@@ -1534,12 +1869,12 @@ function StationModal({
           </div>
 
           {/* Footer */}
-          <div className="p-6 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+          <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
             <div className="flex gap-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+                className="flex-1 px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors dark:text-slate-300"
               >
                 Cancel
               </button>
@@ -1647,13 +1982,13 @@ function ResourceModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-md mx-4">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">
             {resource ? 'Edit Resource' : 'Add Resource'}
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-            <X className="w-5 h-5 text-gray-500" />
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+            <X className="w-5 h-5 text-slate-500" />
           </button>
         </div>
 
@@ -1667,14 +2002,14 @@ function ResourceModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Station *</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Station *</label>
             <select
               value={formData.station_id}
               onChange={(e) => {
                 setFormData({ ...formData, station_id: e.target.value });
                 setErrors(prev => ({ ...prev, station_id: '' }));
               }}
-              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.station_id ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${errors.station_id ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                 }`}
             >
               <option value="">Select Station</option>
@@ -1695,7 +2030,7 @@ function ResourceModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Resource Name *</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Resource Name *</label>
             <input
               type="text"
               value={formData.name}
@@ -1704,7 +2039,7 @@ function ResourceModal({
                 setErrors(prev => ({ ...prev, name: '' }));
               }}
               placeholder="e.g., Patrol Car 01, Fire Truck Alpha"
-              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${errors.name ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${errors.name ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                 }`}
             />
             {errors.name && (
@@ -1716,23 +2051,22 @@ function ResourceModal({
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Type *</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Type *</label>
               <select
                 value={formData.type}
                 onChange={(e) => setFormData({ ...formData, type: e.target.value as 'vehicle' | 'equipment' | 'personnel' })}
-                className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
               >
                 <option value="vehicle">Vehicle</option>
                 <option value="equipment">Equipment</option>
-                <option value="personnel">Personnel</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status *</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Status *</label>
               <select
                 value={formData.status}
                 onChange={(e) => setFormData({ ...formData, status: e.target.value as 'available' | 'deployed' | 'maintenance' })}
-                className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
               >
                 <option value="available">Available</option>
                 <option value="deployed">Deployed</option>
@@ -1742,9 +2076,9 @@ function ResourceModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
               Description
-              <span className="text-gray-400 font-normal ml-1">({formData.description.length}/500)</span>
+              <span className="text-slate-400 font-normal ml-1">({formData.description.length}/500)</span>
             </label>
             <textarea
               value={formData.description}
@@ -1755,7 +2089,7 @@ function ResourceModal({
               placeholder="Additional details..."
               rows={3}
               maxLength={500}
-              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white resize-none ${errors.description ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'
+              className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white resize-none ${errors.description ? 'border-red-500' : 'border-slate-200 dark:border-slate-600'
                 }`}
             />
             {errors.description && (
@@ -1769,7 +2103,7 @@ function ResourceModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+              className="flex-1 px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors dark:text-slate-300"
             >
               Cancel
             </button>
@@ -1811,13 +2145,13 @@ function BatchImportModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">
             Batch Import Resources
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-            <X className="w-5 h-5 text-gray-500" />
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+            <X className="w-5 h-5 text-slate-500" />
           </button>
         </div>
 
@@ -1832,19 +2166,19 @@ function BatchImportModal({
             {resources.map((resource, index) => (
               <div
                 key={index}
-                className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
+                className="p-3 bg-slate-50 dark:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex-1">
-                    <div className="font-medium text-gray-800 dark:text-white">
+                    <div className="font-medium text-slate-800 dark:text-white">
                       {resource.name}
                     </div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400 flex gap-3 mt-1">
+                    <div className="text-sm text-slate-500 dark:text-slate-400 flex gap-3 mt-1">
                       <span>Type: {resource.type || 'equipment'}</span>
                       <span>Status: {resource.status || 'available'}</span>
                     </div>
                     {resource.description && (
-                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                         {resource.description}
                       </div>
                     )}
@@ -1856,11 +2190,11 @@ function BatchImportModal({
           </div>
         </div>
 
-        <div className="flex gap-3 p-6 border-t border-gray-100 dark:border-gray-700">
+        <div className="flex gap-3 p-6 border-t border-slate-100 dark:border-slate-700">
           <button
             onClick={onClose}
             disabled={importing}
-            className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+            className="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
@@ -1943,19 +2277,19 @@ function StationDetailsModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-700">
           <div className="flex items-center gap-4">
             <div className={`w-12 h-12 rounded-xl ${getAgencyColor(agency?.short_name || '')} flex items-center justify-center text-white`}>
               {getAgencyIcon(agency?.short_name || '')}
             </div>
             <div>
-              <h2 className="text-xl font-bold text-gray-800 dark:text-white">{station.name}</h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">{agency?.name}</p>
+              <h2 className="text-xl font-bold text-slate-800 dark:text-white">{station.name}</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{agency?.name}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-            <X className="w-5 h-5 text-gray-500" />
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+            <X className="w-5 h-5 text-slate-500" />
           </button>
         </div>
 
@@ -1968,26 +2302,26 @@ function StationDetailsModal({
             <>
               {/* Quick Stats */}
               <div className="grid grid-cols-4 gap-4">
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
-                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                <div className="bg-slate-50 dark:bg-slate-900 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
+                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm mb-1">
                     <Users className="w-4 h-4" /> Available Officers
                   </div>
                   <p className="text-2xl font-bold text-green-600 dark:text-green-400">{availableMembers.length}</p>
                 </div>
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
-                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                <div className="bg-slate-50 dark:bg-slate-900 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
+                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm mb-1">
                     <Users className="w-4 h-4" /> Busy Officers
                   </div>
                   <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{busyMembers.length}</p>
                 </div>
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
-                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                <div className="bg-slate-50 dark:bg-slate-900 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
+                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm mb-1">
                     <Truck className="w-4 h-4" /> Available Resources
                   </div>
                   <p className="text-2xl font-bold text-green-600 dark:text-green-400">{availableResources.length}</p>
                 </div>
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
-                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+                <div className="bg-slate-50 dark:bg-slate-900 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
+                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm mb-1">
                     <Truck className="w-4 h-4" /> Dispatched Resources
                   </div>
                   <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{deployedResources.length}</p>
@@ -1996,21 +2330,21 @@ function StationDetailsModal({
 
               <div className="grid grid-cols-2 gap-6">
                 {/* Members List */}
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 flex flex-col min-h-0">
-                  <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 relative">
-                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700 flex flex-col min-h-0">
+                  <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 relative">
+                    <h3 className="font-bold text-slate-800 dark:text-white flex items-center gap-2">
                       <Users className="w-4 h-4" /> Station Members ({members.length})
                     </h3>
                   </div>
-                  <div className="divide-y divide-gray-100 dark:divide-gray-700 max-h-[400px] overflow-y-auto">
+                  <div className="divide-y divide-slate-100 dark:divide-slate-700 max-h-[400px] overflow-y-auto">
                     {members.length === 0 ? (
-                      <div className="p-4 text-center text-gray-500 text-sm">No members assigned to this station</div>
+                      <div className="p-4 text-center text-slate-500 text-sm">No members assigned to this station</div>
                     ) : (
                       members.map(member => (
                         <div key={member.id} className="p-4 flex items-center justify-between">
                           <div className="flex flex-col">
-                            <span className="font-medium text-gray-800 dark:text-white">{member.display_name || member.email}</span>
-                            <span className="text-xs text-gray-500 dark:text-gray-400">{member.role}</span>
+                            <span className="font-medium text-slate-800 dark:text-white">{member.display_name || member.email}</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">{member.role}</span>
                           </div>
                           <span className={`px-2 py-1 text-xs font-bold rounded-full ${busyMemberIds.has(member.id) ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30' : 'bg-green-100 text-green-700 dark:bg-green-900/30'}`}>
                             {busyMemberIds.has(member.id) ? 'Busy' : 'Available'}
@@ -2022,21 +2356,21 @@ function StationDetailsModal({
                 </div>
 
                 {/* Resources List */}
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 flex flex-col min-h-0">
-                  <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 relative">
-                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700 flex flex-col min-h-0">
+                  <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 relative">
+                    <h3 className="font-bold text-slate-800 dark:text-white flex items-center gap-2">
                       <Truck className="w-4 h-4" /> Station Resources ({resources.length})
                     </h3>
                   </div>
-                  <div className="divide-y divide-gray-100 dark:divide-gray-700 max-h-[400px] overflow-y-auto">
+                  <div className="divide-y divide-slate-100 dark:divide-slate-700 max-h-[400px] overflow-y-auto">
                     {resources.length === 0 ? (
-                      <div className="p-4 text-center text-gray-500 text-sm">No resources assigned to this station</div>
+                      <div className="p-4 text-center text-slate-500 text-sm">No resources assigned to this station</div>
                     ) : (
                       resources.map(resource => (
                         <div key={resource.id} className="p-4 flex items-center justify-between">
                           <div className="flex flex-col">
-                            <span className="font-medium text-gray-800 dark:text-white">{resource.name}</span>
-                            <span className="text-xs text-gray-500 dark:text-gray-400 capitalize">{resource.type}</span>
+                            <span className="font-medium text-slate-800 dark:text-white">{resource.name}</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400 capitalize">{resource.type}</span>
                           </div>
                           <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${getStatusColor(resource.status)}`}>
                             {resource.status}

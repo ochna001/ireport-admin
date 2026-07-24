@@ -314,17 +314,17 @@ function Settings() {
   }
 
   return (
-    <div className="p-6 w-full max-w-4xl mx-auto dark:bg-gray-950">
+    <div className="p-6 w-full max-w-4xl mx-auto dark:bg-slate-950">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Settings</h1>
-          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Configure application preferences</p>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-white">Settings</h1>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Configure application preferences</p>
         </div>
         <div className="flex gap-3">
           <button
             onClick={handleReset}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+            className="flex items-center gap-2 px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors dark:text-slate-300"
           >
             <RotateCcw className="w-4 h-4" />
             Reset
@@ -356,28 +356,28 @@ function Settings() {
 
       <div className="space-y-6">
         {/* Session Scope Section (read-only, driven by login) */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex items-center justify-between">
+        <section className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Shield className="w-5 h-5 text-purple-600" />
               <div>
-                <h2 className="font-semibold text-gray-800 dark:text-white">Session Scope</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Scope is set by the logged-in account (Chief with station).</p>
+                <h2 className="font-semibold text-slate-800 dark:text-white">Session Scope</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Scope is set by the logged-in account (Chief with station).</p>
               </div>
             </div>
           </div>
-          <div className="p-4 space-y-2 text-sm text-gray-700 dark:text-gray-300">
+          <div className="p-4 space-y-2 text-sm text-slate-700 dark:text-slate-300">
             <SessionInfo />
-            <p className="text-gray-500 dark:text-gray-400">To change scope, log out and sign in with a different account.</p>
+            <p className="text-slate-500 dark:text-slate-400">To change scope, log out and sign in with a different account.</p>
           </div>
         </section>
 
         {/* Notifications Section */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+        <section className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
             <div className="flex items-center gap-3">
               <Bell className="w-5 h-5 text-blue-600" />
-              <h2 className="font-semibold text-gray-800 dark:text-white">Notifications</h2>
+              <h2 className="font-semibold text-slate-800 dark:text-white">Notifications</h2>
             </div>
           </div>
           <div className="p-4 space-y-4">
@@ -413,18 +413,18 @@ function Settings() {
         </section>
 
         {/* Display Section */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+        <section className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
             <div className="flex items-center gap-3">
               <Monitor className="w-5 h-5 text-purple-600" />
-              <h2 className="font-semibold text-gray-800 dark:text-white">Display</h2>
+              <h2 className="font-semibold text-slate-800 dark:text-white">Display</h2>
             </div>
           </div>
           <div className="p-4 space-y-4">
             <div className="flex items-center justify-between py-2">
               <div>
-                <p className="font-medium text-gray-800 dark:text-white">Theme</p>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Choose your preferred color scheme</p>
+                <p className="font-medium text-slate-800 dark:text-white">Theme</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Choose your preferred color scheme</p>
               </div>
               <div className="flex gap-2">
                 <button
@@ -435,7 +435,7 @@ function Settings() {
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
                     settings.display.theme === 'light'
                       ? 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-400'
-                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-gray-300'
+                      : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 dark:text-slate-300'
                   }`}
                 >
                   <Sun className="w-4 h-4" />
@@ -449,7 +449,7 @@ function Settings() {
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
                     settings.display.theme === 'dark'
                       ? 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-400'
-                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-gray-300'
+                      : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 dark:text-slate-300'
                   }`}
                 >
                   <Moon className="w-4 h-4" />
@@ -478,8 +478,8 @@ function Settings() {
             {settings.display.autoRefresh && (
               <div className="flex items-center justify-between py-2 pl-8">
                 <div>
-                  <p className="font-medium text-gray-800 dark:text-white">Refresh Interval</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">How often to refresh data</p>
+                  <p className="font-medium text-slate-800 dark:text-white">Refresh Interval</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">How often to refresh data</p>
                 </div>
                 <select
                   value={settings.display.refreshInterval}
@@ -487,7 +487,7 @@ function Settings() {
                     ...settings,
                     display: { ...settings.display, refreshInterval: parseInt(e.target.value) }
                   })}
-                  className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                 >
                   <option value={15}>15 seconds</option>
                   <option value={30}>30 seconds</option>
@@ -500,11 +500,11 @@ function Settings() {
         </section>
 
         {/* Sync Section */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+        <section className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
             <div className="flex items-center gap-3">
               <Database className="w-5 h-5 text-green-600" />
-              <h2 className="font-semibold text-gray-800 dark:text-white">Data Sync</h2>
+              <h2 className="font-semibold text-slate-800 dark:text-white">Data Sync</h2>
             </div>
           </div>
           <div className="p-4 space-y-4">
@@ -520,8 +520,8 @@ function Settings() {
             {settings.sync.autoSync && (
               <div className="flex items-center justify-between py-2 pl-8">
                 <div>
-                  <p className="font-medium text-gray-800 dark:text-white">Sync Interval</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">How often to sync with server</p>
+                  <p className="font-medium text-slate-800 dark:text-white">Sync Interval</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">How often to sync with server</p>
                 </div>
                 <select
                   value={settings.sync.syncInterval}
@@ -529,7 +529,7 @@ function Settings() {
                     ...settings,
                     sync: { ...settings.sync, syncInterval: parseInt(e.target.value) }
                   })}
-                  className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                 >
                   <option value={15}>15 seconds</option>
                   <option value={30}>30 seconds</option>
@@ -542,15 +542,15 @@ function Settings() {
         </section>
 
         {/* Export Section */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+        <section className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
             <div className="flex items-center gap-3">
               <Download className="w-5 h-5 text-orange-600" />
-              <h2 className="font-semibold text-gray-800 dark:text-white">Export Data</h2>
+              <h2 className="font-semibold text-slate-800 dark:text-white">Export Data</h2>
             </div>
           </div>
           <div className="p-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
               Export all incident data for reporting or backup purposes.
             </p>
             <div className="flex items-center gap-4">
@@ -560,7 +560,7 @@ function Settings() {
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
                     exportFormat === 'csv'
                       ? 'bg-orange-50 border-orange-200 text-orange-700 dark:bg-orange-900/30 dark:border-orange-700 dark:text-orange-400'
-                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-gray-300'
+                      : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 dark:text-slate-300'
                   }`}
                 >
                   <FileSpreadsheet className="w-4 h-4" />
@@ -571,7 +571,7 @@ function Settings() {
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
                     exportFormat === 'json'
                       ? 'bg-orange-50 border-orange-200 text-orange-700 dark:bg-orange-900/30 dark:border-orange-700 dark:text-orange-400'
-                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-gray-300'
+                      : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 dark:text-slate-300'
                   }`}
                 >
                   <FileJson className="w-4 h-4" />
@@ -601,11 +601,11 @@ function Settings() {
 
         {/* Security Section */}
         {isAdmin && (
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+        <section className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
             <div className="flex items-center gap-3">
               <Lock className="w-5 h-5 text-red-600" />
-              <h2 className="font-semibold text-gray-800 dark:text-white">Security</h2>
+              <h2 className="font-semibold text-slate-800 dark:text-white">Security</h2>
             </div>
           </div>
           <div className="p-4 space-y-4">
@@ -618,12 +618,12 @@ function Settings() {
             {!showPinChange ? (
               <div className="flex items-center justify-between py-2">
                 <div>
-                  <p className="font-medium text-gray-800 dark:text-white">Access PIN</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Change your admin access PIN</p>
+                  <p className="font-medium text-slate-800 dark:text-white">Access PIN</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Change your admin access PIN</p>
                 </div>
                 <button
                   onClick={() => setShowPinChange(true)}
-                  className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  className="flex items-center gap-2 px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
                 >
                   <Key className="w-4 h-4" />
                   Change PIN
@@ -632,35 +632,35 @@ function Settings() {
             ) : (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Current PIN</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Current PIN</label>
                   <input
                     type="password"
                     value={currentPin}
                     onChange={handlePinInput(setCurrentPin)}
                     maxLength={6}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                    className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                     placeholder="Enter current PIN"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New PIN</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">New PIN</label>
                   <input
                     type="password"
                     value={newPin}
                     onChange={handlePinInput(setNewPin)}
                     maxLength={6}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                    className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                     placeholder="Enter new PIN (4-6 digits)"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm New PIN</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Confirm New PIN</label>
                   <input
                     type="password"
                     value={confirmPin}
                     onChange={handlePinInput(setConfirmPin)}
                     maxLength={6}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                    className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                     placeholder="Confirm new PIN"
                   />
                 </div>
@@ -683,7 +683,7 @@ function Settings() {
                       setConfirmPin('');
                       setPinError('');
                     }}
-                    className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                    className="px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
                   >
                     Cancel
                   </button>
@@ -691,13 +691,13 @@ function Settings() {
               </div>
             )}
 
-            <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+            <div className="border-t border-slate-100 dark:border-slate-700 pt-4">
               <div className="flex items-center justify-between py-2">
                 <div className="flex items-center gap-3">
                   <Bug className="w-4 h-4 text-orange-500" />
                   <div>
-                    <p className="font-medium text-gray-800 dark:text-white">Debug Mode</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Enable developer tools for troubleshooting</p>
+                    <p className="font-medium text-slate-800 dark:text-white">Debug Mode</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Enable developer tools for troubleshooting</p>
                   </div>
                 </div>
                 <button
@@ -715,7 +715,7 @@ function Settings() {
                     }
                   }}
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    settings.security.debugMode ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-700'
+                    settings.security.debugMode ? 'bg-blue-600' : 'bg-slate-200 dark:bg-slate-700'
                   }`}
                 >
                   <span
@@ -740,11 +740,11 @@ function Settings() {
               )}
             </div>
 
-            <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+            <div className="border-t border-slate-100 dark:border-slate-700 pt-4">
               <div className="flex items-center justify-between py-2">
                 <div>
-                  <p className="font-medium text-gray-800 dark:text-white">Logout</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Sign out of the admin dashboard</p>
+                  <p className="font-medium text-slate-800 dark:text-white">Logout</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Sign out of the admin dashboard</p>
                 </div>
                 <button
                   onClick={handleLogout}
@@ -759,55 +759,37 @@ function Settings() {
         </section>
         )}
 
-        {/* AI Worker Connection */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-            <div className="flex items-center gap-3">
-              <BrainCircuit className="w-5 h-5 text-purple-600" />
-              <h2 className="font-semibold text-gray-800 dark:text-white">AI Worker Connection</h2>
-            </div>
-          </div>
-          <div className="p-4 space-y-4">
-            <AIWorkerSettings />
-            {isAdmin && (
-              <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
-                <AIApiKeysSettings />
-              </div>
-            )}
-          </div>
-        </section>
-
         {/* About Section */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+        <section className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
             <div className="flex items-center gap-3">
-              <Shield className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-              <h2 className="font-semibold text-gray-800 dark:text-white">About</h2>
+              <Shield className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+              <h2 className="font-semibold text-slate-800 dark:text-white">About</h2>
             </div>
           </div>
           <div className="p-6">
             <div className="space-y-4">
               <div>
-                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">iReport Admin Dashboard</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Version 1.2.5</p>
+                <h3 className="text-lg font-semibold text-slate-800 dark:text-white">iReport Admin Dashboard</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Version 1.2.5</p>
               </div>
               
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                <p className="text-sm text-gray-600 dark:text-gray-300">
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                <p className="text-sm text-slate-600 dark:text-slate-300">
                   Incident reporting and management system for Camarines Norte LGU
                 </p>
               </div>
 
-              <div className="flex items-center justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-700">
                 <div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Built with Electron + React</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Built with Electron + React</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                     Multi-agency incident coordination platform
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-gray-400">© 2025</p>
-                  <p className="text-xs text-gray-400">Camarines Norte LGU</p>
+                  <p className="text-xs text-slate-400">© 2025</p>
+                  <p className="text-xs text-slate-400">Camarines Norte LGU</p>
                 </div>
               </div>
             </div>
@@ -823,7 +805,7 @@ function AIWorkerSettings() {
   const [mode, setMode] = useState<'local' | 'vps'>('local');
   const [localUrl, setLocalUrl] = useState('http://127.0.0.1:8000');
   const [vpsUrl, setVpsUrl] = useState('');
-  const [fallbackUrl, setFallbackUrl] = useState('http://75.119.142.12:8000');
+  const [fallbackUrl, setFallbackUrl] = useState('');
   const [workerUrl, setWorkerUrl] = useState('http://127.0.0.1:8000');
   const [health, setHealth] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -843,7 +825,7 @@ function AIWorkerSettings() {
         const loadedMode = map.ai_worker_mode === 'vps' ? 'vps' : 'local';
         const loadedLocalUrl = map.ai_worker_local_url || 'http://127.0.0.1:8000';
         const loadedVpsUrl = map.ai_worker_vps_url || '';
-        const loadedFallbackUrl = map.ai_worker_fallback_url || 'http://75.119.142.12:8000';
+        const loadedFallbackUrl = map.ai_worker_fallback_url || '';
         const activeUrl = loadedMode === 'vps' ? loadedVpsUrl : loadedLocalUrl;
 
         setMode(loadedMode);
@@ -930,11 +912,11 @@ function AIWorkerSettings() {
 
   return (
     <div className="space-y-4">
-      <div className="p-4 border border-gray-100 dark:border-gray-700 rounded-lg space-y-4">
+      <div className="p-4 border border-slate-100 dark:border-slate-700 rounded-lg space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="font-medium text-gray-800 dark:text-white">AI Worker Runtime</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <h3 className="font-medium text-slate-800 dark:text-white">AI Worker Runtime</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               Choose whether this admin app talks to your local worker or the VPS worker.
             </p>
           </div>
@@ -951,14 +933,14 @@ function AIWorkerSettings() {
             className={`p-3 text-left rounded-lg border transition-colors ${
               mode === 'local'
                 ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700'
             }`}
           >
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-white">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-white">
               <Monitor className="w-4 h-4" />
               Local setup
             </div>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Use the worker running on this machine.</p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Use the worker running on this machine.</p>
           </button>
 
           <button
@@ -966,43 +948,43 @@ function AIWorkerSettings() {
             className={`p-3 text-left rounded-lg border transition-colors ${
               mode === 'vps'
                 ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700'
             }`}
           >
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-white">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-white">
               <Wifi className="w-4 h-4" />
               VPS worker
             </div>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Use the deployed worker URL from Supabase settings.</p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Use the deployed worker URL from Supabase settings.</p>
           </button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Local Worker URL</label>
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Local Worker URL</label>
             <input
               type="text"
               value={localUrl}
               onChange={(e) => setLocalUrl(e.target.value)}
               placeholder="http://127.0.0.1:8000"
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+              className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
             />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">VPS Worker URL</label>
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">VPS Worker URL</label>
             <input
               type="text"
               value={vpsUrl}
               onChange={(e) => setVpsUrl(e.target.value)}
               placeholder="https://your-vps-domain.com"
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+              className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
             />
           </div>
         </div>
 
         <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
             Active URL: <span className="font-mono">{mode === 'vps' ? vpsUrl || 'Not set' : localUrl}</span>
           </p>
           <button
@@ -1016,11 +998,11 @@ function AIWorkerSettings() {
         </div>
       </div>
 
-      <div className="p-4 border border-gray-100 dark:border-gray-700 rounded-lg space-y-3">
+      <div className="p-4 border border-slate-100 dark:border-slate-700 rounded-lg space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="font-medium text-gray-800 dark:text-white">VPS Fallback</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <h3 className="font-medium text-slate-800 dark:text-white">VPS Fallback</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               When the active worker is offline or missing cloud API keys, AI calls (incident analysis, call transcription, call summary) automatically retry against this URL. Leave blank to disable.
             </p>
           </div>
@@ -1036,7 +1018,7 @@ function AIWorkerSettings() {
             value={fallbackUrl}
             onChange={(e) => setFallbackUrl(e.target.value)}
             placeholder="http://75.119.142.12:8000"
-            className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+            className="flex-1 px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
           />
           <button
             onClick={saveFallback}
@@ -1054,7 +1036,7 @@ function AIWorkerSettings() {
           onChange={(e) => setWorkerUrl(e.target.value)}
           onBlur={saveUrl}
           placeholder="http://127.0.0.1:8000"
-          className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+          className="flex-1 px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
         />
         <button
           onClick={checkHealth}
@@ -1071,7 +1053,7 @@ function AIWorkerSettings() {
             <CheckCircle className="w-4 h-4" />
             <span>Worker connected</span>
           </div>
-          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-400">
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-400">
             <div><Cpu className="w-3 h-3 inline mr-1" />Model: {health.vlm_model}</div>
             <div><BrainCircuit className="w-3 h-3 inline mr-1" />Provider: {health.vlm_provider}</div>
             <div>RAG: {health.rag_enabled ? 'Enabled' : 'Disabled'}</div>
@@ -1140,7 +1122,7 @@ function AIApiKeysSettings() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
         <RefreshCw className="w-4 h-4 animate-spin" />
         Loading API configuration...
       </div>
@@ -1151,15 +1133,15 @@ function AIApiKeysSettings() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-medium text-gray-800 dark:text-white">AI Worker API Keys</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <h3 className="font-medium text-slate-800 dark:text-white">AI Worker API Keys</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
             These are stored in Supabase and picked up by the AI worker automatically.
             No VPS restart required.
           </p>
         </div>
         <button
           onClick={loadSettings}
-          className="flex items-center gap-1 px-3 py-1.5 text-xs border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+          className="flex items-center gap-1 px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
         >
           <RefreshCw className="w-3 h-3" />
           Refresh
@@ -1176,7 +1158,7 @@ function AIApiKeysSettings() {
         return (
           <div key={cfg.key} className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">{cfg.label}</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">{cfg.label}</label>
               <div className="flex items-center gap-2">
                 {justSaved && (
                   <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
@@ -1187,14 +1169,14 @@ function AIApiKeysSettings() {
                   className={`text-xs px-2 py-0.5 rounded-full ${
                     isConfigured
                       ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                      : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                      : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
                   }`}
                 >
                   {isConfigured ? 'Set' : 'Not set'}
                 </span>
               </div>
             </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">{cfg.help}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{cfg.help}</p>
             <div className="flex items-center gap-2">
               <input
                 type={isKeyField ? 'password' : 'text'}
@@ -1206,7 +1188,7 @@ function AIApiKeysSettings() {
                   }
                 }}
                 placeholder={cfg.placeholder}
-                className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                className="flex-1 px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
               />
               <button
                 onClick={() => updateKey(cfg.key, settings[cfg.key])}
@@ -1249,16 +1231,16 @@ function ToggleSetting({
   return (
     <div className="flex items-center justify-between py-2">
       <div className="flex items-center gap-3">
-        {icon && <span className="text-gray-400 dark:text-gray-500">{icon}</span>}
+        {icon && <span className="text-slate-400 dark:text-slate-500">{icon}</span>}
         <div>
-          <p className="font-medium text-gray-800 dark:text-white">{label}</p>
-          <p className="text-sm text-gray-500 dark:text-gray-400">{description}</p>
+          <p className="font-medium text-slate-800 dark:text-white">{label}</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">{description}</p>
         </div>
       </div>
       <button
         onClick={() => onChange(!enabled)}
         className={`relative w-12 h-6 rounded-full transition-colors ${
-          enabled ? 'bg-blue-600' : 'bg-gray-300 dark:bg-gray-600'
+          enabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
         }`}
       >
         <span

@@ -2,6 +2,7 @@ import { Bell, Check, CheckCheck, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getSessionScope } from '../utils/sessionScope';
+import { getIncidentReference } from '../utils/incidentReference';
 
 interface Notification {
   id: number;
@@ -12,6 +13,9 @@ interface Notification {
   incident_id?: string;
   incidents?: {
     id: string;
+    incident_reference?: string | null;
+    reference_year?: number | null;
+    reference_number?: number | null;
     agency_type: string;
     description: string;
   };
@@ -61,6 +65,15 @@ export function Notifications() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
 
   const loadNotifications = async () => {
     setLoading(true);
@@ -147,7 +160,7 @@ export function Notifications() {
       case 'mdrrmo':
         return 'text-cyan-600 dark:text-cyan-400';
       default:
-        return 'text-gray-600 dark:text-gray-400';
+        return 'text-slate-600 dark:text-slate-400';
     }
   };
 
@@ -159,7 +172,7 @@ export function Notifications() {
           setIsOpen(!isOpen);
           if (!isOpen) loadNotifications();
         }}
-        className="relative p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+        className="relative p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
       >
         <Bell size={20} />
         {unreadCount > 0 && (
@@ -179,10 +192,10 @@ export function Notifications() {
           />
 
           {/* Panel */}
-          <div className="absolute right-0 mt-2 w-96 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 z-50 max-h-[600px] flex flex-col">
+          <div className="absolute right-0 mt-2 w-96 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 z-50 max-h-[600px] flex flex-col">
             {/* Header */}
-            <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-800 dark:text-white">
                 Notifications
               </h3>
               <div className="flex items-center gap-2">
@@ -197,7 +210,7 @@ export function Notifications() {
                 )}
                 <button
                   onClick={() => setIsOpen(false)}
-                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                  className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded"
                 >
                   <X size={16} />
                 </button>
@@ -211,30 +224,30 @@ export function Notifications() {
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
                 </div>
               ) : notifications.length === 0 ? (
-                <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+                <div className="p-8 text-center text-slate-500 dark:text-slate-400">
                   <Bell size={48} className="mx-auto mb-2 opacity-50" />
                   <p>No notifications</p>
                 </div>
               ) : (
-                <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                <div className="divide-y divide-slate-100 dark:divide-slate-700">
                   {notifications.map(notification => (
                     <div
                       key={notification.id}
                       onClick={() => handleNotificationClick(notification)}
-                      className={`p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${!notification.is_read ? 'bg-blue-50 dark:bg-blue-900/10' : ''
+                      className={`p-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${!notification.is_read ? 'bg-blue-50 dark:bg-blue-900/10' : ''
                         }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
-                            <p className="font-semibold text-gray-800 dark:text-white text-sm">
+                            <p className="font-semibold text-slate-800 dark:text-white text-sm">
                               {notification.title}
                             </p>
                             {!notification.is_read && (
                               <span className="w-2 h-2 bg-blue-600 rounded-full flex-shrink-0"></span>
                             )}
                           </div>
-                          <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
+                          <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-2">
                             {notification.body}
                           </p>
                           {notification.incidents ? (
@@ -242,28 +255,28 @@ export function Notifications() {
                               <span className={`text-xs font-medium ${getAgencyColor(notification.incidents.agency_type)}`}>
                                 {notification.incidents.agency_type?.toUpperCase()}
                               </span>
-                              <span className="text-xs text-gray-500 dark:text-gray-400">
-                                #{notification.incident_id?.slice(0, 8).toUpperCase()}
+                              <span className="text-xs text-slate-500 dark:text-slate-400">
+                                 {getIncidentReference(notification.incidents)}
                               </span>
                             </div>
                           ) : notification.incident_id ? (
                             <div className="mt-2 flex items-center gap-2">
-                              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                                 Incident #{notification.incident_id.slice(0, 8).toUpperCase()}
                               </span>
                             </div>
                           ) : null}
-                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                             {formatTime(notification.created_at)}
                           </p>
                         </div>
                         {!notification.is_read && (
                           <button
                             onClick={(e) => handleMarkAsRead(notification.id, e)}
-                            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded flex-shrink-0"
+                            className="p-1 hover:bg-slate-200 dark:hover:bg-slate-600 rounded flex-shrink-0"
                             title="Mark as read"
                           >
-                            <Check size={16} className="text-gray-600 dark:text-gray-300" />
+                            <Check size={16} className="text-slate-600 dark:text-slate-300" />
                           </button>
                         )}
                       </div>

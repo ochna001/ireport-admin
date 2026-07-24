@@ -77,6 +77,9 @@ CREATE TABLE public.incident_updates (
 
 CREATE TABLE public.incidents (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
+  reference_year smallint NOT NULL,
+  reference_number integer NOT NULL,
+  incident_reference text GENERATED ALWAYS AS (('INC-'::text || reference_year::text) || '-'::text || lpad(reference_number::text, 5, '0'::text)) STORED,
   agency_type text NOT NULL CHECK (agency_type = ANY (ARRAY['pnp'::text, 'bfp'::text, 'pdrrmo'::text])),
   reporter_id uuid,
   reporter_name text NOT NULL,
@@ -97,6 +100,9 @@ CREATE TABLE public.incidents (
   assigned_officer_ids ARRAY DEFAULT '{}'::uuid[],
   reporter_phone text,
   CONSTRAINT incidents_pkey PRIMARY KEY (id),
+  CONSTRAINT incidents_reference_year_number_key UNIQUE (reference_year, reference_number),
+  CONSTRAINT incidents_reference_year_check CHECK (reference_year >= 2000 AND reference_year <= 9999),
+  CONSTRAINT incidents_reference_number_check CHECK (reference_number > 0),
   CONSTRAINT incidents_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES auth.users(id),
   CONSTRAINT incidents_assigned_officer_id_fkey FOREIGN KEY (assigned_officer_id) REFERENCES auth.users(id),
   CONSTRAINT incidents_assigned_station_id_fkey FOREIGN KEY (assigned_station_id) REFERENCES public.agency_stations(id)
@@ -128,7 +134,7 @@ CREATE TABLE public.profiles (
   id uuid NOT NULL,
   display_name text,
   email text UNIQUE,
-  role character varying NOT NULL CHECK (role::text = ANY (ARRAY['Resident'::character varying, 'Desk Officer'::character varying, 'Field Officer'::character varying, 'Chief'::character varying]::text[])),
+  role character varying NOT NULL CHECK (role::text = ANY (ARRAY['Resident'::character varying, 'Desk Officer'::character varying, 'Field Officer'::character varying, 'Chief'::character varying, 'Admin'::character varying]::text[])),
   agency_id integer,
   phone_number character varying,
   age integer CHECK (age >= 13 AND age <= 120),

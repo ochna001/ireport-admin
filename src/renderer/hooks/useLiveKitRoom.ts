@@ -137,7 +137,7 @@ export function useLiveKitRoom({ serverUrl, tokenUrl, roomName, role }: UseLiveK
         const el = audioTrack.attach();
         el.setAttribute('lk-remote', 'true');
         el.autoplay = true;
-        (el as HTMLAudioElement).playsInline = true;
+        el.setAttribute('playsinline', 'true');
         el.style.display = 'none';
         document.body.appendChild(el);
         try { (el as HTMLAudioElement).volume = volume; } catch {}

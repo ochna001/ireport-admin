@@ -7,17 +7,24 @@ import { copyFileSync, existsSync, mkdirSync } from 'fs';
 const copyGeoDataPlugin = () => ({
   name: 'copy-geo-data',
   closeBundle() {
-    const srcPath = resolve(__dirname, 'src/main/data/camarinesNorteMunicipalities.json');
+    const dataDir = resolve(__dirname, 'src/main/data');
     const destDir = resolve(__dirname, 'dist/main/data');
-    const destPath = resolve(destDir, 'camarinesNorteMunicipalities.json');
-    
-    if (existsSync(srcPath)) {
-      if (!existsSync(destDir)) {
-        mkdirSync(destDir, { recursive: true });
-      }
-      copyFileSync(srcPath, destPath);
-      console.log('[Build] Copied GeoJSON data to dist/main/data/');
+    const filesToCopy = [
+      'camarinesNorteMunicipalities.json',
+      'camarinesNorteBarangays.json',
+    ];
+
+    if (!existsSync(destDir)) {
+      mkdirSync(destDir, { recursive: true });
     }
+
+    for (const file of filesToCopy) {
+      const srcPath = resolve(dataDir, file);
+      if (existsSync(srcPath)) {
+        copyFileSync(srcPath, resolve(destDir, file));
+      }
+    }
+    console.log('[Build] Copied GeoJSON data to dist/main/data/');
   }
 });
 

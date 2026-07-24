@@ -77,6 +77,7 @@ interface RouteMapProps {
   stationName?: string;
   showRoute?: boolean;
   onRouteLoaded?: (distance: number, duration: number) => void;
+  mapHeight?: 'compact' | 'expanded';
 }
 
 // Component to fit bounds when route is shown
@@ -96,12 +97,13 @@ export function RouteMap({
   stationLng,
   stationName,
   showRoute = false,
-  onRouteLoaded
+  onRouteLoaded,
+  mapHeight = 'compact'
 }: RouteMapProps) {
   const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('google_hybrid');
+  const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('google_road');
   const [showLayerSelector, setShowLayerSelector] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
 
@@ -157,11 +159,11 @@ export function RouteMap({
   };
 
   return (
-    <div className="relative w-full h-[350px] rounded-lg overflow-hidden" style={{ zIndex: 0 }}>
+    <div className={`relative w-full ${mapHeight === 'expanded' ? 'h-[min(68vh,620px)] min-h-[420px]' : 'h-[300px]'} rounded-lg overflow-hidden`} style={{ zIndex: 0 }}>
       {/* Layer Selector */}
       <div className="absolute bottom-4 right-4 z-[1010] flex flex-col items-end gap-2">
         {showLayerSelector && (
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-2 min-w-[160px] animate-in fade-in slide-in-from-bottom-2">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 p-2 min-w-[160px] animate-in fade-in slide-in-from-bottom-2">
             <div className="space-y-1">
               {(Object.keys(MAP_LAYERS) as Array<keyof typeof MAP_LAYERS>).map((key) => (
                 <button
@@ -170,10 +172,10 @@ export function RouteMap({
                     setActiveLayer(key);
                     setShowLayerSelector(false);
                   }}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`w-full min-h-10 flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                     activeLayer === key 
                       ? 'bg-blue-600 text-white shadow-md' 
-                      : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                   }`}
                 >
                   {key === 'osm' && <MapIcon size={12} />}
@@ -188,13 +190,16 @@ export function RouteMap({
           </div>
         )}
         <button
-          onClick={() => setShowLayerSelector(!showLayerSelector)}
-          className={`p-2.5 rounded-full shadow-lg border transition-all ${
+           type="button"
+           onClick={() => setShowLayerSelector(!showLayerSelector)}
+           aria-label="Change map layer"
+           aria-expanded={showLayerSelector}
+           className={`p-2.5 rounded-full shadow-lg border transition-all ${
             showLayerSelector 
               ? 'bg-blue-600 text-white border-transparent' 
-              : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-100 dark:border-gray-700 hover:bg-gray-50'
+              : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-100 dark:border-slate-700 hover:bg-slate-50'
           }`}
-          title="Change Map Layers"
+           title="Change map layer"
         >
           <LayersIcon size={18} />
         </button>
@@ -202,7 +207,7 @@ export function RouteMap({
 
       {loading && (
         <div className="absolute inset-0 bg-black/20 z-[1000] flex items-center justify-center">
-          <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
+          <div className="bg-white dark:bg-slate-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
             <span className="text-sm">Loading route...</span>
           </div>
@@ -215,7 +220,7 @@ export function RouteMap({
         </div>
       )}
 
-    <div className="relative h-[300px] rounded-xl overflow-hidden border border-gray-100 dark:border-gray-700 shadow-inner">
+    <div className="relative h-full rounded-xl overflow-hidden border border-slate-100 dark:border-slate-700">
       <MapContainer
         center={[incidentLat, incidentLng]}
         zoom={14}
@@ -235,7 +240,7 @@ export function RouteMap({
           <Popup>
             <div className="text-xs">
               <p className="font-bold">Incident Location</p>
-              <p className="text-gray-500 mt-1">{incidentAddress}</p>
+              <p className="text-slate-500 mt-1">{incidentAddress}</p>
             </div>
           </Popup>
         </Marker>
@@ -245,7 +250,7 @@ export function RouteMap({
             <Popup>
               <div className="text-xs">
                 <p className="font-bold">Responding Station</p>
-                <p className="text-gray-500 mt-1">{stationName || 'Base Station'}</p>
+                <p className="text-slate-500 mt-1">{stationName || 'Base Station'}</p>
               </div>
             </Popup>
           </Marker>

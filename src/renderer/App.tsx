@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
+import { ToastProvider } from './components/ui';
 import Agencies from './pages/Agencies';
 import Dashboard from './pages/Dashboard';
 import IncidentDetail from './pages/IncidentDetail';
@@ -41,24 +42,26 @@ function App() {
   if (loading) return null;
 
   return (
-    <Routes>
-      <Route path="/login" element={<Login onLogin={() => setIsAuthenticated(true)} />} />
-      
-      <Route path="/" element={isAuthenticated ? <Layout onLogout={() => setIsAuthenticated(false)} /> : <Navigate to="/login" replace />}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
-        <Route path="incidents" element={<Incidents />} />
-        <Route path="incidents/:id" element={<IncidentDetail />} />
-        <Route path="agencies" element={<Agencies />} />
-        <Route path="reports" element={<Reports />} />
-        <Route path="users" element={<Users />} />
-        <Route path="settings" element={<Settings />} />
-        <Route path="notifications" element={<NotificationsPage />} />
-        <Route path="logs" element={<LogsPage />} />
-        <Route path="ai-analysis" element={<AIAnalysis />} />
-        <Route path="calls" element={<Calls />} />
-      </Route>
-    </Routes>
+    <ToastProvider>
+      <Routes>
+        <Route path="/login" element={<Login onLogin={() => setIsAuthenticated(true)} />} />
+
+        <Route path="/" element={isAuthenticated ? <Layout onLogout={() => setIsAuthenticated(false)} /> : <Navigate to="/login" replace />}>
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="incidents" element={<Incidents />} />
+          <Route path="incidents/:id" element={<IncidentDetail />} />
+          <Route path="agencies" element={<Agencies />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="users" element={<Users />} />
+          <Route path="settings" element={<Settings />} />
+          <Route path="notifications" element={<NotificationsPage />} />
+          <Route path="logs" element={<LogsPage />} />
+          <Route path="ai-analysis" element={<AIAnalysis />} />
+          <Route path="calls" element={<Calls />} />
+        </Route>
+      </Routes>
+    </ToastProvider>
   );
 }
 

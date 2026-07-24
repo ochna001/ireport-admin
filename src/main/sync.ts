@@ -121,11 +121,15 @@ export class SyncManager {
     if (incidents && incidents.length > 0) {
       const upsert = db.prepare(`
         INSERT INTO incidents (
-          id, agency_type, reporter_id, reporter_name, reporter_age,
+          id, reference_year, reference_number, incident_reference,
+          agency_type, reporter_id, reporter_name, reporter_age,
           description, status, location_lat, location_lng, location_address,
           media_urls, created_at, updated_at, cloud_updated_at, synced
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         ON CONFLICT(id) DO UPDATE SET
+          reference_year = excluded.reference_year,
+          reference_number = excluded.reference_number,
+          incident_reference = excluded.incident_reference,
           status = CASE 
             WHEN excluded.cloud_updated_at > cloud_updated_at THEN excluded.status 
             ELSE status 
@@ -142,6 +146,9 @@ export class SyncManager {
       for (const incident of incidents) {
         upsert.run(
           incident.id,
+          incident.reference_year,
+          incident.reference_number,
+          incident.incident_reference,
           incident.agency_type,
           incident.reporter_id,
           incident.reporter_name,
@@ -272,17 +279,24 @@ export class SyncManager {
         // Cloud version is newer or no local changes, update local
         db.prepare(`
           INSERT INTO incidents (
-            id, agency_type, reporter_id, reporter_name, reporter_age,
+            id, reference_year, reference_number, incident_reference,
+            agency_type, reporter_id, reporter_name, reporter_age,
             description, status, location_lat, location_lng, location_address,
             media_urls, created_at, updated_at, cloud_updated_at, synced
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
           ON CONFLICT(id) DO UPDATE SET
+            reference_year = excluded.reference_year,
+            reference_number = excluded.reference_number,
+            incident_reference = excluded.incident_reference,
             status = excluded.status,
             updated_at = excluded.updated_at,
             cloud_updated_at = excluded.cloud_updated_at,
             synced = 1
         `).run(
           incident.id,
+          incident.reference_year,
+          incident.reference_number,
+          incident.incident_reference,
           incident.agency_type,
           incident.reporter_id,
           incident.reporter_name,

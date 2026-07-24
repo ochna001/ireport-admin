@@ -36,6 +36,7 @@ beforeEach(() => {
     getAIAnalysisRecords: vi.fn().mockResolvedValue({ data: [], total: 0 }),
     listAIAnalysisIncidents: vi.fn().mockResolvedValue([]),
     getIncidentAIReport: vi.fn().mockResolvedValue(null),
+    getAIWeeklyMetrics: vi.fn().mockResolvedValue([]),
   };
 });
 

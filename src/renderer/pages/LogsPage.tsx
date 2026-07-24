@@ -89,7 +89,7 @@ function getActionBadgeColor(action: string): string {
   if (action.includes('updated') || action.includes('changed')) return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
   if (action.includes('deleted') || action.includes('disabled')) return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
   if (action.includes('login') || action.includes('auth')) return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200';
-  if (action.includes('export')) return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200';
+  if (action.includes('export')) return 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200';
   return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200';
 }
 
@@ -282,7 +282,7 @@ export default function LogsPage() {
   function renderDetailsCard(details: any, action: string) {
     if (!details || typeof details !== 'object') {
       return (
-        <div className="text-sm text-gray-600 dark:text-gray-400 italic">
+        <div className="text-sm text-slate-600 dark:text-slate-400 italic">
           {details || 'No additional details'}
         </div>
       );
@@ -294,7 +294,7 @@ export default function LogsPage() {
 
     if (entries.length === 0) {
       return (
-        <div className="text-sm text-gray-600 dark:text-gray-400 italic">
+        <div className="text-sm text-slate-600 dark:text-slate-400 italic">
           No additional details
         </div>
       );
@@ -309,10 +309,10 @@ export default function LogsPage() {
 
           return (
             <div key={key} className={`${isLongValue ? 'md:col-span-2' : ''}`}>
-              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
                 {label}
               </span>
-              <div className={`mt-1 text-sm text-gray-900 dark:text-gray-100 ${isLongValue ? 'font-mono bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded' : ''}`}>
+              <div className={`mt-1 text-sm text-slate-900 dark:text-slate-100 ${isLongValue ? 'font-mono bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded' : ''}`}>
                 {displayValue}
               </div>
             </div>
@@ -387,7 +387,7 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="p-6 bg-gray-50 dark:bg-gray-900 min-h-screen">
+    <div className="p-6 bg-slate-50 dark:bg-slate-900 min-h-screen">
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center gap-3 mb-2">
@@ -395,8 +395,8 @@ export default function LogsPage() {
             <History className="w-5 h-5 text-blue-600 dark:text-blue-300" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Activity Logs</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Activity Logs</h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
               Track all actions performed in the admin application
             </p>
           </div>
@@ -404,36 +404,36 @@ export default function LogsPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 mb-6">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 mb-6">
         <div className="flex flex-wrap gap-4 items-end">
           {/* Date Range */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">From</label>
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">From</label>
             <input
               type="date"
               value={filters.fromDate || ''}
               onChange={(e) => setFilters({ ...filters, fromDate: e.target.value || undefined })}
-              className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">To</label>
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">To</label>
             <input
               type="date"
               value={filters.toDate || ''}
               onChange={(e) => setFilters({ ...filters, toDate: e.target.value || undefined })}
-              className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
 
           {/* Entity Type */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Entity Type</label>
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Entity Type</label>
             <select
               value={filters.entityType || ''}
               onChange={(e) => setFilters({ ...filters, entityType: e.target.value || undefined })}
-              className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               {ENTITY_TYPES.map((type) => (
                 <option key={type.value} value={type.value}>
@@ -445,11 +445,11 @@ export default function LogsPage() {
 
           {/* Action Type */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Action</label>
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Action</label>
             <select
               value={filters.action || ''}
               onChange={(e) => setFilters({ ...filters, action: e.target.value || undefined })}
-              className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               {ACTION_TYPES.map((action) => (
                 <option key={action.value} value={action.value}>
@@ -461,7 +461,7 @@ export default function LogsPage() {
 
           {/* Search */}
           <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Search</label>
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Search</label>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -469,7 +469,7 @@ export default function LogsPage() {
                 value={filters.search || ''}
                 onChange={(e) => setFilters({ ...filters, search: e.target.value })}
                 onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                className="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
               <button
                 onClick={handleSearch}
@@ -482,14 +482,14 @@ export default function LogsPage() {
         </div>
 
         {/* Actions */}
-        <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+        <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
           <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer">
               <input
                 type="checkbox"
                 checked={autoRefresh}
                 onChange={(e) => setAutoRefresh(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
               />
               Auto-refresh (30s)
             </label>
@@ -498,14 +498,14 @@ export default function LogsPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={fetchLogs}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </button>
             <button
               onClick={exportToJson}
-              className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
             >
               <FileJson className="w-4 h-4" />
               Export JSON
@@ -516,35 +516,35 @@ export default function LogsPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <History className="w-4 h-4 text-blue-500" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">Total Logs</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">Total Logs</span>
           </div>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white">{pagination.total.toLocaleString()}</p>
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">{pagination.total.toLocaleString()}</p>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <Users className="w-4 h-4 text-green-500" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">Showing</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">Showing</span>
           </div>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white">{logs.length}</p>
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">{logs.length}</p>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <Shield className="w-4 h-4 text-purple-500" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">Page</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">Page</span>
           </div>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white">
-            {pagination.currentPage} <span className="text-sm font-normal text-gray-500">/ {pagination.totalPages}</span>
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">
+            {pagination.currentPage} <span className="text-sm font-normal text-slate-500">/ {pagination.totalPages}</span>
           </p>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <AlertTriangle className="w-4 h-4 text-yellow-500" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">Last Update</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">Last Update</span>
           </div>
-          <p className="text-lg font-medium text-gray-900 dark:text-white">
+          <p className="text-lg font-medium text-slate-900 dark:text-white">
             {new Date().toLocaleTimeString()}
           </p>
         </div>
@@ -558,30 +558,30 @@ export default function LogsPage() {
       )}
 
       {/* Table */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-gray-50 dark:bg-gray-700/50">
+            <thead className="bg-slate-50 dark:bg-slate-700/50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-10"></th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Timestamp</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">User</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Entity Type</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Entity ID</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-10"></th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Timestamp</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">User</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Action</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Entity Type</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Entity ID</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
               {loading && logs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-gray-500 dark:text-gray-400">
+                  <td colSpan={6} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
                     <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
                     Loading activity logs...
                   </td>
                 </tr>
               ) : logs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-gray-500 dark:text-gray-400">
+                  <td colSpan={6} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
                     <History className="w-6 h-6 mx-auto mb-2" />
                     No activity logs found
                   </td>
@@ -591,30 +591,30 @@ export default function LogsPage() {
                   <>
                     <tr
                       key={log.id}
-                      className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+                      className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer"
                       onClick={() => toggleRowExpansion(log.id)}
                     >
                       <td className="px-4 py-3">
                         {expandedRows.has(log.id) ? (
-                          <ChevronUp className="w-4 h-4 text-gray-400" />
+                          <ChevronUp className="w-4 h-4 text-slate-400" />
                         ) : (
-                          <ChevronDown className="w-4 h-4 text-gray-400" />
+                          <ChevronDown className="w-4 h-4 text-slate-400" />
                         )}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="text-sm text-gray-900 dark:text-white" title={formatDate(log.created_at)}>
+                        <div className="text-sm text-slate-900 dark:text-white" title={formatDate(log.created_at)}>
                           {formatRelativeTime(log.created_at)}
                         </div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
                           {new Date(log.created_at).toLocaleDateString()}
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900 dark:text-white">
+                        <div className="text-sm text-slate-900 dark:text-white">
                           {log.user_email || 'System'}
                         </div>
                         {log.user_id && (
-                          <div className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                          <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
                             {log.user_id.slice(0, 8)}...
                           </div>
                         )}
@@ -625,18 +625,18 @@ export default function LogsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm text-gray-700 dark:text-gray-300 capitalize">
+                        <span className="text-sm text-slate-700 dark:text-slate-300 capitalize">
                           {log.entity_type || '-'}
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm font-mono text-gray-600 dark:text-gray-400">
+                        <span className="text-sm font-mono text-slate-600 dark:text-slate-400">
                           {log.entity_id ? `${log.entity_id.slice(0, 12)}...` : '-'}
                         </span>
                       </td>
                     </tr>
                     {expandedRows.has(log.id) && (
-                      <tr className="bg-gray-50 dark:bg-gray-700/30">
+                      <tr className="bg-slate-50 dark:bg-slate-700/30">
                         <td colSpan={6} className="px-4 py-4">
                           <div className="pl-8 space-y-4">
                             {/* Summary Card */}
@@ -654,14 +654,14 @@ export default function LogsPage() {
 
                             {/* Details Grid */}
                             {log.details && Object.keys(log.details).length > 0 && (
-                              <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
-                                <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Details</h4>
+                              <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg p-4">
+                                <h4 className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">Details</h4>
                                 {renderDetailsCard(log.details, log.action)}
                               </div>
                             )}
 
                             {/* Metadata */}
-                            <div className="flex flex-wrap gap-4 text-xs text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
+                            <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">
                               <span><span className="font-medium">Log ID:</span> #{log.id}</span>
                               <span><span className="font-medium">Source:</span> {log.ip_address}</span>
                               <span><span className="font-medium">Time:</span> {formatDate(log.created_at)}</span>
@@ -682,8 +682,8 @@ export default function LogsPage() {
 
         {/* Pagination */}
         {pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-500 dark:text-gray-400">
+          <div className="flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-700/50 border-t border-slate-200 dark:border-slate-700">
+            <div className="text-sm text-slate-500 dark:text-slate-400">
               Showing <span className="font-medium">{((filters.offset || 0) + 1)}</span> to{' '}
               <span className="font-medium">{Math.min((filters.offset || 0) + logs.length, pagination.total)}</span> of{' '}
               <span className="font-medium">{pagination.total}</span> results
@@ -692,17 +692,17 @@ export default function LogsPage() {
               <button
                 onClick={() => handlePageChange(pagination.currentPage - 1)}
                 disabled={pagination.currentPage === 1}
-                className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="text-sm text-gray-600 dark:text-gray-400">
+              <span className="text-sm text-slate-600 dark:text-slate-400">
                 Page {pagination.currentPage} of {pagination.totalPages}
               </span>
               <button
                 onClick={() => handlePageChange(pagination.currentPage + 1)}
                 disabled={pagination.currentPage === pagination.totalPages}
-                className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>

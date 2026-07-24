@@ -116,7 +116,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
   // Render Role Selection Screen
   if (view === 'selection') {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
           {/* Header */}
           <div className="bg-blue-600 p-8 text-center">
@@ -129,51 +129,51 @@ function Login({ onLogin }: { onLogin: () => void }) {
 
           {/* Body */}
           <div className="p-8">
-            <p className="text-center text-gray-600 mb-6">Select your role to continue</p>
+            <p className="text-center text-slate-600 mb-6">Select your role to continue</p>
             
             <div className="space-y-3">
               <button
                 onClick={() => handleRoleSelect('admin')}
-                className="w-full flex items-center p-4 border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
+                className="w-full flex items-center p-4 border border-slate-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
               >
-                <div className="w-10 h-10 bg-gray-900 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
+                <div className="w-10 h-10 bg-slate-900 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
                   <Lock className="text-white w-5 h-5" />
                 </div>
                 <div className="ml-4 text-left">
-                  <h3 className="font-semibold text-gray-900">System Admin</h3>
-                  <p className="text-xs text-gray-500">Full system access with PIN</p>
+                  <h3 className="font-semibold text-slate-900">System Admin</h3>
+                  <p className="text-xs text-slate-500">Full system access with PIN</p>
                 </div>
               </button>
 
               <button
                 onClick={() => handleRoleSelect('chief')}
-                className="w-full flex items-center p-4 border border-gray-200 rounded-xl hover:border-purple-500 hover:bg-purple-50 transition-all group"
+                className="w-full flex items-center p-4 border border-slate-200 rounded-xl hover:border-purple-500 hover:bg-purple-50 transition-all group"
               >
                 <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
                   <Shield className="text-white w-5 h-5" />
                 </div>
                 <div className="ml-4 text-left">
-                  <h3 className="font-semibold text-gray-900">Agency Chief</h3>
-                  <p className="text-xs text-gray-500">Agency management access</p>
+                  <h3 className="font-semibold text-slate-900">Agency Chief</h3>
+                  <p className="text-xs text-slate-500">Agency management access</p>
                 </div>
               </button>
 
               <button
                 onClick={() => handleRoleSelect('officer')}
-                className="w-full flex items-center p-4 border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
+                className="w-full flex items-center p-4 border border-slate-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
               >
                 <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
                   <Mail className="text-white w-5 h-5" />
                 </div>
                 <div className="ml-4 text-left">
-                  <h3 className="font-semibold text-gray-900">Desk Officer</h3>
-                  <p className="text-xs text-gray-500">Incident handling access</p>
+                  <h3 className="font-semibold text-slate-900">Desk Officer</h3>
+                  <p className="text-xs text-slate-500">Incident handling access</p>
                 </div>
               </button>
             </div>
 
             <div className="mt-8 text-center">
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-slate-400">
                 Authorized personnel only. All access is logged.
               </p>
             </div>
@@ -205,7 +205,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
   const isEmailLogin = selectedRole === 'chief' || selectedRole === 'officer';
 
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
         {/* Header */}
         <div className="bg-blue-600 p-8 text-center">
@@ -230,11 +230,11 @@ function Login({ onLogin }: { onLogin: () => void }) {
             {isEmailLogin ? (
               <>
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
                     Email Address
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5 pointer-events-none" />
                     <input
                       ref={emailInputRef}
                       type="email"
@@ -248,7 +248,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                       className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors ${
                         errorMessage 
                           ? 'border-red-300 focus:ring-red-200 focus:border-red-500' 
-                          : 'border-gray-200 focus:ring-blue-200 focus:border-blue-500'
+                          : 'border-slate-200 focus:ring-blue-200 focus:border-blue-500'
                       }`}
                       placeholder={selectedRole === 'chief' ? "chief@agency.gov.ph" : "officer@agency.gov.ph"}
                     />
@@ -256,11 +256,11 @@ function Login({ onLogin }: { onLogin: () => void }) {
                 </div>
 
                 <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
                     Password
                   </label>
                   <div className="relative">
-                    <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
+                    <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5 pointer-events-none" />
                     <input
                       type="password"
                       value={password}
@@ -272,7 +272,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                       className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors ${
                         errorMessage 
                           ? 'border-red-300 focus:ring-red-200 focus:border-red-500' 
-                          : 'border-gray-200 focus:ring-blue-200 focus:border-blue-500'
+                          : 'border-slate-200 focus:ring-blue-200 focus:border-blue-500'
                       }`}
                       placeholder="••••••••"
                     />
@@ -281,11 +281,11 @@ function Login({ onLogin }: { onLogin: () => void }) {
               </>
             ) : (
               <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-slate-700 mb-2">
                   Enter Access PIN
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5 pointer-events-none" />
                   <input
                     ref={pinInputRef}
                     type="password"
@@ -294,7 +294,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
                     onFocus={(e) => e.currentTarget.select()}
                     autoFocus
                     maxLength={6}
-                    className="w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors border-gray-200 focus:ring-blue-200 focus:border-blue-500"
+                    className="w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-colors border-slate-200 focus:ring-blue-200 focus:border-blue-500"
                     placeholder="••••"
                   />
                 </div>
@@ -316,7 +316,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
           </form>
 
           <div className="mt-6 flex flex-col items-center gap-4">
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-slate-500">
                {/* Quick role switchers */}
                {selectedRole !== 'chief' && (
                  <button onClick={() => handleRoleSelect('chief')} className="text-blue-600 hover:underline mx-2">Chief Login</button>
@@ -331,13 +331,13 @@ function Login({ onLogin }: { onLogin: () => void }) {
 
             <button
               onClick={() => setView('selection')}
-              className="flex items-center text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              className="flex items-center text-sm text-slate-500 hover:text-slate-700 transition-colors"
             >
               <ArrowLeft className="w-4 h-4 mr-1" />
               Back to role selection
             </button>
             
-            <p className="text-xs text-gray-400 mt-2">
+            <p className="text-xs text-slate-400 mt-2">
               Use your agency credentials to sign in.
             </p>
           </div>

@@ -1,6 +1,7 @@
 import { AlertCircle, Check, Edit3, FileText, Flame, Plus, Save, Send, Shield, Trash2, User, Waves, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getSessionScope } from '../utils/sessionScope';
+import { getIncidentReference } from '../utils/incidentReference';
 
 interface FinalReportModalProps {
   isOpen: boolean;
@@ -374,6 +375,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
   const [draftStatus, setDraftStatus] = useState<'draft' | 'ready_for_review'>('draft');
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [showPublishConfirmation, setShowPublishConfirmation] = useState(false);
 
   // Agency-specific form data
   const [pnpForm, setPnpForm] = useState<PnpFormData>({ ...defaultPnpForm });
@@ -850,22 +852,18 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       return;
     }
 
-    if (!confirm('Publish this final report? This will finalize the incident.')) return;
-
     setSaving(true);
     try {
       const scope = getSessionScope();
 
-      // Save draft first if not exists
-      if (!draft) {
-        await window.api.saveFinalReportDraft({
-          incidentId: incident.id,
-          agencyType: agencyType,
-          draftDetails: getFormDetails(),
-          status: 'ready_for_review',
-          authorId: scope.userId || undefined
-        });
-      }
+      // Persist the reviewed values before promoting so late edits are not lost.
+      await window.api.saveFinalReportDraft({
+        incidentId: incident.id,
+        agencyType: agencyType,
+        draftDetails: getFormDetails(),
+        status: 'ready_for_review',
+        authorId: scope.userId || undefined
+      });
 
       await window.api.promoteFinalReportDraft({
         incidentId: incident.id,
@@ -873,6 +871,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       });
 
       onReportPublished();
+      setShowPublishConfirmation(false);
       onClose();
     } catch (error: any) {
       setSaveError(error.message || 'Failed to publish report');
@@ -915,6 +914,20 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     }
   };
 
+  const agencyColorClasses: Record<string, string> = {
+    blue: 'text-blue-600 border-blue-600 bg-blue-50/50 dark:bg-blue-900/10',
+    red: 'text-red-600 border-red-600 bg-red-50/50 dark:bg-red-900/10',
+    cyan: 'text-cyan-600 border-cyan-600 bg-cyan-50/50 dark:bg-cyan-900/10',
+    gray: 'text-slate-600 border-slate-600 bg-slate-50/50 dark:bg-slate-900/10',
+  } as const;
+
+  const agencySpinnerClasses: Record<string, string> = {
+    blue: 'border-blue-600',
+    red: 'border-red-600',
+    cyan: 'border-cyan-600',
+    gray: 'border-slate-600',
+  } as const;
+
   // Format details for display
   const formatReportDetails = (details: any) => {
     if (!details) return null;
@@ -946,17 +959,17 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
         return (
           <div className="space-y-2 mt-1">
             {content.map((person: any, idx: number) => (
-              <div key={idx} className="bg-gray-50 dark:bg-gray-700/50 p-2 rounded text-sm border border-gray-100 dark:border-gray-700">
-                <p className="font-medium text-gray-800 dark:text-gray-200">
+              <div key={idx} className="bg-slate-50 dark:bg-slate-700/50 p-2 rounded text-sm border border-slate-100 dark:border-slate-700">
+                <p className="font-medium text-slate-800 dark:text-slate-200">
                   {person.firstName} {person.middleName} {person.lastName}
                 </p>
-                {person.alias && <p className="text-xs text-gray-500">Alias: {person.alias}</p>}
+                {person.alias && <p className="text-xs text-slate-500">Alias: {person.alias}</p>}
                 {(person.address || person.occupation) && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-slate-500 mt-1">
                     {[person.address, person.occupation].filter(Boolean).join(' • ')}
                   </p>
                 )}
-                {person.status && <p className="text-xs text-gray-500">Status: {person.status}</p>}
+                {person.status && <p className="text-xs text-slate-500">Status: {person.status}</p>}
               </div>
             ))}
           </div>
@@ -966,7 +979,7 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
       return (
         <ul className="list-disc list-inside mt-1">
           {content.map((item: any, idx: number) => (
-            <li key={idx} className="text-gray-800 dark:text-gray-200">
+            <li key={idx} className="text-slate-800 dark:text-slate-200">
               {typeof item === 'object' ? JSON.stringify(item) : String(item)}
             </li>
           ))}
@@ -975,10 +988,10 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
     }
 
     if (typeof content === 'object' && content !== null) {
-      return <pre className="text-xs bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto">{JSON.stringify(content, null, 2)}</pre>;
+      return <pre className="text-xs bg-slate-50 dark:bg-slate-900 p-2 rounded overflow-x-auto">{JSON.stringify(content, null, 2)}</pre>;
     }
 
-    return <p className="mt-1 text-gray-800 dark:text-white whitespace-pre-wrap">{String(content)}</p>;
+    return <p className="mt-1 text-slate-800 dark:text-white whitespace-pre-wrap">{String(content)}</p>;
   };
 
   if (!isOpen) return null;
@@ -986,36 +999,38 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
   const color = getAgencyColor();
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4" style={{ isolation: 'isolate' }}>
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden relative z-10">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4" role="presentation" style={{ isolation: 'isolate' }}>
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden relative z-10" role="dialog" aria-modal="true" aria-labelledby="final-report-dialog-title">
         {/* Header */}
-        <div className={`p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between rounded-t-xl bg-gradient-to-r ${color === 'blue' ? 'from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/20' :
-          color === 'red' ? 'from-red-50 to-red-100 dark:from-red-900/30 dark:to-red-800/20' :
-            'from-cyan-50 to-cyan-100 dark:from-cyan-900/30 dark:to-cyan-800/20'
-          }`}>
+        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center gap-3">
             {getAgencyIcon()}
             <div>
-              <h2 className="text-lg font-bold text-gray-800 dark:text-white">
-                {agencyType.toUpperCase()} Final Report
+              <h2 id="final-report-dialog-title" className="text-lg font-bold text-slate-800 dark:text-white">
+                {agencyType.toUpperCase()} final report
               </h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Incident #{incident?.id?.slice(0, 8).toUpperCase()}
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                {getIncidentReference(incident || {})}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/50 dark:hover:bg-gray-700 rounded-lg transition-colors">
+          <button type="button" onClick={onClose} aria-label="Close final report dialog" className="min-h-10 min-w-10 flex items-center justify-center p-2 hover:bg-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-700 rounded-lg transition-colors">
             <X size={20} />
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-200 dark:border-gray-700">
+        <div role="tablist" aria-label="Final report views" className="flex border-b border-slate-200 dark:border-slate-700">
           <button
+            id="final-report-tab-draft"
+            type="button"
             onClick={() => setActiveTab('draft')}
-            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'draft'
-              ? `text-${color}-600 border-b-2 border-${color}-600 bg-${color}-50/50 dark:bg-${color}-900/10`
-              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+            role="tab"
+            aria-selected={activeTab === 'draft'}
+            aria-controls="final-report-panel-draft"
+            className={`min-h-11 flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${activeTab === 'draft'
+              ? agencyColorClasses[color]
+              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
               }`}
           >
             <Edit3 size={16} />
@@ -1023,17 +1038,22 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
             {draft && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${draftStatus === 'ready_for_review'
                 ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
-                : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
                 }`}>
                 {draftStatus === 'ready_for_review' ? 'Ready' : 'In Progress'}
               </span>
             )}
           </button>
           <button
+            id="final-report-tab-published"
+            type="button"
             onClick={() => setActiveTab('published')}
-            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'published'
-              ? `text-${color}-600 border-b-2 border-${color}-600 bg-${color}-50/50 dark:bg-${color}-900/10`
-              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+            role="tab"
+            aria-selected={activeTab === 'published'}
+            aria-controls="final-report-panel-published"
+            className={`min-h-11 flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${activeTab === 'published'
+              ? agencyColorClasses[color]
+              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
               }`}
           >
             <FileText size={16} />
@@ -1048,51 +1068,52 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
 
         {/* Error Banner */}
         {saveError && (
-          <div className="mx-6 mt-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-300">
+            <div role="alert" className="mx-6 mt-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-300">
             <AlertCircle size={18} />
             <span className="text-sm">{saveError}</span>
-            <button onClick={() => setSaveError(null)} className="ml-auto p-1 hover:bg-red-100 dark:hover:bg-red-800/50 rounded">
+            <button type="button" aria-label="Dismiss final report error" onClick={() => setSaveError(null)} className="ml-auto min-h-10 min-w-10 flex items-center justify-center p-1 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-800/50 rounded">
               <X size={14} />
             </button>
           </div>
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div id={`final-report-panel-${activeTab}`} role="tabpanel" aria-labelledby={`final-report-tab-${activeTab}`} tabIndex={0} className="flex-1 overflow-y-auto p-4 sm:p-5">
           {loading ? (
-            <div className="flex items-center justify-center h-64">
-              <div className={`animate-spin rounded-full h-12 w-12 border-b-2 border-${color}-600`}></div>
+            <div className="flex items-center justify-center h-64" role="status" aria-label="Loading final report">
+              <div className={`animate-spin rounded-full h-12 w-12 border-b-2 ${agencySpinnerClasses[color]}`}></div>
+              <span className="sr-only">Loading final report</span>
             </div>
           ) : activeTab === 'draft' ? (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* Incident Info Header */}
-              <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
-                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
+              <div className="bg-slate-50 dark:bg-slate-900 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
+                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
                   Incident Information
                 </h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                   <div>
-                    <span className="text-gray-500 dark:text-gray-400">Type:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">{incident?.agency_type?.toUpperCase()}</span>
+                    <span className="text-slate-500 dark:text-slate-400">Type:</span>
+                    <span className="ml-2 font-medium text-slate-800 dark:text-white">{incident?.agency_type?.toUpperCase()}</span>
                   </div>
                   <div>
-                    <span className="text-gray-500 dark:text-gray-400">Date:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">
+                    <span className="text-slate-500 dark:text-slate-400">Date:</span>
+                    <span className="ml-2 font-medium text-slate-800 dark:text-white">
                       {incident?.created_at ? new Date(incident.created_at).toLocaleString() : 'N/A'}
                     </span>
                   </div>
                   <div>
-                    <span className="text-gray-500 dark:text-gray-400">Reporter:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">{incident?.reporter_name || 'N/A'}</span>
+                    <span className="text-slate-500 dark:text-slate-400">Reporter:</span>
+                    <span className="ml-2 font-medium text-slate-800 dark:text-white">{incident?.reporter_name || 'N/A'}</span>
                   </div>
                   <div>
-                    <span className="text-gray-500 dark:text-gray-400">Location:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">{incident?.location_address || 'N/A'}</span>
+                    <span className="text-slate-500 dark:text-slate-400">Location:</span>
+                    <span className="ml-2 font-medium text-slate-800 dark:text-white">{incident?.location_address || 'N/A'}</span>
                   </div>
                 </div>
-                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-                  <span className="text-gray-500 dark:text-gray-400 text-sm">Description:</span>
-                  <p className="mt-1 text-sm text-gray-800 dark:text-white">{incident?.description || 'N/A'}</p>
+                <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+                  <span className="text-slate-500 dark:text-slate-400 text-sm">Description:</span>
+                  <p className="mt-1 text-sm text-slate-800 dark:text-white">{incident?.description || 'N/A'}</p>
                 </div>
               </div>
 
@@ -1104,20 +1125,26 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
               ) : agencyType === 'mdrrmo' ? (
                 <div className="space-y-4">
                   {/* MDRRMO specific sub-tabs */}
-                  <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                  <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
                     <button
-                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${mdrrmoReportType === 'emergency'
-                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                        : 'text-gray-500 dark:bg-gray-800 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                      type="button"
+                      aria-pressed={mdrrmoReportType === 'emergency'}
+                      disabled={readOnly}
+                      className={`min-h-10 flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 disabled:cursor-not-allowed disabled:opacity-60 ${mdrrmoReportType === 'emergency'
+                        ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-500 dark:bg-slate-800 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                         }`}
                       onClick={() => setMdrrmoReportType('emergency')}
                     >
                       Emergency Report
                     </button>
                     <button
-                      className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${mdrrmoReportType === 'disaster'
-                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                        : 'text-gray-500 dark:bg-gray-800 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                      type="button"
+                      aria-pressed={mdrrmoReportType === 'disaster'}
+                      disabled={readOnly}
+                      className={`min-h-10 flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 disabled:cursor-not-allowed disabled:opacity-60 ${mdrrmoReportType === 'disaster'
+                        ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-500 dark:bg-slate-800 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                         }`}
                       onClick={() => setMdrrmoReportType('disaster')}
                     >
@@ -1147,8 +1174,8 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
                   {/* Formatted display */}
                   <div className="space-y-3">
                     {formatReportDetails(existingFinalReport.report_details)?.map(([key, value]) => (
-                      <div key={key} className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-green-100 dark:border-green-800">
-                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                      <div key={key} className="bg-white dark:bg-slate-800 rounded-lg p-3 border border-green-100 dark:border-green-800">
+                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">
                           {key.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()}
                         </span>
                         {renderReportValue(key, value)}
@@ -1156,12 +1183,12 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
                     ))}
                   </div>
 
-                  <p className="text-xs text-gray-500 mt-4 pt-3 border-t border-green-200 dark:border-green-800">
+                  <p className="text-xs text-slate-500 mt-4 pt-3 border-t border-green-200 dark:border-green-800">
                     Completed at: {new Date(existingFinalReport.completed_at).toLocaleString()}
                   </p>
                 </div>
               ) : (
-                <div className="text-center py-12 text-gray-500">
+                <div className="text-center py-12 text-slate-500">
                   <FileText size={48} className="mx-auto mb-4 opacity-50" />
                   <p>No published report yet</p>
                   <p className="text-sm">Complete the draft and publish to finalize</p>
@@ -1173,12 +1200,13 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
 
         {/* Footer Actions */}
         {activeTab === 'draft' && (
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-900 rounded-b-xl">
+          <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              {draft && (
+              {draft && !readOnly && (
                 <button
+                  type="button"
                   onClick={handleDeleteDraft}
-                  className="px-4 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg flex items-center gap-2 transition-colors"
+                  className="flex min-h-10 items-center gap-2 rounded-lg px-4 py-2 text-red-600 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-900/20"
                 >
                   <Trash2 size={16} />
                   Delete Draft
@@ -1189,36 +1217,32 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
               {!readOnly && (
                 <>
                   <button
+                    type="button"
                     onClick={() => handleSaveDraft('draft')}
                     disabled={saving}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
+                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
                   >
                     <Save size={16} />
-                    {saving ? 'Saving...' : 'Save Draft'}
+                    {saving ? 'Saving...' : draftStatus === 'ready_for_review' ? 'Return to draft' : 'Save draft'}
                   </button>
-                  <button
-                    onClick={() => handleSaveDraft('ready_for_review')}
-                    disabled={saving}
-                    className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
-                  >
-                    <Send size={16} />
-                    Submit for Review
-                  </button>
-                  <button
-                    onClick={handlePublish}
-                    disabled={saving}
-                    className={`px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors text-white ${color === 'blue' ? 'bg-blue-600 hover:bg-blue-700' :
-                      color === 'red' ? 'bg-red-600 hover:bg-red-700' :
-                        'bg-cyan-600 hover:bg-cyan-700'
-                      }`}
-                  >
-                    <Check size={16} />
-                    Publish Final Report
-                  </button>
+                  {draftStatus === 'ready_for_review' ? (
+                    <>
+                      <button type="button" onClick={() => handleSaveDraft('ready_for_review')} disabled={saving} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-slate-800 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:hover:bg-slate-700">
+                        <Save size={16} /> Save reviewed changes
+                      </button>
+                      <button type="button" onClick={() => setShowPublishConfirmation(true)} disabled={saving} className={`flex min-h-10 items-center gap-2 rounded-lg px-4 py-2 font-semibold text-white transition-colors disabled:opacity-50 ${color === 'blue' ? 'bg-blue-600 hover:bg-blue-700' : color === 'red' ? 'bg-red-600 hover:bg-red-700' : 'bg-cyan-600 hover:bg-cyan-700'}`}>
+                        <Check size={16} /> Publish and close incident
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" onClick={() => handleSaveDraft('ready_for_review')} disabled={saving} className="flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white transition-colors hover:bg-blue-700 disabled:opacity-50">
+                      <Send size={16} /> Submit for review
+                    </button>
+                  )}
                 </>
               )}
               {readOnly && (
-                <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-lg flex items-center gap-2 italic">
+                <div className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded-lg flex items-center gap-2 italic">
                   <Shield size={16} />
                   Report is Locked (Incident Closed/Resolved)
                 </div>
@@ -1227,6 +1251,23 @@ export function FinalReportModal({ isOpen, onClose, incident, existingFinalRepor
           </div>
         )}
       </div>
+      {showPublishConfirmation && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 p-4" role="presentation">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-800" role="alertdialog" aria-modal="true" aria-labelledby="publish-report-title" aria-describedby="publish-report-description">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full bg-amber-100 p-2 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"><AlertCircle size={20} /></div>
+              <div>
+                <h3 id="publish-report-title" className="text-base font-semibold text-slate-900 dark:text-white">Publish official final report?</h3>
+                <p id="publish-report-description" className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">This creates the official record and closes the incident. Assignments may be released and the report can no longer be edited from this incident.</p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" onClick={() => setShowPublishConfirmation(false)} disabled={saving} className="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Continue reviewing</button>
+              <button type="button" onClick={handlePublish} disabled={saving} className="min-h-10 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">{saving ? 'Publishing...' : 'Publish and close'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1266,7 +1307,7 @@ function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
     <div className="space-y-6">
       {/* Case Number */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Case Number
         </label>
         <input
@@ -1274,14 +1315,14 @@ function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
           value={form.caseNumber}
           onChange={(e) => setForm(prev => ({ ...prev, caseNumber: e.target.value }))}
           disabled={readOnly}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           placeholder="e.g., 2024-001234"
         />
       </div>
 
       {/* Narrative */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Incident Narrative <span className="text-red-500">*</span>
         </label>
         <textarea
@@ -1292,7 +1333,7 @@ function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
           }}
           disabled={readOnly}
           rows={5}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent ${errors.narrative ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent ${errors.narrative ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
             }`}
           placeholder="Provide a detailed narrative of the incident, including what happened, when, and how..."
         />
@@ -1301,13 +1342,13 @@ function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
             <AlertCircle size={14} /> {errors.narrative}
           </p>
         )}
-        <p className="mt-1 text-xs text-gray-500">Minimum 20 characters required</p>
+        <p className="mt-1 text-xs text-slate-500">Minimum 20 characters required</p>
       </div>
 
       {/* Suspects Section */}
-      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+      <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+          <h3 className="font-semibold text-slate-800 dark:text-white flex items-center gap-2">
             <User size={18} className="text-red-500" />
             Suspects ({form.suspects.filter(s => s.firstName || s.lastName).length})
           </h3>
@@ -1338,9 +1379,9 @@ function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
       </div>
 
       {/* Victims Section */}
-      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+      <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-4">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+          <h3 className="font-semibold text-slate-800 dark:text-white flex items-center gap-2">
             <User size={18} className="text-blue-500" />
             Victims ({form.victims.filter(v => v.firstName || v.lastName).length})
           </h3>
@@ -1373,7 +1414,7 @@ function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
       {/* Evidence Count and Casualties Count */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Evidence Count
           </label>
           <input
@@ -1382,7 +1423,7 @@ function PnpForm({ form, setForm, errors, setErrors, readOnly }: {
             value={form.evidenceCount}
             onChange={(e) => setForm(prev => ({ ...prev, evidenceCount: parseInt(e.target.value) || 0 }))}
             disabled={readOnly}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         </div>
       </div>
@@ -1401,9 +1442,9 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove, readOn
   readOnly?: boolean;
 }) {
   return (
-    <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+    <div className="bg-slate-50 dark:bg-slate-900 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-sm font-medium text-gray-600 dark:text-gray-400">{type} {index + 1}</span>
+        <span className="text-sm font-medium text-slate-600 dark:text-slate-400">{type} {index + 1}</span>
         {canRemove && (
           <button
             type="button"
@@ -1421,7 +1462,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove, readOn
           onChange={(e) => onUpdate('firstName', e.target.value)}
           disabled={readOnly}
           placeholder="First Name"
-          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
         <input
           type="text"
@@ -1429,7 +1470,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove, readOn
           onChange={(e) => onUpdate('middleName', e.target.value)}
           disabled={readOnly}
           placeholder="Middle Name"
-          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
         <input
           type="text"
@@ -1437,7 +1478,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove, readOn
           onChange={(e) => onUpdate('lastName', e.target.value)}
           disabled={readOnly}
           placeholder="Last Name"
-          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
         <input
           type="text"
@@ -1445,7 +1486,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove, readOn
           onChange={(e) => onUpdate('address', e.target.value)}
           disabled={readOnly}
           placeholder="Address"
-          className="col-span-2 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="col-span-2 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
         <input
           type="text"
@@ -1453,7 +1494,7 @@ function PersonCard({ person, index, type, onUpdate, onRemove, canRemove, readOn
           onChange={(e) => onUpdate('occupation', e.target.value)}
           disabled={readOnly}
           placeholder="Occupation"
-          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
       </div>
     </div>
@@ -1474,7 +1515,7 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
     <div className="space-y-4">
       {/* Fire Location */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Fire Location <span className="text-red-500">*</span>
         </label>
         <input
@@ -1485,7 +1526,7 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
             if (errors.fireLocation) setErrors(prev => ({ ...prev, fireLocation: '' }));
           }}
           disabled={readOnly}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${errors.fireLocation ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${errors.fireLocation ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
             }`}
           placeholder="Exact location of the fire..."
         />
@@ -1498,14 +1539,14 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
 
       {/* Area Ownership */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Area Ownership
         </label>
         <select
           value={form.areaOwnership}
           onChange={(e) => setForm(prev => ({ ...prev, areaOwnership: e.target.value }))}
           disabled={readOnly}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
+          className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
         >
           <option value="">Select area ownership...</option>
           <optgroup label="Residential">
@@ -1544,7 +1585,7 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
 
       {/* Class of Fire */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Class of Fire <span className="text-red-500">*</span>
         </label>
         <select
@@ -1554,7 +1595,7 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
             if (errors.classOfFire) setErrors(prev => ({ ...prev, classOfFire: '' }));
           }}
           disabled={readOnly}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${errors.classOfFire ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent ${errors.classOfFire ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
             }`}
         >
           <option value="">Select class of fire...</option>
@@ -1573,14 +1614,14 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
 
       {/* Type of Alarm */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Type of Alarm
         </label>
         <select
           value={form.alarmType}
           onChange={(e) => setForm(prev => ({ ...prev, alarmType: e.target.value }))}
           disabled={readOnly}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
+          className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
         >
           <option value="">Select alarm type...</option>
           <option value="1st Alarm">1st Alarm (Daet FS units)</option>
@@ -1598,7 +1639,7 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
       {/* Victims Count & Estimated Damage */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Victims Count
           </label>
           <input
@@ -1607,12 +1648,12 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
             value={form.victimsCount}
             onChange={(e) => setForm(prev => ({ ...prev, victimsCount: parseInt(e.target.value) || 0 }))}
             disabled={readOnly}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
             placeholder="Number of victims/injured"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Estimated Damage (₱)
           </label>
           <input
@@ -1620,7 +1661,7 @@ function BfpForm({ form, setForm, errors, setErrors, readOnly }: {
             value={form.estimatedDamage}
             onChange={(e) => setForm(prev => ({ ...prev, estimatedDamage: e.target.value }))}
             disabled={readOnly}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
             placeholder="e.g., 500,000"
           />
         </div>
@@ -1644,7 +1685,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
       {/* Call Classification */}
       <div className="grid grid-cols-3 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Nature of Call <span className="text-red-500">*</span>
           </label>
           <select
@@ -1654,7 +1695,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
               if (errors.natureOfCall) setErrors(prev => ({ ...prev, natureOfCall: '' }));
             }}
             disabled={readOnly}
-            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.natureOfCall ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.natureOfCall ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
               }`}
           >
             <option value="">Select...</option>
@@ -1670,14 +1711,14 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Emergency Type
           </label>
           <select
             value={form.emergencyType}
             onChange={(e) => setForm(prev => ({ ...prev, emergencyType: e.target.value }))}
             disabled={readOnly}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           >
             <option value="">Select...</option>
             <option value="Medical">Medical</option>
@@ -1689,14 +1730,14 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Area Type
           </label>
           <select
             value={form.areaType}
             onChange={(e) => setForm(prev => ({ ...prev, areaType: e.target.value }))}
             disabled={readOnly}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           >
             <option value="">Select...</option>
             <option value="Urban">Urban</option>
@@ -1709,7 +1750,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
 
       {/* Incident Location */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Incident Location <span className="text-red-500">*</span>
         </label>
         <input
@@ -1720,7 +1761,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
             if (errors.incidentLocation) setErrors(prev => ({ ...prev, incidentLocation: '' }));
           }}
           disabled={readOnly}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.incidentLocation ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.incidentLocation ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
             }`}
         />
         {errors.incidentLocation && (
@@ -1751,7 +1792,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
                 value={(form as any)[key]}
                 onChange={(e) => setForm(prev => ({ ...prev, [key]: e.target.value }))}
                 disabled={readOnly}
-                className="w-full px-2 py-1.5 text-sm border border-cyan-300 dark:border-cyan-700 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+                className="w-full px-2 py-1.5 text-sm border border-cyan-300 dark:border-cyan-700 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
               />
             </div>
           ))}
@@ -1761,14 +1802,14 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
       {/* Facility Info */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Receiving Facility Type
           </label>
           <select
             value={form.facilityType}
             onChange={(e) => setForm(prev => ({ ...prev, facilityType: e.target.value }))}
             disabled={readOnly}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           >
             <option value="">Select...</option>
             <option value="Hospital">Hospital</option>
@@ -1778,7 +1819,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Facility Name
           </label>
           <input
@@ -1786,7 +1827,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
             value={form.facilityName}
             onChange={(e) => setForm(prev => ({ ...prev, facilityName: e.target.value }))}
             disabled={readOnly}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
             placeholder="Name of hospital/clinic..."
           />
         </div>
@@ -1810,7 +1851,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
         </div>
 
         {form.patients.length === 0 ? (
-          <p className="text-gray-500 dark:text-gray-400 text-sm text-center py-4">No patients added yet. Click "Add Patient" to add one.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm text-center py-4">No patients added yet. Click "Add Patient" to add one.</p>
         ) : (
           <div className="space-y-4">
             {form.patients.map((patient, index) => (
@@ -1846,7 +1887,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
 
       {/* Narrative */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Incident Narrative
         </label>
         <textarea
@@ -1854,7 +1895,7 @@ function MdrrmoForm({ form, setForm, errors, setErrors, readOnly }: {
           onChange={(e) => setForm(prev => ({ ...prev, narrative: e.target.value }))}
           disabled={readOnly}
           rows={4}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+          className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
           placeholder="Detailed narrative of the emergency response..."
         />
       </div>
@@ -1876,12 +1917,12 @@ function MdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
 }) {
   const [expanded, setExpanded] = useState(true);
 
-  const inputClass = "w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
-  const selectClass = "w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
-  const labelClass = "block text-xs text-gray-600 dark:text-gray-400 mb-1";
+  const inputClass = "w-full px-2 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
+  const selectClass = "w-full px-2 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-1 focus:ring-cyan-500";
+  const labelClass = "block text-xs text-slate-600 dark:text-slate-400 mb-1";
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg border border-cyan-300 dark:border-cyan-700 overflow-hidden">
+    <div className="bg-white dark:bg-slate-800 rounded-lg border border-cyan-300 dark:border-cyan-700 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-cyan-100 dark:bg-cyan-900/40 border-b border-cyan-200 dark:border-cyan-700">
         <button
@@ -2232,7 +2273,7 @@ function MdrrmoPatientCard({ patient, index, onUpdate, onUpdateVitals, onRemove,
                 onChange={(e) => onUpdate('patientNarrative', e.target.value)}
                 disabled={readOnly}
                 rows={2}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-cyan-500"
+                className="w-full px-2 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-1 focus:ring-cyan-500"
                 placeholder="Additional notes about this patient..."
               />
             </div>
@@ -2260,16 +2301,17 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
         <h4 className="font-medium text-cyan-800 dark:text-cyan-200 mb-3">Disaster Information</h4>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
               Disaster Type <span className="text-red-500">*</span>
             </label>
             <select
               value={form.disasterType}
+              disabled={readOnly}
               onChange={(e) => {
                 setForm(prev => ({ ...prev, disasterType: e.target.value }));
                 if (errors.disasterType) setErrors(prev => ({ ...prev, disasterType: '' }));
               }}
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.disasterType ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.disasterType ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
                 }`}
             >
               <option value="">Select...</option>
@@ -2290,17 +2332,18 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
           </div>
           {form.disasterType === 'Other' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Specify Disaster Type <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 value={form.disasterTypeOther}
+                disabled={readOnly}
                 onChange={(e) => {
                   setForm(prev => ({ ...prev, disasterTypeOther: e.target.value }));
                   if (errors.disasterTypeOther) setErrors(prev => ({ ...prev, disasterTypeOther: '' }));
                 }}
-                className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.disasterTypeOther ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+                className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.disasterTypeOther ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
                   }`}
                 placeholder="Specify other disaster type..."
               />
@@ -2313,17 +2356,18 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
           )}
         </div>
         <div className="mt-4">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
             Affected Area / Barangay(s) <span className="text-red-500">*</span>
           </label>
           <textarea
             value={form.affectedArea}
+            disabled={readOnly}
             onChange={(e) => {
               setForm(prev => ({ ...prev, affectedArea: e.target.value }));
               if (errors.affectedArea) setErrors(prev => ({ ...prev, affectedArea: '' }));
             }}
             rows={2}
-            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.affectedArea ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+            className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.affectedArea ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
               }`}
             placeholder="List affected areas, barangays, or sitios..."
           />
@@ -2345,8 +2389,9 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
               type="number"
               min="0"
               value={form.casualtiesDead}
+              disabled={readOnly}
               onChange={(e) => setForm(prev => ({ ...prev, casualtiesDead: parseInt(e.target.value) || 0 }))}
-              className="w-full px-3 py-2 border border-red-300 dark:border-red-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent text-center"
+              className="w-full px-3 py-2 border border-red-300 dark:border-red-700 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent text-center"
             />
           </div>
           <div>
@@ -2355,8 +2400,9 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
               type="number"
               min="0"
               value={form.casualtiesInjured}
+              disabled={readOnly}
               onChange={(e) => setForm(prev => ({ ...prev, casualtiesInjured: parseInt(e.target.value) || 0 }))}
-              className="w-full px-3 py-2 border border-orange-300 dark:border-orange-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent text-center"
+              className="w-full px-3 py-2 border border-orange-300 dark:border-orange-700 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent text-center"
             />
           </div>
           <div>
@@ -2365,31 +2411,34 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
               type="number"
               min="0"
               value={form.casualtiesMissing}
+              disabled={readOnly}
               onChange={(e) => setForm(prev => ({ ...prev, casualtiesMissing: parseInt(e.target.value) || 0 }))}
-              className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent text-center"
+              className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent text-center"
             />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Families Affected</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Families Affected</label>
             <input
               type="number"
               min="0"
               value={form.familiesAffected}
+              disabled={readOnly}
               onChange={(e) => setForm(prev => ({ ...prev, familiesAffected: parseInt(e.target.value) || 0 }))}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
               placeholder="Number of families"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Individuals Affected</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Individuals Affected</label>
             <input
               type="number"
               min="0"
               value={form.individualsAffected}
+              disabled={readOnly}
               onChange={(e) => setForm(prev => ({ ...prev, individualsAffected: parseInt(e.target.value) || 0 }))}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
               placeholder="Number of individuals"
             />
           </div>
@@ -2400,11 +2449,12 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
       <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-4 border border-orange-200 dark:border-orange-800">
         <h4 className="font-medium text-orange-800 dark:text-orange-200 mb-3">Damage Assessment</h4>
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Damage Level</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Damage Level</label>
           <select
             value={form.damageLevel}
+            disabled={readOnly}
             onChange={(e) => setForm(prev => ({ ...prev, damageLevel: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
           >
             <option value="">Select...</option>
             <option value="Minor">Minor</option>
@@ -2414,12 +2464,13 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Damage Details</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Damage Details</label>
           <textarea
             value={form.damageDetails}
+            disabled={readOnly}
             onChange={(e) => setForm(prev => ({ ...prev, damageDetails: e.target.value }))}
             rows={3}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
             placeholder="Describe infrastructure, property, or agricultural damage..."
           />
         </div>
@@ -2427,17 +2478,18 @@ function MdrrmoDisasterForm({ form, setForm, errors, setErrors, readOnly }: {
 
       {/* Narrative */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           Narrative Report <span className="text-red-500">*</span>
         </label>
         <textarea
           value={form.narrative}
+          disabled={readOnly}
           onChange={(e) => {
             setForm(prev => ({ ...prev, narrative: e.target.value }));
             if (errors.narrative) setErrors(prev => ({ ...prev, narrative: '' }));
           }}
           rows={4}
-          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.narrative ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+          className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-cyan-500 focus:border-transparent ${errors.narrative ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
             }`}
           placeholder="Provide a detailed chronological account of the disaster response..."
         />

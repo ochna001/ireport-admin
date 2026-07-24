@@ -1,8 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
-import { config } from 'dotenv';
+import { randomUUID } from 'crypto';
+import { config, parse } from 'dotenv';
 import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron';
-import { existsSync, writeFileSync } from 'fs';
-import fetch from 'node-fetch';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import fetch, { Headers as FetchHeaders, type RequestInit as FetchRequestInit, type Response as FetchResponse } from 'node-fetch';
 import { join } from 'path';
 import { getMunicipalityFromCoordinates, isInMunicipality } from './geoUtils';
 import { PushNotificationService } from './pushNotificationService';
@@ -46,6 +47,30 @@ for (const envPath of possibleEnvPaths) {
     config({ path: envPath });
     envLoaded = true;
     break;
+  }
+}
+
+// In the workspace dev setup the AI worker keeps its key in its own .env.
+// Import only that key when Admin has not supplied one explicitly; packaged
+// deployments should set AI_WORKER_API_KEY in the Admin .env/userData config.
+if (!process.env.AI_WORKER_API_KEY) {
+  const workerEnvPaths = [
+    process.env.AI_WORKER_ENV_PATH,
+    join(process.cwd(), '..', 'ireportAI-v1', '.env'),
+    join(__dirname, '..', '..', '..', 'ireportAI-v1', '.env'),
+  ].filter((path): path is string => Boolean(path));
+  for (const workerEnvPath of workerEnvPaths) {
+    if (!existsSync(workerEnvPath)) continue;
+    try {
+      const workerEnv = parse(readFileSync(workerEnvPath));
+      if (workerEnv.AI_WORKER_API_KEY) {
+        process.env.AI_WORKER_API_KEY = workerEnv.AI_WORKER_API_KEY.trim();
+        console.log('[Admin] Loaded AI worker authentication from:', workerEnvPath);
+        break;
+      }
+    } catch (error) {
+      console.warn('[Admin] Could not read AI worker environment:', error);
+    }
   }
 }
 
@@ -523,6 +548,10 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
   page?: number;
   pageSize?: number;
   search?: string;
+  sortBy?: string;
+  sortDirection?: 'asc' | 'desc';
+  from?: string;
+  to?: string;
 } = {}) => {
   const pageSize = filters.pageSize || 20;
   const page = filters.page || 1;
@@ -592,6 +621,12 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
   if (filters.status) {
     query = query.eq('status', filters.status);
   }
+  if (filters.from) {
+    query = query.gte('created_at', filters.from);
+  }
+  if (filters.to) {
+    query = query.lte('created_at', filters.to);
+  }
 
   // For municipality/barangay filtering, we need to handle both address-based and coordinate-based
   // First, apply address-based filter if barangay is specified
@@ -606,10 +641,13 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
     console.log('[Admin] Full-text searching incidents for:', searchTerm);
 
     // Check if search starts with # (short code search)
+    const incidentReferencePattern = /^INC-\d{4}-\d{5,}$/i;
     const shortCodePattern = /^#?([0-9a-fA-F]{2,8})$/;
     const shortCodeMatch = searchTerm.match(shortCodePattern);
 
-    if (shortCodeMatch) {
+    if (incidentReferencePattern.test(searchTerm)) {
+      query = query.eq('incident_reference', searchTerm.toUpperCase());
+    } else if (shortCodeMatch) {
       // Short code search (e.g., #1f, #1f2a, 1f, 1f2a)
       const code = shortCodeMatch[1].toLowerCase();
       console.log('[Admin] Short code search:', code);
@@ -651,7 +689,9 @@ ipcMain.handle('db:getIncidents', async (_event, filters: {
     }
   }
 
-  query = query.order('created_at', { ascending: false });
+  const allowedSorts = new Set(['created_at', 'status', 'agency_type', 'reporter_name', 'location_address', 'casualties_count']);
+  const sortBy = allowedSorts.has(filters.sortBy || '') ? filters.sortBy! : 'created_at';
+  query = query.order(sortBy, { ascending: filters.sortDirection === 'asc' });
 
   // Apply pagination or limit
   if (filters.limit) {
@@ -760,12 +800,35 @@ async function enrichIncidentsWithMultiAgency(incidents: any[]): Promise<any[]> 
 
   const incidentIds = incidents.map(i => i.id);
 
-  // Get agency counts for all incidents
-  const { data: agencyCounts } = await supabase
-    .from('incident_agencies')
-    .select('incident_id')
-    .in('incident_id', incidentIds)
-    .not('acknowledged_at', 'is', null);
+  const [agencyCountResult, recommendationResult, triageResult] = await Promise.all([
+    supabase
+      .from('incident_agencies')
+      .select('incident_id')
+      .in('incident_id', incidentIds)
+      .not('acknowledged_at', 'is', null),
+    supabase
+      .from('dispatch_recommendations')
+      .select('incident_id, primary_agency_id, dispatch_priority, state, recommendation_version')
+      .in('incident_id', incidentIds)
+      .in('state', ['ready', 'revised', 'needs_review'])
+      .order('recommendation_version', { ascending: false }),
+    supabase
+      .from('incident_triage_assessments')
+      .select('incident_id, severity, urgency, dispatch_priority')
+      .in('incident_id', incidentIds)
+      .eq('is_current', true),
+  ]);
+
+  const agencyCounts = agencyCountResult.data;
+  const recommendations = recommendationResult.error ? [] : recommendationResult.data || [];
+  const triageAssessments = triageResult.error ? [] : triageResult.data || [];
+
+  if (recommendationResult.error) {
+    console.warn('[Admin] Dispatch recommendation enrichment unavailable:', recommendationResult.error.message);
+  }
+  if (triageResult.error) {
+    console.warn('[Admin] Triage enrichment unavailable:', triageResult.error.message);
+  }
 
   // Count agencies per incident
   const countMap: Record<string, number> = {};
@@ -773,12 +836,47 @@ async function enrichIncidentsWithMultiAgency(incidents: any[]): Promise<any[]> 
     countMap[ia.incident_id] = (countMap[ia.incident_id] || 0) + 1;
   });
 
+  const latestRecommendationMap = new Map<string, any>();
+  recommendations.forEach(recommendation => {
+    if (!latestRecommendationMap.has(recommendation.incident_id)) {
+      latestRecommendationMap.set(recommendation.incident_id, recommendation);
+    }
+  });
+
+  const recommendedAgencyIds = [...new Set(
+    recommendations.map(recommendation => recommendation.primary_agency_id).filter(Boolean)
+  )];
+  const recommendedAgencyMap = new Map<number, string>();
+  if (recommendedAgencyIds.length > 0) {
+    const { data: recommendedAgencies, error: recommendedAgencyError } = await supabase
+      .from('agencies')
+      .select('id, short_name')
+      .in('id', recommendedAgencyIds);
+    if (recommendedAgencyError) {
+      console.warn('[Admin] Recommended agency labels unavailable:', recommendedAgencyError.message);
+    } else {
+      recommendedAgencies?.forEach(agency => recommendedAgencyMap.set(agency.id, agency.short_name));
+    }
+  }
+
+  const triageMap = new Map(triageAssessments.map(assessment => [assessment.incident_id, assessment]));
+
   // Enrich incidents
-  return incidents.map(incident => ({
-    ...incident,
-    is_multi_agency: (countMap[incident.id] || 0) > 0,
-    agencies_count: (countMap[incident.id] || 0) + 1 // +1 for primary agency
-  }));
+  return incidents.map(incident => {
+    const recommendation = latestRecommendationMap.get(incident.id);
+    const triage = triageMap.get(incident.id);
+    return {
+      ...incident,
+      is_multi_agency: (countMap[incident.id] || 0) > 0,
+      agencies_count: (countMap[incident.id] || 0) + 1,
+      recommended_agency_type: recommendation?.primary_agency_id
+        ? recommendedAgencyMap.get(recommendation.primary_agency_id) || null
+        : null,
+      triage_severity: triage?.severity ?? null,
+      triage_urgency: triage?.urgency ?? null,
+      dispatch_priority: recommendation?.dispatch_priority ?? triage?.dispatch_priority ?? null,
+    };
+  });
 }
 
 ipcMain.handle('db:getIncident', async (_event, id: string) => {
@@ -833,7 +931,120 @@ ipcMain.handle('db:getIncidentAIReport', async (_event, incidentId: string) => {
   }
 });
 
-ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, stationId, officerIds, primaryOfficerId, resourceIds, casualtiesCategory, casualtiesCount, releaseAssignments }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number; releaseAssignments?: boolean }) => {
+ipcMain.handle('db:getIncidentTriageAssessment', async (_event, incidentId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('incident_triage_assessments')
+      .select('*')
+      .eq('incident_id', incidentId)
+      .eq('is_current', true)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Admin] Failed to get structured triage assessment:', error);
+      return null;
+    }
+    return data;
+  } catch (error: any) {
+    console.error('[Admin] Error in getIncidentTriageAssessment:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('db:getDispatchRecommendation', async (_event, incidentId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('dispatch_recommendations')
+      .select('*, dispatch_candidates(*, dispatch_candidate_resources(*), dispatch_candidate_officers(*)), dispatch_recommendation_agencies(*)')
+      .eq('incident_id', incidentId)
+      .in('state', ['ready', 'revised'])
+      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+      .order('recommendation_version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Admin] Failed to get dispatch recommendation:', error);
+      return null;
+    }
+    return data;
+  } catch (error: any) {
+    console.error('[Admin] Error in getDispatchRecommendation:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('db:recordDispatchReviewFeedback', async (_event, params: {
+  incidentId: string;
+  recommendationId?: string | null;
+  reviewerId: string;
+  verdict: 'accepted' | 'modified' | 'rejected' | 'not_applicable';
+  actualIncidentType?: string;
+  actualSeverity?: number | null;
+  actualAgencyCodes?: string[];
+  finalCapabilities?: string[];
+  reasonCodes?: string[];
+  notes?: string;
+}) => {
+  const reviewer = await resolveValidProfileId(params.reviewerId);
+  if (!reviewer) throw new Error('A signed-in dispatch reviewer is required.');
+  const { data, error } = await supabase.rpc('record_dispatch_review_feedback', {
+    p_incident_id: params.incidentId,
+    p_recommendation_id: params.recommendationId || null,
+    p_reviewer_id: reviewer,
+    p_verdict: params.verdict,
+    p_actual_incident_type: params.actualIncidentType || null,
+    p_actual_severity: params.actualSeverity ?? null,
+    p_actual_agency_codes: params.actualAgencyCodes || [],
+    p_final_capabilities: params.finalCapabilities || [],
+    p_reason_codes: params.reasonCodes || [],
+    p_notes: params.notes || null,
+  });
+  if (error) throw new Error(error.message || 'Failed to record dispatch feedback.');
+  return data;
+});
+
+ipcMain.handle('db:getAIWeeklyMetrics', async () => {
+  const { data, error } = await supabase.from('ai_dispatch_weekly_metrics').select('*').order('week_start', { ascending: false }).limit(12);
+  if (error) {
+    console.error('[Admin] Failed to load AI weekly metrics:', error);
+    return [];
+  }
+  return data || [];
+});
+
+ipcMain.handle('db:approveDispatchRecommendation', async (_event, params: {
+  recommendationId: string;
+  incidentId: string;
+  stationId: number;
+  officerIds?: string[];
+  resourceIds?: number[];
+  approvedBy: string;
+  overrideReason?: string;
+}) => {
+  let approvedBy = params.approvedBy;
+  const approverProfile = await resolveValidProfileId(approvedBy);
+  if (!approverProfile) {
+    approvedBy = await resolvePinAdminProfileId();
+    console.warn('[Admin] Using the dedicated PIN-admin profile for dispatch approval.');
+  }
+  const { data, error } = await supabase.rpc('approve_dispatch_recommendation', {
+    p_recommendation_id: params.recommendationId,
+    p_incident_id: params.incidentId,
+    p_station_id: params.stationId,
+    p_officer_ids: params.officerIds || [],
+    p_resource_ids: params.resourceIds || [],
+    p_approved_by: approvedBy,
+    p_override_reason: params.overrideReason || null,
+  });
+  if (error) {
+    console.error('[Admin] Dispatch recommendation approval failed:', error);
+    throw new Error(error.message || 'Dispatch approval failed');
+  }
+  return data;
+});
+
+ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, updatedBy, updatedById, agencyType, stationId, officerIds, primaryOfficerId, resourceIds, casualtiesCategory, casualtiesCount, releaseAssignments }: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; agencyType?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number; releaseAssignments?: boolean }) => {
   const now = new Date().toISOString();
 
   try {
@@ -850,12 +1061,27 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       .eq('id', id)
       .single();
 
-    // Check if current incident is already terminal (resolved or closed)
-    // Terminal incidents cannot be modified without being explicitly re-opened
+    // Closed incidents are immutable. A resolved incident may still complete
+    // the administrative close transition after its final report is ready.
     const currentStatus = currentIncident?.status;
-    if (currentStatus === 'resolved' || currentStatus === 'closed') {
+    if (currentStatus === 'closed' || (currentStatus === 'resolved' && status !== 'closed')) {
       console.warn(`[Admin] Rejected update attempt on terminal incident ${id} (current status: ${currentStatus})`);
       throw new Error(`incident_is_locked: Incident is already ${currentStatus} and cannot be modified.`);
+    }
+
+    const normalizedAgencyType = String(agencyType || currentIncident?.agency_type || '').trim().toLowerCase();
+    const activeAssignmentStatus = ['assigned', 'in_progress', 'responding'].includes(status);
+    if (normalizedAgencyType && !['pnp', 'bfp', 'mdrrmo'].includes(normalizedAgencyType)) {
+      throw new Error('agency_required: Select a configured response agency before assigning this incident.');
+    }
+    if (activeAssignmentStatus && (!normalizedAgencyType || !stationId)) {
+      throw new Error('dispatch_plan_required: Select both a response agency and station before assigning responders.');
+    }
+    const pendingStationId = stationId ?? currentIncident?.assigned_station_id ?? null;
+    const pendingOfficerIds = officerIds ?? currentIncident?.assigned_officer_ids ?? [];
+    const pendingResourceIds = resourceIds ?? currentIncident?.assigned_resource_ids ?? [];
+    if (status === 'pending' && (pendingStationId || pendingOfficerIds.length > 0 || pendingResourceIds.length > 0)) {
+      throw new Error('status_assignment_conflict: Pending incidents cannot have a station, responders, or resources assigned. Change the status to Assigned or clear the assignment first.');
     }
 
     // Gate the transition INTO 'closed' on a completed dispatcher final report
@@ -882,6 +1108,7 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
       updated_at: now,
       updated_by: updatedBy  // Sync with incident_status_history
     };
+    if (agencyType !== undefined) updateData.agency_type = normalizedAgencyType || null;
     const oldOfficerIds: string[] = currentIncident?.assigned_officer_ids || [];
     const oldResourceIds: number[] = currentIncident?.assigned_resource_ids || [];
 
@@ -1000,10 +1227,19 @@ ipcMain.handle('db:updateIncidentStatus', async (_event, { id, status, notes, up
 
     // Handle station assignment
     if (stationId) {
+      const { data: station, error: stationError } = await supabase
+        .from('agency_stations')
+        .select('id, agencies!inner(short_name)')
+        .eq('id', stationId)
+        .maybeSingle();
+      const stationAgency = String((station as any)?.agencies?.short_name || '').trim().toLowerCase();
+      if (stationError || !station || stationAgency !== normalizedAgencyType) {
+        throw new Error('station_agency_mismatch: Choose a station belonging to the selected response agency.');
+      }
       // Explicit station assignment provided by admin
       updateData.assigned_station_id = stationId;
       console.log('[Admin] Explicit station assignment:', stationId);
-    } else if (!currentIncident?.assigned_station_id && status !== 'pending' && !isTerminalStatus) {
+    } else if (false) {
       // Auto-assign via the single authoritative DB-side function, which internally
       // defers to find_nearest_station and guards against overwriting an existing
       // assignment (Bug 1 fix — see assign_station_if_unset migration).
@@ -1415,7 +1651,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     // Get incidents for stats including location_address for area aggregation and created_at for trends
     let query = supabase
       .from('incidents')
-      .select('id, status, agency_type, location_address, latitude, longitude, created_at, first_response_at, resolved_at, assigned_station_id, casualties_category, casualties_count', { count: 'exact' });
+      .select('id, short_code, incident_reference, reference_year, reference_number, status, agency_type, description, location_address, latitude, longitude, created_at, first_response_at, resolved_at, assigned_station_id, assigned_officer_id, assigned_officer_ids, assigned_resource_ids, casualties_category, casualties_count, ai_severity', { count: 'exact' });
 
     if (filters?.from) {
       query = query.gte('created_at', filters.from);
@@ -1447,6 +1683,32 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     const responding = incidents?.filter(i => i.status === 'assigned' || i.status === 'in_progress' || i.status === 'responding').length || 0;
     // Map 'closed' to 'resolved' or keep separate
     const resolved = incidents?.filter(i => i.status === 'resolved' || i.status === 'closed').length || 0;
+    const activeStatuses = new Set(['pending', 'received', 'assigned', 'in_progress', 'responding']);
+    const activeIncidents = (incidents || []).filter(i => activeStatuses.has(i.status));
+    const unassigned = activeIncidents.filter(i => !i.assigned_station_id || (!i.assigned_officer_id && !(i.assigned_officer_ids?.length))).length;
+    const casualtyAlerts = activeIncidents.filter(i => (i.casualties_count || 0) > 0 || !!i.casualties_category).length;
+    const byStatusMap = new Map<string, number>();
+    (incidents || []).forEach(i => byStatusMap.set(i.status || 'unknown', (byStatusMap.get(i.status || 'unknown') || 0) + 1));
+    const byStatus = Array.from(byStatusMap.entries()).map(([status, count]) => ({ status, count }));
+    const awaitingDispatchDecision = (incidents || []).filter(i =>
+      i.status === 'pending' && (!i.agency_type || !['pnp', 'bfp', 'mdrrmo'].includes(String(i.agency_type).toLowerCase()))
+    ).length;
+    const nowMs = Date.now();
+    const overdue = activeIncidents.filter(i => !i.first_response_at && i.created_at && nowMs - new Date(i.created_at).getTime() > 15 * 60 * 1000).length;
+    const activeQueue = activeIncidents
+      .map(i => ({
+        ...i,
+        age_minutes: Math.max(0, Math.floor((nowMs - new Date(i.created_at).getTime()) / 60000)),
+        is_unassigned: !i.assigned_station_id || (!i.assigned_officer_id && !(i.assigned_officer_ids?.length)),
+        is_overdue: !i.first_response_at && nowMs - new Date(i.created_at).getTime() > 15 * 60 * 1000,
+      }))
+      .sort((a, b) => {
+        if (a.is_unassigned !== b.is_unassigned) return a.is_unassigned ? -1 : 1;
+        if (a.is_overdue !== b.is_overdue) return a.is_overdue ? -1 : 1;
+        if ((a.ai_severity || 0) !== (b.ai_severity || 0)) return (b.ai_severity || 0) - (a.ai_severity || 0);
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      })
+      .slice(0, 8);
 
     // Group by agency
     const agencyMap = new Map<string, number>();
@@ -1502,8 +1764,9 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     const incidentMetaMap = new Map(
       (incidents || []).map(i => [
         i.id,
-        {
-          agency_type: i.agency_type,
+         {
+           agency_type: i.agency_type,
+           incident_reference: i.incident_reference,
         }
       ])
     );
@@ -1561,7 +1824,8 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
               status: h.status,
               changed_by: displayName,
               changed_at: h.changed_at,
-              agency_type: incidentMeta?.agency_type || null,
+               agency_type: incidentMeta?.agency_type || null,
+               incident_reference: incidentMeta?.incident_reference || null,
             };
           });
         }
@@ -1573,6 +1837,8 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     // Calculate performance metrics directly from incidents table (more reliable)
     let avgResponseTime: number | null = null;
     let avgResolutionTime: number | null = null;
+    let responseSampleSize = 0;
+    let resolutionSampleSize = 0;
 
     try {
       // Use first_response_at and resolved_at from incidents table directly
@@ -1635,17 +1901,21 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
 
       if (responseTimes.length > 0) {
         avgResponseTime = Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length);
+        responseSampleSize = responseTimes.length;
       }
 
       if (resolutionTimes.length > 0) {
         avgResolutionTime = Math.round(resolutionTimes.reduce((a, b) => a + b, 0) / resolutionTimes.length);
+        resolutionSampleSize = resolutionTimes.length;
       }
     } catch (e) {
       console.error('[Admin] Failed to calculate performance metrics:', e);
     }
 
-    // Calculate daily incident trend based on the selected window (capped to 60 days for readability)
+    // Calculate the trend for the complete selected window. Long windows are aggregated
+    // so the label and data remain aligned without rendering hundreds of tiny bars.
     const dailyTrend: { date: string; count: number }[] = [];
+    let trendGranularity: 'day' | 'week' | 'month' = 'day';
     try {
       const toLocalDateStr = (date: Date) => {
         const y = date.getFullYear();
@@ -1661,11 +1931,6 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
       let endDate = end;
       const diffDays = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
 
-      // Cap to last 60 days for UI readability
-      if (diffDays > 59) {
-        startDate = new Date(endDate.getTime() - 59 * 24 * 60 * 60 * 1000);
-      }
-
       const cursor = new Date(startDate);
       while (cursor <= endDate) {
         const dateStr = toLocalDateStr(cursor);
@@ -1675,6 +1940,25 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
         }).length || 0;
         dailyTrend.push({ date: dateStr, count });
         cursor.setDate(cursor.getDate() + 1);
+      }
+
+      if (dailyTrend.length > 90) {
+        trendGranularity = dailyTrend.length > 240 ? 'month' : 'week';
+        const grouped = new Map<string, number>();
+        dailyTrend.forEach((day) => {
+          const date = new Date(`${day.date}T12:00:00`);
+          let key = day.date;
+          if (trendGranularity === 'month') {
+            key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+          } else {
+            const weekStart = new Date(date);
+            const dayOfWeek = weekStart.getDay() || 7;
+            weekStart.setDate(weekStart.getDate() - dayOfWeek + 1);
+            key = toLocalDateStr(weekStart);
+          }
+          grouped.set(key, (grouped.get(key) || 0) + day.count);
+        });
+        dailyTrend.splice(0, dailyTrend.length, ...Array.from(grouped.entries()).map(([date, count]) => ({ date, count })));
       }
     } catch (e) {
       console.error('[Admin] Failed to calculate daily trend:', e);
@@ -1711,12 +1995,22 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
       pending,
       responding,
       resolved,
+      active: activeIncidents.length,
+      unassigned,
+      overdue,
+      casualtyAlerts,
+      awaitingDispatchDecision,
+      activeQueue,
       byAgency,
+      byStatus,
       mostActiveArea: mostActiveArea ? { area: mostActiveArea, count: maxCount } : null,
       recentActivity,
       avgResponseTime,    // in minutes
       avgResolutionTime,  // in minutes
+      responseSampleSize,
+      resolutionSampleSize,
       dailyTrend,
+      trendGranularity,
       multiAgencyCount,   // count of multi-agency incidents for this agency
     };
 
@@ -1727,23 +2021,7 @@ ipcMain.handle('db:getStats', async (_event, filters?: { from?: string; to?: str
     return result;
   } catch (err: any) {
     console.error('[Admin] Error in getStats:', err);
-    // Return mock data when offline for testing
-    console.log('[Admin] Returning mock data for offline testing');
-    return {
-      total: 5,
-      pending: 2,
-      responding: 1,
-      resolved: 2,
-      byAgency: [
-        { agency_type: 'pnp', count: 2 },
-        { agency_type: 'bfp', count: 2 },
-        { agency_type: 'mdrrmo', count: 1 },
-      ],
-      mostActiveArea: null,
-      recentActivity: [],
-      _offline: true,
-      _error: err.message,
-    };
+    throw new Error(err?.message || 'Unable to load verified incident statistics');
   }
 });
 
@@ -2256,6 +2534,126 @@ ipcMain.handle('users:getAgencies', async () => {
   return data || [];
 });
 
+const normalizeAgencyInput = (value: unknown) => String(value || '').trim().replace(/\s+/g, ' ');
+const normalizeAgencyCode = (value: unknown) => normalizeAgencyInput(value).toUpperCase();
+
+ipcMain.handle('agencies:create', async (_event, agencyData: { name?: string; short_name?: string }) => {
+  const name = normalizeAgencyInput(agencyData?.name);
+  const shortName = normalizeAgencyCode(agencyData?.short_name);
+
+  if (name.length < 3 || name.length > 120) throw new Error('Agency name must be 3 to 120 characters.');
+  if (!/^[A-Z0-9-]{2,12}$/.test(shortName)) throw new Error('Agency code must be 2 to 12 letters, numbers, or hyphens.');
+
+  const { data, error } = await supabase
+    .from('agencies')
+    .insert({ name, short_name: shortName })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === '23505') throw new Error('An agency with that name or code already exists.');
+    throw new Error(error.message || 'Failed to create agency.');
+  }
+
+  await logSecurityAction(
+    'agency_created',
+    { agency_id: data.id, name, short_name: shortName },
+    undefined,
+    undefined,
+    'agency',
+    String(data.id)
+  );
+
+  clearCache('agencies');
+  clearCache('agencyStations');
+  return data;
+});
+
+ipcMain.handle('agencies:update', async (_event, { id, updates }: { id: number; updates: { name?: string; short_name?: string } }) => {
+  if (!Number.isInteger(id) || id <= 0) throw new Error('Invalid agency identifier.');
+
+  const { data: currentAgency, error: currentError } = await supabase
+    .from('agencies')
+    .select('id, name, short_name')
+    .eq('id', id)
+    .single();
+  if (currentError || !currentAgency) throw new Error('Agency not found.');
+
+  const name = normalizeAgencyInput(updates?.name);
+  const requestedCode = normalizeAgencyCode(updates?.short_name || currentAgency.short_name);
+  if (name.length < 3 || name.length > 120) throw new Error('Agency name must be 3 to 120 characters.');
+  if (requestedCode !== String(currentAgency.short_name).toUpperCase()) {
+    throw new Error('Agency codes cannot be changed after creation because dispatch records depend on them.');
+  }
+
+  const { error } = await supabase.from('agencies').update({ name }).eq('id', id);
+  if (error) {
+    if (error.code === '23505') throw new Error('An agency with that name already exists.');
+    throw new Error(error.message || 'Failed to update agency.');
+  }
+
+  await logSecurityAction(
+    'agency_updated',
+    { agency_id: id, previous_name: currentAgency.name, name },
+    undefined,
+    undefined,
+    'agency',
+    String(id)
+  );
+
+  clearCache('agencies');
+  clearCache('agencyStations');
+  return { success: true };
+});
+
+ipcMain.handle('agencies:delete', async (_event, id: number) => {
+  if (!Number.isInteger(id) || id <= 0) throw new Error('Invalid agency identifier.');
+
+  const { data: agency, error: agencyError } = await supabase
+    .from('agencies')
+    .select('id, name, short_name')
+    .eq('id', id)
+    .single();
+  if (agencyError || !agency) throw new Error('Agency not found.');
+
+  const [stationsResult, profilesResult, incidentsResult] = await Promise.all([
+    supabase.from('agency_stations').select('id', { count: 'exact', head: true }).eq('agency_id', id),
+    supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('agency_id', id),
+    supabase.from('incident_agencies').select('id', { count: 'exact', head: true }).eq('agency_id', id),
+  ]);
+
+  const dependencies = [
+    stationsResult.count ? `${stationsResult.count} station${stationsResult.count === 1 ? '' : 's'}` : '',
+    profilesResult.count ? `${profilesResult.count} user${profilesResult.count === 1 ? '' : 's'}` : '',
+    incidentsResult.count ? `${incidentsResult.count} incident record${incidentsResult.count === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
+  if (dependencies.length > 0) {
+    throw new Error(`Cannot delete ${agency.short_name} while it has ${dependencies.join(', ')}. Reassign or remove those records first.`);
+  }
+
+  const { error } = await supabase.from('agencies').delete().eq('id', id);
+  if (error) {
+    if (error.code === '23503') {
+      throw new Error('This agency is referenced by operational history and cannot be deleted. Edit its display name instead.');
+    }
+    throw new Error(error.message || 'Failed to delete agency.');
+  }
+
+  await logSecurityAction(
+    'agency_deleted',
+    { agency_id: id, name: agency.name, short_name: agency.short_name },
+    undefined,
+    undefined,
+    'agency',
+    String(id)
+  );
+
+  clearCache('agencies');
+  clearCache('agencyStations');
+  cache.delete('users');
+  return { success: true };
+});
+
 // ============================================
 // AGENCY STATIONS IPC HANDLERS
 // ============================================
@@ -2306,6 +2704,20 @@ ipcMain.handle('stations:update', async (_event, { id, updates }: { id: number; 
 });
 
 ipcMain.handle('stations:delete', async (_event, id: number) => {
+  const [resourcesResult, profilesResult, incidentsResult] = await Promise.all([
+    supabase.from('agency_resources').select('id', { count: 'exact', head: true }).eq('station_id', id),
+    supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('station_id', id),
+    supabase.from('incidents').select('id', { count: 'exact', head: true }).eq('assigned_station_id', id),
+  ]);
+  const dependencies = [
+    resourcesResult.count ? `${resourcesResult.count} resource${resourcesResult.count === 1 ? '' : 's'}` : '',
+    profilesResult.count ? `${profilesResult.count} user${profilesResult.count === 1 ? '' : 's'}` : '',
+    incidentsResult.count ? `${incidentsResult.count} incident record${incidentsResult.count === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
+  if (dependencies.length > 0) {
+    throw new Error(`Cannot delete this station while it has ${dependencies.join(', ')}. Reassign those records first.`);
+  }
+
   const { error } = await supabase
     .from('agency_stations')
     .delete()
@@ -2395,6 +2807,23 @@ ipcMain.handle('resources:update', async (_event, { id, updates }: { id: number;
 });
 
 ipcMain.handle('resources:delete', async (_event, id: number) => {
+  const { data: resource, error: resourceError } = await supabase
+    .from('agency_resources')
+    .select('id, name, status')
+    .eq('id', id)
+    .single();
+  if (resourceError || !resource) throw new Error('Resource not found.');
+  if (resource.status !== 'available') {
+    throw new Error(`Cannot delete ${resource.name} while it is ${resource.status}. Return it to available first.`);
+  }
+
+  const { count: reservationCount } = await supabase
+    .from('resource_reservations')
+    .select('id', { count: 'exact', head: true })
+    .eq('resource_id', id)
+    .eq('state', 'active');
+  if (reservationCount) throw new Error('Cannot delete a resource with an active dispatch reservation.');
+
   const { error } = await supabase
     .from('agency_resources')
     .delete()
@@ -2848,8 +3277,8 @@ ipcMain.handle('notifications:getByUser', async (_event, userId: string) => {
     // see ALL notifications (not just ones addressed to their generated ID).
     const isAdmin = await isAdminGeneratedId(userId);
     const baseQuery = !isAdmin && userId
-      ? supabase.from('notifications').select('*, incidents(id, agency_type, description)').eq('recipient_id', userId)
-      : supabase.from('notifications').select('*, incidents(id, agency_type, description)');
+      ? supabase.from('notifications').select('*, incidents(id, incident_reference, reference_year, reference_number, agency_type, description)').eq('recipient_id', userId)
+      : supabase.from('notifications').select('*, incidents(id, incident_reference, reference_year, reference_number, agency_type, description)');
 
     const { data, error } = await baseQuery
       .order('created_at', { ascending: false })
@@ -2879,6 +3308,33 @@ ipcMain.handle('notifications:getByUser', async (_event, userId: string) => {
   } catch (error) {
     console.error('[Admin] Failed to get notifications:', error);
     return [];
+  }
+});
+
+ipcMain.handle('notifications:getPage', async (_event, params: { userId: string; offset?: number; limit?: number; search?: string }) => {
+  try {
+    const offset = Math.max(0, params.offset || 0);
+    const limit = Math.min(100, Math.max(1, params.limit || 50));
+    const search = params.search?.trim().replace(/[%,()]/g, ' ');
+    const isAdmin = await isAdminGeneratedId(params.userId);
+    const buildQuery = (withIncidentJoin: boolean) => {
+      let query = !isAdmin && params.userId
+        ? supabase.from('notifications').select(withIncidentJoin ? '*, incidents(id, incident_reference, reference_year, reference_number, agency_type, description)' : '*').eq('recipient_id', params.userId)
+        : supabase.from('notifications').select(withIncidentJoin ? '*, incidents(id, incident_reference, reference_year, reference_number, agency_type, description)' : '*');
+
+      if (search) query = query.or(`title.ilike.%${search}%,body.ilike.%${search}%`);
+      return query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+    };
+
+    const joined = await buildQuery(true);
+    if (!joined.error) return { data: joined.data || [], hasMore: (joined.data || []).length === limit };
+
+    const fallback = await buildQuery(false);
+    if (fallback.error) throw fallback.error;
+    return { data: fallback.data || [], hasMore: (fallback.data || []).length === limit };
+  } catch (error) {
+    console.error('[Admin] Failed to get paginated notifications:', error);
+    return { data: [], hasMore: false };
   }
 });
 
@@ -3014,6 +3470,9 @@ ipcMain.handle('finalReportDrafts:promote', async (_event, { incidentId, authorI
 
     if (draftError || !draft) {
       throw new Error('Draft not found');
+    }
+    if (draft.status !== 'ready_for_review') {
+      throw new Error('Report must be submitted for review before it can be published.');
     }
 
     // Use draft author_id as fallback if authorId not provided
@@ -3390,6 +3849,76 @@ async function resolveValidProfileId(userId?: string): Promise<string | null> {
   if (!userId) return null;
   const { data } = await supabase.from('profiles').select('id').eq('id', userId).single();
   return data ? userId : null;
+}
+
+const PIN_ADMIN_PROFILE_EMAIL = 'pin-admin@system.ireport.local';
+// The deployed profiles_role_check predates the PIN admin and does not yet
+// include Admin. Chief is the highest dispatch role accepted by both schemas.
+const PIN_ADMIN_AUDIT_ROLE = 'Chief';
+
+async function resolvePinAdminProfileId(): Promise<string> {
+  const findPinAdminProfile = async () => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, role')
+      .eq('email', PIN_ADMIN_PROFILE_EMAIL)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  };
+
+  const existingProfile = await findPinAdminProfile();
+  if (existingProfile) {
+    if (!['Admin', PIN_ADMIN_AUDIT_ROLE].includes(existingProfile.role)) {
+      throw new Error('The PIN-admin audit profile does not have an authorized dispatch role.');
+    }
+    return existingProfile.id;
+  }
+
+  const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+    email: PIN_ADMIN_PROFILE_EMAIL,
+    password: `${randomUUID()}Aa1!`,
+    email_confirm: true,
+    user_metadata: {
+      full_name: 'System Admin (PIN)',
+      role: PIN_ADMIN_AUDIT_ROLE,
+      account_type: 'pin_admin_audit',
+    },
+  });
+  let auditAuthUser = authData.user;
+  const createdAuthUser = Boolean(auditAuthUser && !authError);
+
+  if (authError || !auditAuthUser) {
+    // Another app instance may have provisioned the identity concurrently.
+    const concurrentlyCreatedProfile = await findPinAdminProfile();
+    if (concurrentlyCreatedProfile && ['Admin', PIN_ADMIN_AUDIT_ROLE].includes(concurrentlyCreatedProfile.role)) {
+      return concurrentlyCreatedProfile.id;
+    }
+
+    // Recover an auth row left behind by an earlier failed profile insert.
+    const { data: usersData, error: usersError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    auditAuthUser = usersData?.users.find((user) => user.email?.toLowerCase() === PIN_ADMIN_PROFILE_EMAIL) || null;
+    if (usersError || !auditAuthUser) {
+      throw new Error(`Unable to provision the PIN-admin audit profile: ${authError?.message || usersError?.message || 'Auth user creation failed'}`);
+    }
+  }
+
+  const { error: profileError } = await supabase.from('profiles').upsert({
+    id: auditAuthUser.id,
+    display_name: 'System Admin (PIN)',
+    email: PIN_ADMIN_PROFILE_EMAIL,
+    role: PIN_ADMIN_AUDIT_ROLE,
+    agency_id: null,
+    station_id: null,
+    created_at: new Date().toISOString(),
+  }, { onConflict: 'id' });
+
+  if (profileError) {
+    if (createdAuthUser) await supabase.auth.admin.deleteUser(auditAuthUser.id);
+    throw new Error(`Unable to create the PIN-admin audit profile: ${profileError.message}`);
+  }
+
+  return auditAuthUser.id;
 }
 
 async function isAdminGeneratedId(userId?: string): Promise<boolean> {
@@ -4082,6 +4611,7 @@ ipcMain.handle(
 // ============================================
 
 let aiWorkerUrl = process.env.AI_WORKER_URL || 'http://127.0.0.1:8000';
+const aiWorkerApiKey = (process.env.AI_WORKER_API_KEY || '').trim();
 // VPS fallback: when the primary worker is offline, unreachable, or missing
 // cloud API keys (GROQ etc.), call endpoints transparently retry against this
 // host. Keeps the apps usable when the operator's local PC drops off.
@@ -4090,7 +4620,7 @@ let aiWorkerUrl = process.env.AI_WORKER_URL || 'http://127.0.0.1:8000';
 // NOT the Express LiveKit bridge at call.ochana0101.click — the bridge only
 // implements /token and /transcribe and 404s on /call/summarize, /analyze,
 // /chat, /config, /health.
-let aiFallbackWorkerUrl = process.env.AI_FALLBACK_WORKER_URL || 'http://75.119.142.12:8000';
+let aiFallbackWorkerUrl = process.env.AI_FALLBACK_WORKER_URL || '';
 
 const normalizeAIWorkerUrl = (url: string) => {
   const trimmed = (url || '').trim();
@@ -4106,7 +4636,7 @@ const normalizeFallbackUrl = (url: string) => (url || '').trim().replace(/\/+$/,
  * retried when they look like a missing-key / not-configured failure, since
  * the fallback (VPS) usually has the cloud keys.
  */
-const shouldFailoverOnResponse = async (response: Response): Promise<boolean> => {
+const shouldFailoverOnResponse = async (response: FetchResponse): Promise<boolean> => {
   if (response.status >= 500) return true;
   if (response.status === 503 || response.status === 502 || response.status === 504) return true;
   if (response.status >= 400 && response.status < 500) {
@@ -4141,16 +4671,18 @@ interface FetchWithFallbackOptions {
 }
 
 interface FetchWithFallbackResult {
-  response: Response;
+  response: FetchResponse;
   usedFallback: boolean;
   origin: string;
 }
 
-const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs: number): Promise<Response> => {
+const fetchWithTimeout = async (url: string, init: FetchRequestInit, timeoutMs: number): Promise<FetchResponse> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const headers = new FetchHeaders(init.headers || {});
+    if (aiWorkerApiKey) headers.set('X-API-Key', aiWorkerApiKey);
+    return await fetch(url, { ...init, headers, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -4174,14 +4706,14 @@ const buildWorkerUrls = (path: string, allowFallback: boolean): string[] => {
 
 const fetchWithFallback = async (
   path: string,
-  init: RequestInit,
+  init: FetchRequestInit,
   options: FetchWithFallbackOptions = {},
 ): Promise<FetchWithFallbackResult> => {
   const allowFallback = options.allowFallback !== false;
   const timeoutMs = options.timeoutMs ?? 90000;
   const urls = buildWorkerUrls(path, allowFallback);
   let lastError: any = null;
-  let lastResponse: Response | null = null;
+  let lastResponse: FetchResponse | null = null;
   let lastOrigin = '';
 
   for (let i = 0; i < urls.length; i++) {
@@ -4309,6 +4841,9 @@ ipcMain.handle('ai:triggerReanalysis', async (_event, incidentId: string) => {
       throw new Error(`AI worker error ${response.status}: ${text}`);
     }
     const result = await response.json().catch(() => ({}));
+    if (result?.status === 'error') {
+      throw new Error(result.reason || 'AI worker failed to refresh the analysis');
+    }
     return { success: true, ...result };
   } catch (error: any) {
     console.error('[Admin] Failed to trigger reanalysis:', error);

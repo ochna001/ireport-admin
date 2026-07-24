@@ -2,15 +2,75 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Design tokens — single source of truth.
+ * Semantic names map to Tailwind theme colors in tailwind.config.js
+ * (bg-surface, text-fg-muted, border-border-default, text-state-danger, …).
+ * Light values live in :root; dark overrides live in .dark.
+ */
 :root {
+  /* Brand + agency identity (identity, not state) */
   --primary: #2563eb;
   --primary-dark: #1d4ed8;
-  --pnp: #1e40af;
-  --bfp: #dc2626;
-  --mdrrmo: #0891b2;
-  --success: #16a34a;
-  --warning: #f59e0b;
-  --danger: #dc2626;
+  --agency-pnp: #1d4ed8;
+  --agency-bfp: #dc2626;
+  --agency-mdrrmo: #0891b2;
+
+  /* Surfaces */
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --surface-raised: #ffffff;
+
+  /* Foreground / text */
+  --fg-strong: #020617;   /* slate-950 */
+  --fg-default: #172033;
+  --fg-muted: #607089;
+  --fg-subtle: #94a3b8;   /* slate-400 */
+
+  /* Borders */
+  --border-subtle: #eef2f6;
+  --border-default: #dbe3ea;
+  --border-strong: #cbd5e1;
+
+  /* State (semantic) */
+  --state-info: #2563eb;
+  --state-success: #16a34a;
+  --state-warning: #f59e0b;
+  --state-danger: #dc2626;
+  --state-critical: #b91c1c;
+
+  /* Density */
+  --density-row: 42px;
+
+  /* Scrollbar */
+  --scrollbar-track: #f1f1f1;
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-thumb-hover: #a1a1a1;
+}
+
+.dark {
+  --surface: #0f172a;         /* slate-900 */
+  --surface-subtle: #020617;  /* slate-950 */
+  --surface-raised: #1e293b;  /* slate-800 */
+
+  --fg-strong: #ffffff;
+  --fg-default: #e2e8f0;      /* slate-200 */
+  --fg-muted: #94a3b8;        /* slate-400 */
+  --fg-subtle: #64748b;       /* slate-500 */
+
+  --border-subtle: #1e293b;   /* slate-800 */
+  --border-default: #334155;  /* slate-700 */
+  --border-strong: #475569;   /* slate-600 */
+
+  --state-info: #3b82f6;
+  --state-success: #22c55e;
+  --state-warning: #fbbf24;
+  --state-danger: #ef4444;
+  --state-critical: #f87171;
+
+  --scrollbar-track: #1e293b;
+  --scrollbar-thumb: #475569;
+  --scrollbar-thumb-hover: #64748b;
 }
 
 * {
@@ -26,57 +86,66 @@ body {
   overflow: hidden;
 }
 
-/* Custom scrollbar */
+button, a, input, select, textarea, [tabindex]:not([tabindex="-1"]) {
+  outline-offset: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: fixed;
+  left: 1rem;
+  top: -4rem;
+  z-index: 200;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #172033;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 0.2);
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+/* Custom scrollbar (theme-aware via CSS variables) */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
+  background: var(--scrollbar-thumb-hover);
 }
 
-/* Status badges */
-.status-pending {
-  @apply bg-yellow-100 text-yellow-800;
+@keyframes modal-pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.status-received {
-  @apply bg-blue-100 text-blue-800;
+.modal-panel {
+  animation: modal-pop-in 160ms ease-out;
 }
 
-.status-responding {
-  @apply bg-orange-100 text-orange-800;
+@keyframes drawer-slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
-.status-resolved {
-  @apply bg-green-100 text-green-800;
-}
-
-.status-cancelled {
-  @apply bg-gray-100 text-gray-800;
-}
-
-/* Agency colors */
-.agency-pnp {
-  @apply bg-blue-600;
-}
-
-.agency-bfp {
-  @apply bg-red-600;
-}
-
-.agency-mdrrmo {
-  @apply bg-cyan-600;
+.drawer-panel {
+  animation: drawer-slide-in 200ms ease-out;
 }
 
 @keyframes incidentPulse {
@@ -92,4 +161,17 @@ body {
 
 .incident-pulse-ring {
   animation: incidentPulse 1.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .incident-pulse-ring {
+    animation: none;
+  }
 }

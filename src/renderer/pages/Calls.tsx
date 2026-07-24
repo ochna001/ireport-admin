@@ -486,16 +486,16 @@ export default function Calls() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Emergency Calls</h1>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-white">Emergency Calls</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
             Incoming calls appear here — accept to assist the caller
           </p>
         </div>
         <div className="flex items-center gap-2">
           <select
-            className="border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900"
+            className="border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-900"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as CallSessionStatus | 'all')}
           >
@@ -504,7 +504,7 @@ export default function Calls() {
             ))}
           </select>
           <button
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-sm"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-sm"
             onClick={refreshSessions}
           >
             {loadingSessions ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
@@ -516,13 +516,13 @@ export default function Calls() {
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         {/* Session list sidebar */}
-        <div className="w-72 border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex flex-col">
-          <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 text-xs font-medium text-gray-500 uppercase tracking-wider">
+        <div className="w-72 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col">
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-500 uppercase tracking-wider">
             Calls ({sessions.length})
           </div>
           <div className="flex-1 overflow-auto">
             {sessions.length === 0 ? (
-              <div className="p-4 text-sm text-gray-500 text-center mt-8">
+              <div className="p-4 text-sm text-slate-500 text-center mt-8">
                 No calls yet. When a resident starts a call, it appears here.
               </div>
             ) : (
@@ -532,13 +532,13 @@ export default function Calls() {
                 const isActive = session.status === 'active';
                 const cls = isSelected
                   ? 'bg-blue-50 dark:bg-blue-950/30 border-l-2 border-l-blue-500'
-                  : 'border-l-2 border-l-transparent hover:bg-gray-50 dark:hover:bg-gray-800';
+                  : 'border-l-2 border-l-transparent hover:bg-slate-50 dark:hover:bg-slate-800';
 
                 return (
                   <button
                     key={session.id}
                     onClick={() => setSelectedSessionId(session.id)}
-                    className={`w-full text-left px-4 py-3 border-b border-gray-100 dark:border-gray-800 ${cls}`}
+                    className={`w-full text-left px-4 py-3 border-b border-slate-100 dark:border-slate-800 ${cls}`}
                   >
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium truncate">
@@ -550,13 +550,13 @@ export default function Calls() {
                             ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200'
                             : isActive
                               ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200'
-                              : 'bg-gray-100 dark:bg-gray-800 text-gray-500'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
                         }`}
                       >
                         {session.status}
                       </span>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1 flex items-center justify-between">
+                    <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
                       <span>{callerPhone(session.metadata)}</span>
                       <span>{fmt(session.created_at)}</span>
                     </div>
@@ -573,9 +573,9 @@ export default function Calls() {
         </div>
 
         {/* Detail panel */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-gray-50 dark:bg-gray-950">
+        <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
           {!activeCall ? (
-            <div className="flex-1 flex items-center justify-center text-gray-400">
+            <div className="flex-1 flex items-center justify-center text-slate-400">
               <div className="text-center">
                 <Phone className="w-12 h-12 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">Select a call or wait for an incoming emergency call</p>
@@ -590,14 +590,14 @@ export default function Calls() {
                     ? 'bg-amber-50 dark:bg-amber-950/20 border-b border-amber-200 dark:border-amber-800'
                     : activeCall.isActive
                       ? 'bg-emerald-50 dark:bg-emerald-950/20 border-b border-emerald-200 dark:border-emerald-800'
-                      : 'bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800'
+                      : 'bg-slate-100 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800'
                 }`}
               >
-                <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                <div className="text-2xl font-bold text-slate-900 dark:text-white">
                   {activeCall.isIncoming ? 'Incoming Call' : activeCall.isActive ? 'Connected' : 'Call Ended'}
                 </div>
                 {activeCall.isActive && (
-                  <div className="text-lg text-gray-600 dark:text-gray-400 font-mono mt-1">
+                  <div className="text-lg text-slate-600 dark:text-slate-400 font-mono mt-1">
                     {elfmt(activeCall.session.started_at)}
                   </div>
                 )}
@@ -609,7 +609,7 @@ export default function Calls() {
               </div>
 
               {/* Action buttons */}
-              <div className="px-6 py-4 flex items-center justify-center gap-4 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+              <div className="px-6 py-4 flex items-center justify-center gap-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
                 {activeCall.isIncoming && (
                   <>
                     <button
@@ -658,7 +658,7 @@ export default function Calls() {
                 )}
                 {activeCall.isEnded && (
                   <button
-                    className="inline-flex items-center gap-2 px-8 py-4 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-lg font-semibold"
+                    className="inline-flex items-center gap-2 px-8 py-4 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-lg font-semibold"
                     onClick={() => setSelectedSessionId('')}
                   >
                     <Phone className="w-6 h-6" />
@@ -669,7 +669,7 @@ export default function Calls() {
 
               {/* LiveKit audio controls */}
               {activeCall.isActive && (
-                <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 space-y-3">
+                <div className="px-6 py-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       {liveKit.connecting ? (
@@ -683,7 +683,7 @@ export default function Calls() {
                       ) : liveKit.error ? (
                         <span className="text-sm text-red-600">Voice error: {liveKit.error}</span>
                       ) : (
-                        <span className="text-sm text-gray-500">Voice not connected</span>
+                        <span className="text-sm text-slate-500">Voice not connected</span>
                       )}
                     </div>
                     {liveKit.connected && (
@@ -710,9 +710,9 @@ export default function Calls() {
                   {/* Transcription controls (chunk length + language) */}
                   <div className="grid grid-cols-2 gap-3 text-xs">
                     <div>
-                      <label className="text-gray-500 dark:text-gray-400 block mb-1">Transcribe every</label>
+                      <label className="text-slate-500 dark:text-slate-400 block mb-1">Transcribe every</label>
                       <select
-                        className="w-full border border-gray-300 dark:border-gray-700 rounded px-2 py-1 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                        className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                         value={transcriptionChunkMode}
                         onChange={(event) => saveTranscriptionChunkMode(event.target.value)}
                       >
@@ -726,9 +726,9 @@ export default function Calls() {
                       </select>
                     </div>
                     <div>
-                      <label className="text-gray-500 dark:text-gray-400 block mb-1">Language</label>
+                      <label className="text-slate-500 dark:text-slate-400 block mb-1">Language</label>
                       <select
-                        className="w-full border border-gray-300 dark:border-gray-700 rounded px-2 py-1 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                        className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                         value={transcriptionLanguage}
                         onChange={(event) => saveTranscriptionLanguage(event.target.value)}
                       >
@@ -743,9 +743,9 @@ export default function Calls() {
                   {/* Audio device controls */}
                   <div className="grid grid-cols-3 gap-3 text-xs">
                     <div>
-                      <label className="text-gray-500 dark:text-gray-400 block mb-1">Mic</label>
+                      <label className="text-slate-500 dark:text-slate-400 block mb-1">Mic</label>
                       <select
-                        className="w-full border border-gray-300 dark:border-gray-700 rounded px-2 py-1 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                        className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                         value={liveKit.selectedInput}
                         onChange={(e) => liveKit.setInputDevice(e.target.value)}
                         onClick={liveKit.refreshDevices}
@@ -757,9 +757,9 @@ export default function Calls() {
                       </select>
                     </div>
                     <div>
-                      <label className="text-gray-500 dark:text-gray-400 block mb-1">Speaker</label>
+                      <label className="text-slate-500 dark:text-slate-400 block mb-1">Speaker</label>
                       <select
-                        className="w-full border border-gray-300 dark:border-gray-700 rounded px-2 py-1 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                        className="w-full border border-slate-300 dark:border-slate-700 rounded px-2 py-1 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
                         value={liveKit.selectedOutput}
                         onChange={(e) => liveKit.setOutputDevice(e.target.value)}
                         onClick={liveKit.refreshDevices}
@@ -771,14 +771,14 @@ export default function Calls() {
                       </select>
                     </div>
                     <div>
-                      <label className="text-gray-500 dark:text-gray-400 block mb-1">
+                      <label className="text-slate-500 dark:text-slate-400 block mb-1">
                         Volume ({Math.round(liveKit.volume * 100)}%)
                       </label>
                       <div className="flex items-center gap-1">
                         {liveKit.volume === 0 ? (
-                          <VolumeX className="w-3 h-3 text-gray-400" />
+                          <VolumeX className="w-3 h-3 text-slate-400" />
                         ) : (
-                          <Volume2 className="w-3 h-3 text-gray-400" />
+                          <Volume2 className="w-3 h-3 text-slate-400" />
                         )}
                         <input
                           type="range"
@@ -811,19 +811,19 @@ export default function Calls() {
               )}
 
               {/* Reporter info */}
-              <div className="px-6 py-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+              <div className="px-6 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
                 <div className="grid grid-cols-3 gap-4 text-sm">
                   <div>
-                    <span className="text-gray-500 dark:text-gray-400">Caller</span>
-                    <div className="font-medium text-gray-900 dark:text-white">{callerLabel(activeCall.session.metadata)}</div>
+                    <span className="text-slate-500 dark:text-slate-400">Caller</span>
+                    <div className="font-medium text-slate-900 dark:text-white">{callerLabel(activeCall.session.metadata)}</div>
                   </div>
                   <div>
-                    <span className="text-gray-500 dark:text-gray-400">Phone</span>
-                    <div className="font-medium text-gray-900 dark:text-white">{callerPhone(activeCall.session.metadata)}</div>
+                    <span className="text-slate-500 dark:text-slate-400">Phone</span>
+                    <div className="font-medium text-slate-900 dark:text-white">{callerPhone(activeCall.session.metadata)}</div>
                   </div>
                   <div>
-                    <span className="text-gray-500 dark:text-gray-400">Location</span>
-                    <div className="font-medium text-gray-900 dark:text-white">{callerLocation(activeCall.session.metadata)}</div>
+                    <span className="text-slate-500 dark:text-slate-400">Location</span>
+                    <div className="font-medium text-slate-900 dark:text-white">{callerLocation(activeCall.session.metadata)}</div>
                   </div>
                 </div>
               </div>
@@ -831,10 +831,10 @@ export default function Calls() {
               <div className="flex-1 overflow-auto p-6 space-y-4">
                 {/* Call recording — full mixed audio (resident + admin), playable + downloadable */}
                 {(callRecorder.recording || callRecorder.recordingUrl) && (
-                  <div className="border border-gray-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900 p-4 space-y-3">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-sm font-medium">
-                        <Disc className={`w-4 h-4 ${callRecorder.recording ? 'text-red-500 animate-pulse' : 'text-gray-400'}`} />
+                        <Disc className={`w-4 h-4 ${callRecorder.recording ? 'text-red-500 animate-pulse' : 'text-slate-400'}`} />
                         Call Recording
                         {callRecorder.recording && (
                           <span className="text-xs text-red-600 font-normal">Recording…</span>
@@ -844,7 +844,7 @@ export default function Calls() {
                         <a
                           href={callRecorder.recordingUrl}
                           download={`call-${selectedSession?.room || 'recording'}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.webm`}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
                         >
                           <Download className="w-3 h-3" />
                           Download
@@ -860,7 +860,7 @@ export default function Calls() {
                         preload="metadata"
                       />
                     ) : (
-                      <div className="text-xs text-gray-500">Audio will appear here when the call ends.</div>
+                      <div className="text-xs text-slate-500">Audio will appear here when the call ends.</div>
                     )}
                     {callRecorder.error && (
                       <div className="text-xs text-amber-600">{callRecorder.error}</div>
@@ -869,9 +869,9 @@ export default function Calls() {
                 )}
 
                 {/* Call notes / Transcript */}
-                <div className="border border-gray-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900">
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900">
                   <button
-                    className="w-full px-4 py-3 flex items-center justify-between text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 rounded-t-xl"
+                    className="w-full px-4 py-3 flex items-center justify-between text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-800 rounded-t-xl"
                     onClick={() => setTranscriptOpen(!transcriptOpen)}
                   >
                     <span>Call Notes ({transcripts.length} lines)</span>
@@ -879,21 +879,21 @@ export default function Calls() {
                   </button>
                   {transcriptOpen && (
                     <div className="px-4 pb-3 space-y-2">
-                      <div className="h-48 overflow-auto border border-gray-200 dark:border-gray-800 rounded-lg p-3 space-y-2 bg-gray-50 dark:bg-gray-950 text-sm">
-                        {loadingTranscripts && <Loader2 className="w-4 h-4 animate-spin text-gray-500 mx-auto" />}
+                      <div className="h-48 overflow-auto border border-slate-200 dark:border-slate-800 rounded-lg p-3 space-y-2 bg-slate-50 dark:bg-slate-950 text-sm">
+                        {loadingTranscripts && <Loader2 className="w-4 h-4 animate-spin text-slate-500 mx-auto" />}
                         {!loadingTranscripts && transcripts.length === 0 && (
-                          <div className="text-gray-500">No transcript lines yet.</div>
+                          <div className="text-slate-500">No transcript lines yet.</div>
                         )}
                         {transcripts.map((line) => (
                           <div key={line.id || `${line.created_at}-${line.text}`}>
-                            <span className="uppercase text-[10px] tracking-wide text-gray-500 mr-2">{line.speaker || 'caller'}</span>
-                            <span className="text-gray-800 dark:text-gray-200">{line.text}</span>
+                            <span className="uppercase text-[10px] tracking-wide text-slate-500 mr-2">{line.speaker || 'caller'}</span>
+                            <span className="text-slate-800 dark:text-slate-200">{line.text}</span>
                           </div>
                         ))}
                       </div>
                       <div className="flex items-center gap-2">
                         <input
-                          className="flex-1 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900"
+                          className="flex-1 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-900"
                           placeholder="Add a note..."
                           value={dispatcherLine}
                           onChange={(event) => setDispatcherLine(event.target.value)}
@@ -902,7 +902,7 @@ export default function Calls() {
                           }}
                         />
                         <button
-                          className="px-3 py-2 rounded-lg bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 text-sm disabled:opacity-60"
+                          className="px-3 py-2 rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 text-sm disabled:opacity-60"
                           onClick={addDispatcherLine}
                           disabled={!selectedSessionId || !dispatcherLine.trim() || sendingLine}
                         >
@@ -915,7 +915,7 @@ export default function Calls() {
 
                 {/* AI Draft — secondary, post-call focused */}
                 {(activeCall.isActive || activeCall.isEnded || transcripts.length > 0) && (
-                  <div className="border border-gray-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900 p-4 space-y-3">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-medium">AI Incident Draft</div>
                       <div className="flex gap-2">
@@ -938,12 +938,12 @@ export default function Calls() {
                     </div>
 
                     {callSummaryDraft && (
-                      <div className="text-sm border border-gray-200 dark:border-gray-800 rounded-lg p-3 bg-gray-50 dark:bg-gray-950 space-y-2">
-                        <div><span className="text-gray-500">Agency:</span> {callSummaryDraft.recommended_agency || 'mdrrmo'}</div>
-                        <div><span className="text-gray-500">Severity:</span> {callSummaryDraft.severity ?? '—'}</div>
+                      <div className="text-sm border border-slate-200 dark:border-slate-800 rounded-lg p-3 bg-slate-50 dark:bg-slate-950 space-y-2">
+                        <div><span className="text-slate-500">Agency:</span> {callSummaryDraft.recommended_agency || 'mdrrmo'}</div>
+                        <div><span className="text-slate-500">Severity:</span> {callSummaryDraft.severity ?? '—'}</div>
                         <div className="whitespace-pre-wrap">{callSummaryDraft.description || 'No description generated.'}</div>
                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <label className="text-xs text-gray-500">Reporter age:</label>
+                          <label className="text-xs text-slate-500">Reporter age:</label>
                           <input
                             type="number"
                             min={13}
@@ -951,19 +951,19 @@ export default function Calls() {
                             placeholder="13–120"
                             value={reporterAgeInput}
                             onChange={(event) => setReporterAgeInput(event.target.value)}
-                            className="w-24 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-xs bg-white dark:bg-gray-900"
+                            className="w-24 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs bg-white dark:bg-slate-900"
                           />
-                          <span className="text-[11px] text-gray-400">defaults to 18 if blank</span>
+                          <span className="text-[11px] text-slate-400">defaults to 18 if blank</span>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <label className="text-xs text-gray-500">Incident location:</label>
+                          <label className="text-xs text-slate-500">Incident location:</label>
                           <input
                             type="number"
                             step="any"
                             placeholder="Lat (e.g. 14.1124)"
                             value={incidentLatInput}
                             onChange={(event) => setIncidentLatInput(event.target.value)}
-                            className="w-32 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-xs bg-white dark:bg-gray-900"
+                            className="w-32 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs bg-white dark:bg-slate-900"
                           />
                           <input
                             type="number"
@@ -971,9 +971,9 @@ export default function Calls() {
                             placeholder="Lon (e.g. 122.9550)"
                             value={incidentLonInput}
                             onChange={(event) => setIncidentLonInput(event.target.value)}
-                            className="w-36 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 text-xs bg-white dark:bg-gray-900"
+                            className="w-36 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs bg-white dark:bg-slate-900"
                           />
-                          <span className="text-[11px] text-gray-400">
+                          <span className="text-[11px] text-slate-400">
                             defaults to reporter GPS, then Daet centroid
                           </span>
                         </div>
@@ -994,9 +994,9 @@ export default function Calls() {
       </div>
 
       {/* Advanced / Troubleshooting panel */}
-      <div className="border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+      <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
         <button
-          className="w-full px-6 py-2 flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          className="w-full px-6 py-2 flex items-center gap-2 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
           onClick={() => setAdvancedOpen(!advancedOpen)}
         >
           <Settings className="w-3 h-3" />
@@ -1006,17 +1006,17 @@ export default function Calls() {
         {advancedOpen && (
           <div className="px-6 pb-4 space-y-3">
             <div>
-              <div className="text-xs text-gray-500 mb-1">Call Web Base URL</div>
+              <div className="text-xs text-slate-500 mb-1">Call Web Base URL</div>
               <div className="flex items-center gap-2">
                 <input
-                  className="flex-1 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900"
+                  className="flex-1 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-900"
                   value={callWebUrl}
                   onChange={(event) => setCallWebUrl(event.target.value)}
                   onBlur={saveCallWebUrl}
                   placeholder="https://ireport-call-test.onrender.com"
                 />
                 <button
-                  className="px-3 py-2 rounded-lg bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 text-sm"
+                  className="px-3 py-2 rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 text-sm"
                   onClick={saveCallWebUrl}
                 >
                   Save
@@ -1024,14 +1024,14 @@ export default function Calls() {
               </div>
             </div>
 
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-slate-500">
               Dispatcher ID: {currentUserId || 'Not available'}
             </div>
 
             <div>
-              <div className="text-xs text-gray-500 mb-1">Live Transcription Language</div>
+              <div className="text-xs text-slate-500 mb-1">Live Transcription Language</div>
               <select
-                className="border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900"
+                className="border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-900"
                 value={transcriptionLanguage}
                 onChange={(event) => saveTranscriptionLanguage(event.target.value)}
               >
@@ -1042,9 +1042,9 @@ export default function Calls() {
             </div>
 
             <div>
-              <div className="text-xs text-gray-500 mb-1">Live Transcription Chunk Time</div>
+              <div className="text-xs text-slate-500 mb-1">Live Transcription Chunk Time</div>
               <select
-                className="border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900"
+                className="border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-900"
                 value={transcriptionChunkMode}
                 onChange={(event) => saveTranscriptionChunkMode(event.target.value)}
               >
@@ -1061,19 +1061,19 @@ export default function Calls() {
             {activeCall && (
               <div className="flex flex-wrap gap-2">
                 <button
-                  className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs"
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs"
                   onClick={copyRoomId}
                 >
                   Copy Room ID
                 </button>
                 <button
-                  className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs"
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs"
                   onClick={copyResidentBridgeLink}
                 >
                   Copy Resident Link
                 </button>
                 <button
-                  className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 text-xs"
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs"
                   onClick={copyAdminBridgeLink}
                 >
                   Copy Admin Link

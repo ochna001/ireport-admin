@@ -326,15 +326,68 @@ export const municipalityBounds: Record<string, { minLat: number; maxLat: number
   Vinzons: { minLat: 14.15, maxLat: 14.25, minLng: 122.88, maxLng: 123.00 },
 };
 
-// Get municipality from coordinates
-export const getMunicipalityFromCoordinates = (lat: number, lng: number): string | null => {
-  for (const [municipality, bounds] of Object.entries(municipalityBounds)) {
-    if (lat >= bounds.minLat && lat <= bounds.maxLat && lng >= bounds.minLng && lng <= bounds.maxLng) {
-      return municipality;
+// Boundary data: PSA PSGC 2023-10-24 / NAMRIA 2023-11-06, bundled via
+// bendlikeabamboo/barangay-boundaries-repository (MIT). Simplified to ~500m.
+import barangayGeoData from './camarinesNorteBarangays.json';
+
+function pointInPolygon(x: number, y: number, polygon: number[][]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInGeometry(lng: number, lat: number, geometry: any): boolean {
+  if (!geometry) return false;
+  if (geometry.type === 'Polygon') {
+    if (!pointInPolygon(lng, lat, geometry.coordinates[0])) return false;
+    for (let i = 1; i < geometry.coordinates.length; i++) {
+      if (pointInPolygon(lng, lat, geometry.coordinates[i])) return false;
+    }
+    return true;
+  }
+  if (geometry.type === 'MultiPolygon') {
+    for (const poly of geometry.coordinates) {
+      if (pointInPolygon(lng, lat, poly[0])) {
+        let inHole = false;
+        for (let i = 1; i < poly.length; i++) {
+          if (pointInPolygon(lng, lat, poly[i])) { inHole = true; break; }
+        }
+        if (!inHole) return true;
+      }
     }
   }
-  return null;
+  return false;
+}
+
+// Resolve a coordinate to barangay + municipality via barangay polygons.
+export const resolveLocationFromCoordinates = (lat: number, lng: number): { municipality: string | null; barangay: string | null } => {
+  const features = (barangayGeoData as any).features || [];
+  for (const f of features) {
+    if (pointInGeometry(lng, lat, f.geometry)) {
+      return { municipality: f.properties?.ADM3_EN ?? null, barangay: f.properties?.ADM4_EN ?? null };
+    }
+  }
+  // Envelope fallback for coastal/island gaps not covered by barangay polygons.
+  for (const [municipality, bounds] of Object.entries(municipalityBounds)) {
+    if (lat >= bounds.minLat && lat <= bounds.maxLat && lng >= bounds.minLng && lng <= bounds.maxLng) {
+      return { municipality, barangay: null };
+    }
+  }
+  return { municipality: null, barangay: null };
 };
+
+// Get barangay from coordinates (null if outside all barangay polygons).
+export const getBarangayFromCoordinates = (lat: number, lng: number): string | null =>
+  resolveLocationFromCoordinates(lat, lng).barangay;
+
+// Get municipality from coordinates (barangay-first, then envelope fallback).
+export const getMunicipalityFromCoordinates = (lat: number, lng: number): string | null =>
+  resolveLocationFromCoordinates(lat, lng).municipality;
 
 // Extract municipality from address string
 export const extractMunicipalityFromAddress = (address: string): string | null => {

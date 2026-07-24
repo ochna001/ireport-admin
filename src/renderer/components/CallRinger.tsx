@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Volume2, VolumeX } from 'lucide-react';
+import { ArrowRight, PhoneIncoming, Volume2, VolumeX } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 interface Props {
   active: boolean;
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export default function CallRinger({ active, muted, onUnmute }: Props) {
+  const navigate = useNavigate();
   const ctxRef = useRef<AudioContext | null>(null);
   const osc1Ref = useRef<OscillatorNode | null>(null);
   const osc2Ref = useRef<OscillatorNode | null>(null);
@@ -108,33 +110,46 @@ export default function CallRinger({ active, muted, onUnmute }: Props) {
 
   if (!active) return null;
 
-  if (blocked || !startedRef.current) {
-    return (
-      <div className="fixed top-4 right-4 z-50">
+  const audioUnavailable = blocked || !startedRef.current || muted;
+
+  return (
+    <section
+      role="alert"
+      aria-live="assertive"
+      className="sticky top-0 z-50 flex min-h-16 items-center justify-between gap-4 border-b border-red-800 bg-red-700 px-5 py-3 text-white shadow-lg"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15">
+          <PhoneIncoming className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <p className="font-semibold">Incoming emergency call</p>
+          <p className="text-sm text-red-100">
+            Open the call queue to review caller details and respond.
+            {audioUnavailable ? ' Audio alert is unavailable.' : ''}
+          </p>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {audioUnavailable && (
+          <button
+            type="button"
+            onClick={onUnmute}
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-white/35 px-3 py-2 text-sm font-medium hover:bg-white/10"
+          >
+            {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            Enable sound
+          </button>
+        )}
         <button
-          onClick={onUnmute}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-sm font-medium shadow-lg animate-pulse"
+          type="button"
+          onClick={() => navigate('/calls')}
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
         >
-          <Volume2 className="w-4 h-4" />
-          Enable call alerts
+          Open calls
+          <ArrowRight className="h-4 w-4" />
         </button>
       </div>
-    );
-  }
-
-  if (muted) {
-    return (
-      <div className="fixed top-4 right-4 z-50">
-        <button
-          onClick={onUnmute}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs"
-        >
-          <VolumeX className="w-3 h-3" />
-          Muted
-        </button>
-      </div>
-    );
-  }
-
-  return null;
+    </section>
+  );
 }

@@ -26,6 +26,9 @@ export function initDatabase(): Promise<void> {
       -- Incidents table (mirrors Supabase)
       CREATE TABLE IF NOT EXISTS incidents (
         id TEXT PRIMARY KEY,
+        reference_year INTEGER,
+        reference_number INTEGER,
+        incident_reference TEXT,
         agency_type TEXT NOT NULL,
         reporter_id TEXT,
         reporter_name TEXT,
@@ -102,6 +105,22 @@ export function initDatabase(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_status_history_incident ON status_history(incident_id);
       CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(table_name, record_id);
     `);
+
+    // Upgrade existing installations in place. SQLite's CREATE TABLE IF NOT
+    // EXISTS does not add newly introduced columns to an existing table.
+    const incidentColumns = new Set(
+      (db.prepare('PRAGMA table_info(incidents)').all() as Array<{ name: string }>).map((column) => column.name),
+    );
+    if (!incidentColumns.has('reference_year')) {
+      db.exec('ALTER TABLE incidents ADD COLUMN reference_year INTEGER');
+    }
+    if (!incidentColumns.has('reference_number')) {
+      db.exec('ALTER TABLE incidents ADD COLUMN reference_number INTEGER');
+    }
+    if (!incidentColumns.has('incident_reference')) {
+      db.exec('ALTER TABLE incidents ADD COLUMN incident_reference TEXT');
+    }
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_reference ON incidents(incident_reference)');
 
     console.log('Database initialized at:', dbPath);
     resolve();

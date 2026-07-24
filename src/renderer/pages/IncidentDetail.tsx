@@ -5,11 +5,14 @@ import {
   Loader2,
   Building2,
   Check,
+  CheckCircle2,
+  HelpCircle,
   ChevronDown,
   Clock,
   Edit3,
   FileText,
   History,
+  Info,
   Image as ImageIcon,
   MapPin,
   Maximize2,
@@ -17,6 +20,7 @@ import {
   Plus,
   RefreshCcw,
   Send,
+  Smartphone,
   User,
   UserCheck,
   Users,
@@ -24,15 +28,21 @@ import {
   Unlock,
   X
 } from 'lucide-react';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getSessionScope, isStationScoped } from '../utils/sessionScope';
 import { exportFinalReportToPDF } from '../utils/exportUtils';
 import { FinalReportModal } from '../components/FinalReportModal';
 import { RouteMap } from '../components/RouteMap';
+import { ContextHint } from '../components/ContextHint';
+import { getAgencyPresentation } from '../utils/agencyPresentation';
+import { getIncidentReference } from '../utils/incidentReference';
 
 interface Incident {
   id: string;
+  incident_reference?: string | null;
+  reference_year?: number | null;
+  reference_number?: number | null;
   agency_type: string;
   reporter_id?: string;
   reporter_name: string;
@@ -181,6 +191,21 @@ interface DispatchPlan {
   confidence?: number;
 }
 
+interface TriageAssessment {
+  emergency_state?: string | null;
+  incident_type?: string | null;
+  severity?: number | null;
+  urgency?: 'U1' | 'U2' | 'U3' | 'U4' | null;
+  evidence_confidence?: 'low' | 'medium' | 'high' | null;
+  dispatch_priority?: number | null;
+  evidence?: Record<string, unknown>;
+  missing_facts?: string[];
+  contradictions?: string[];
+  triggered_rules?: string[];
+  required_capabilities?: string[];
+  rules_version?: string | null;
+}
+
 interface AIRecommendation {
   recommendedStatus: string;
   recommendedAgency: string;
@@ -207,8 +232,42 @@ const STATUS_OPTIONS = [
   { value: 'ai_routing', label: 'AI Routing', color: 'bg-purple-500' },
 ];
 
+const STATUS_HINTS: Record<string, { title: string; description: string }> = {
+  pending: {
+    title: 'Awaiting an operational assignment',
+    description: 'The report is still under review. Select the responsible agency and station before moving it to Assigned.',
+  },
+  assigned: {
+    title: 'Response ownership confirmed',
+    description: 'A response agency and station have accepted operational responsibility. Assign a lead officer before field work begins.',
+  },
+  in_progress: {
+    title: 'Field response underway',
+    description: 'Assigned responders are actively handling the incident. Keep officer, resource, and progress details current.',
+  },
+  resolved: {
+    title: 'Operational response complete',
+    description: 'The immediate incident has been handled. Complete and verify the final report before closing the record.',
+  },
+  closed: {
+    title: 'Incident record finalized',
+    description: 'Operational work and final reporting are complete. The record is locked unless an administrator reopens it.',
+  },
+  rejected: {
+    title: 'Report not accepted for response',
+    description: 'The report was rejected after review. The decision should be supported by a clear note in the status history.',
+  },
+  ai_routing: {
+    title: 'Automated routing in progress',
+    description: 'AI is preparing advisory triage and routing information. A dispatcher must still confirm the operational assignment.',
+  },
+};
+
 const VALID_STATUSES = new Set(STATUS_OPTIONS.map((option) => option.value));
 const VALID_AGENCIES = new Set(['pnp', 'bfp', 'mdrrmo']);
+const AI_DISPATCH_MODE = String(import.meta.env.VITE_AI_DISPATCH_MODE || 'shadow').toLowerCase();
+const AI_SHADOW_REVEAL = String(import.meta.env.VITE_AI_SHADOW_REVEAL || '').toLowerCase() === 'true';
+const SHOW_AI_DISPATCH_RECOMMENDATION = AI_DISPATCH_MODE !== 'shadow' || AI_SHADOW_REVEAL;
 
 const toStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -232,6 +291,30 @@ const parseRequestedCount = (values: string[], fallbackCount: number): number =>
 const toAgencyKey = (value: unknown): string => {
   const key = String(value || '').trim().toLowerCase();
   return VALID_AGENCIES.has(key) ? key : '';
+};
+
+type AssignmentFormErrors = {
+  status?: string;
+  agency?: string;
+  station?: string;
+  officers?: string;
+  leadOfficer?: string;
+  resources?: string;
+  notes?: string;
+  form?: string;
+};
+
+const normalizeUpdateError = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  if (/dispatch_plan_required/i.test(raw)) return 'Select a response agency and assigned station before applying an active assignment.';
+  if (/agency_required/i.test(raw)) return 'Select a configured response agency before assigning this incident.';
+  if (/status_assignment_conflict/i.test(raw)) return 'Pending incidents cannot have a station, responders, or resources assigned. Change the status to Assigned or clear the assignment first.';
+  if (/final_report_required/i.test(raw)) return 'Complete the final report before closing this incident.';
+  if (/incident_is_locked|already .*cannot be modified/i.test(raw)) return 'This incident is locked and can no longer be modified.';
+  if (/expired/i.test(raw)) return 'The dispatch recommendation expired. Refresh it, review the new recommendation, then try again.';
+  if (/permission|not authorized|forbidden|rls/i.test(raw)) return 'You do not have permission to make this update. Contact an administrator if access is incorrect.';
+  if (/network|fetch|timeout|offline|econn/i.test(raw)) return 'The update could not reach the server. Check your connection and try again.';
+  return 'We could not save these changes. Review the fields and try again.';
 };
 
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -259,9 +342,21 @@ function IncidentDetail() {
   const [draftReport, setDraftReport] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [aiReport, setAiReport] = useState<any>(null);
+  const [triageAssessment, setTriageAssessment] = useState<TriageAssessment | null>(null);
+  const [dispatchRecommendation, setDispatchRecommendation] = useState<any>(null);
+  const [feedbackVerdict, setFeedbackVerdict] = useState<'accepted' | 'modified' | 'rejected' | 'not_applicable'>('accepted');
+  const [feedbackReason, setFeedbackReason] = useState('');
+  const [feedbackNotes, setFeedbackNotes] = useState('');
+  const [feedbackSaved, setFeedbackSaved] = useState(false);
+  const [savingFeedback, setSavingFeedback] = useState(false);
+  const [refreshingDispatchRecommendation, setRefreshingDispatchRecommendation] = useState(false);
+  const [appliedAIRecommendationKey, setAppliedAIRecommendationKey] = useState<string | null>(null);
   const [newStatus, setNewStatus] = useState('');
   const [notes, setNotes] = useState('');
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
+  const [selectedAgencyType, setSelectedAgencyType] = useState('');
+  const [initialAgencyType, setInitialAgencyType] = useState('');
+  const [stationAssignmentIntent, setStationAssignmentIntent] = useState<'keep' | 'auto' | 'explicit'>('auto');
   const [viewAgencyFilter, setViewAgencyFilter] = useState<string>('all');
   const [selectedOfficerIds, setSelectedOfficerIds] = useState<string[]>([]);
   const [selectedPrimaryOfficerId, setSelectedPrimaryOfficerId] = useState<string | null>(null);
@@ -276,10 +371,15 @@ function IncidentDetail() {
   const [hideBusy, setHideBusy] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [formErrors, setFormErrors] = useState<AssignmentFormErrors>({});
   const [updateSuccess, setUpdateSuccess] = useState(false);
   const [isUpdateStatusExpanded, setIsUpdateStatusExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'management' | 'backups'>('overview');
-
+  const [incidentError, setIncidentError] = useState<string | null>(null);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [showChangeReview, setShowChangeReview] = useState(false);
+  const [releaseAssignments, setReleaseAssignments] = useState(false);
+  const [stationReconciliationError, setStationReconciliationError] = useState<string | null>(null);
   // Final Report Modal State (legacy - for closing incidents)
   const [showFinalReportModal, setShowFinalReportModal] = useState(false);
   const [finalReportData, setFinalReportData] = useState<FinalReportData>({
@@ -306,6 +406,7 @@ function IncidentDetail() {
   // Routing state
   const [showRoute, setShowRoute] = useState(false);
   const [routeInfo, setRouteInfo] = useState<{ distance: number; duration: number } | null>(null);
+  const [mapView, setMapView] = useState<'larger' | 'directions' | null>(null);
 
   // Multi-Agency Coordination State
   const [incidentAgencies, setIncidentAgencies] = useState<any[]>([]);
@@ -316,6 +417,7 @@ function IncidentDetail() {
   const [addingAgency, setAddingAgency] = useState(false);
   const [backupRequests, setBackupRequests] = useState<BackupRequest[]>([]);
   const [updatingBackupRequestId, setUpdatingBackupRequestId] = useState<number | null>(null);
+  const [selectedEvidenceIndex, setSelectedEvidenceIndex] = useState<number | null>(null);
 
   // Track which agencies are involved (primary + supporting)
   const [involvedAgencies, setInvolvedAgencies] = useState<string[]>([]);
@@ -349,8 +451,7 @@ function IncidentDetail() {
     const recommendedAgency =
       toAgencyKey(dispatchPlan.recommended_agency) ||
       toAgencyKey(mainReport?.recommended_agency) ||
-      toAgencyKey(incident.agency_type) ||
-      'mdrrmo';
+      'unknown';
 
     const requestedStatus = String(dispatchPlan.recommended_status || '').trim().toLowerCase();
     const severity = Number(aiReport?.severity || 1);
@@ -375,19 +476,11 @@ function IncidentDetail() {
         station.name?.toLowerCase().includes(stationName)
       );
     }
-
-    if (!recommendedStation && agencyStations.length > 0) {
-      const incLat = Number(incident.latitude);
-      const incLng = Number(incident.longitude);
-      if (Number.isFinite(incLat) && Number.isFinite(incLng)) {
-        recommendedStation = [...agencyStations].sort((a, b) => {
-          const distA = haversineKm(incLat, incLng, Number(a.latitude), Number(a.longitude));
-          const distB = haversineKm(incLat, incLng, Number(b.latitude), Number(b.longitude));
-          return distA - distB;
-        })[0];
-      } else {
-        recommendedStation = agencyStations[0];
-      }
+    if (!recommendedStation && agencyStations.length > 0 && Number.isFinite(Number(incident.latitude)) && Number.isFinite(Number(incident.longitude))) {
+      recommendedStation = [...agencyStations].sort((left, right) =>
+        haversineKm(Number(incident.latitude), Number(incident.longitude), Number(left.latitude), Number(left.longitude)) -
+        haversineKm(Number(incident.latitude), Number(incident.longitude), Number(right.latitude), Number(right.longitude))
+      )[0];
     }
 
     const resourceNeeds = toStringArray(dispatchPlan.resource_needs || mainReport?.resource_needs);
@@ -403,12 +496,6 @@ function IncidentDetail() {
       .map((resId) => resourcePool.find((resource) => resource.id === resId && resource.status === 'available'))
       .filter(Boolean) as AgencyResource[];
 
-    if (recommendedResources.length === 0) {
-      const availableResources = resourcePool.filter((resource) => resource.status === 'available');
-      const resourceCount = parseRequestedCount(resourceNeeds, severity >= 4 ? 3 : 2);
-      recommendedResources = availableResources.slice(0, resourceCount);
-    }
-
     const officerPool = recommendedStation
       ? officers.filter((officer) => officer.station_id === recommendedStation!.id)
       : officers.filter((officer) => {
@@ -422,27 +509,22 @@ function IncidentDetail() {
       .map((officerId) => officerPool.find((officer) => officer.id === officerId && officer.status === 'available'))
       .filter(Boolean) as Officer[];
 
-    if (recommendedOfficers.length === 0) {
-      const availableOfficers = officerPool.filter((officer) => !officer.status || officer.status === 'available');
-      const officerCount = parseRequestedCount(personnelNeeds, severity >= 4 ? 3 : 2);
-      recommendedOfficers = availableOfficers.slice(0, officerCount);
-    }
-
     const reviewReasons = toStringArray(dispatchPlan.review_reasons);
+    reviewReasons.unshift('Dispatcher confirmation is required before assigning responders.');
     if (aiReport.status === 'failed') {
       reviewReasons.push('AI analysis failed previously and needs human validation.');
     }
     if (severity >= 4) {
-      reviewReasons.push('High severity incident requires human review before dispatch updates.');
+      reviewReasons.push('High-severity report: verify the evidence and response plan.');
     }
     if (!recommendedStation) {
-      reviewReasons.push('No matching station was found for the recommended agency.');
+      reviewReasons.push('No eligible station is configured for the suggested agency.');
     }
     if (recommendedResources.length === 0) {
-      reviewReasons.push('No available resources were selected automatically.');
+      reviewReasons.push('No available resources were selected; choose them manually if needed.');
     }
     if (recommendedOfficers.length === 0) {
-      reviewReasons.push('No available officers were selected automatically.');
+      reviewReasons.push('No available personnel were selected; choose them manually if needed.');
     }
 
     const rawConfidence = dispatchPlan.confidence ?? mainReport?.confidence;
@@ -452,9 +534,9 @@ function IncidentDetail() {
       : null;
 
     if (normalizedConfidence === null) {
-      reviewReasons.push('Auto-dispatch confidence is unavailable. Keep human review enabled.');
+      reviewReasons.push('Confidence is unavailable; verify the recommendation manually.');
     } else if (normalizedConfidence < 0.75) {
-      reviewReasons.push('Auto-dispatch confidence is low. Keep human review enabled.');
+      reviewReasons.push('Confidence is low; verify the recommendation manually.');
     }
 
     return {
@@ -474,26 +556,59 @@ function IncidentDetail() {
       reviewReasons: Array.from(new Set(reviewReasons)),
       confidence: normalizedConfidence,
     };
-  }, [aiReport, incident, stations, resources, officers]);
+  }, [aiReport, incident, stations, resources, officers, dispatchRecommendation]);
+
+  const aiRecommendationKey = useMemo(() => {
+    if (!aiRecommendation || !aiReport) return null;
+    return [
+      aiReport.id || aiReport.updated_at || aiReport.created_at || aiReport.status,
+      incident?.id,
+      aiRecommendation.recommendedStatus,
+      aiRecommendation.recommendedStationId ?? 'none',
+      aiRecommendation.recommendedResourceIds.join(','),
+      aiRecommendation.recommendedOfficerIds.join(','),
+    ].join('|');
+  }, [aiRecommendation, aiReport, incident?.id]);
+
+  useEffect(() => {
+    setAppliedAIRecommendationKey(null);
+  }, [aiRecommendationKey]);
 
   const applyAIRecommendation = useCallback(() => {
     if (!aiRecommendation || isLocked) return;
 
-    setNewStatus(aiRecommendation.recommendedStatus);
+    const allowedStatuses = getAllowedStatuses();
+    const suggestedStatus = allowedStatuses.includes(aiRecommendation.recommendedStatus) && aiRecommendation.recommendedStationId
+      ? aiRecommendation.recommendedStatus
+      : aiRecommendation.recommendedStationId ? incident?.status || 'pending' : 'pending';
+
+    setNewStatus(suggestedStatus);
     setSelectedStationId(aiRecommendation.recommendedStationId);
+    setSelectedAgencyType(toAgencyKey(aiRecommendation.recommendedAgency));
+    setStationAssignmentIntent(aiRecommendation.recommendedStationId === null ? 'explicit' : 'explicit');
     setSelectedResourceIds(aiRecommendation.recommendedResourceIds);
     setSelectedOfficerIds(aiRecommendation.recommendedOfficerIds);
     setSelectedPrimaryOfficerId(aiRecommendation.recommendedOfficerIds[0] || null);
     setNotes((prev) => {
       const marker = '[AI Recommendation Applied]';
       if (prev.includes(marker)) return prev;
-      const next = `${marker} status=${aiRecommendation.recommendedStatus}, agency=${aiRecommendation.recommendedAgency}, station=${aiRecommendation.recommendedStationLabel}`;
+       const next = `${marker} status=${suggestedStatus}, agency=${aiRecommendation.recommendedAgency}, station=${aiRecommendation.recommendedStationLabel}`;
       return prev ? `${prev.trim()}\n${next}` : next;
     });
-  }, [aiRecommendation, isLocked]);
+    setAppliedAIRecommendationKey(aiRecommendationKey);
+    setShowChangeReview(true);
+  }, [aiRecommendation, aiRecommendationKey, incident?.status, isLocked]);
 
   const renderAIRecommendationPanel = () => {
     if (!aiRecommendation) return null;
+    if (!SHOW_AI_DISPATCH_RECOMMENDATION) {
+      return (
+        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+          <Info size={14} className="shrink-0" aria-hidden="true" />
+          <span><strong className="font-semibold text-slate-800 dark:text-slate-100">Independent dispatch mode.</strong> AI recommendations are hidden during evaluation.</span>
+        </div>
+      );
+    }
 
     const confidenceLow = aiRecommendation.confidence !== null && aiRecommendation.confidence < 0.75;
     const needsReview = aiRecommendation.requiresHumanReview || aiRecommendation.reviewReasons.length > 0 || confidenceLow;
@@ -502,79 +617,136 @@ function IncidentDetail() {
       : aiRecommendation.confidence < 0.75
         ? `Low (${(aiRecommendation.confidence * 100).toFixed(0)}%) - manual review required`
         : `High (${(aiRecommendation.confidence * 100).toFixed(0)}%)`;
-    const readinessLabel = needsReview ? 'Needs Human Review' : 'Eligible for Auto';
+    const readinessLabel = needsReview ? 'Dispatcher review required' : 'Ready for dispatcher review';
     const readinessClass = needsReview
       ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-700'
       : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-emerald-200 dark:border-emerald-700';
+    const recommendationExpired = Boolean(
+      dispatchRecommendation?.expires_at && new Date(dispatchRecommendation.expires_at).getTime() <= Date.now(),
+    );
+    const recommendationNeedsRefresh = !dispatchRecommendation?.id || recommendationExpired;
+    const recommendationApplied = !recommendationNeedsRefresh && aiRecommendationKey !== null && appliedAIRecommendationKey === aiRecommendationKey;
 
     return (
       <div className="p-4 rounded-xl border border-blue-200 dark:border-blue-700 bg-blue-50/70 dark:bg-blue-900/20 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-300">AI Recommendation (Human Override)</h3>
+          <div>
+            <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-300">AI dispatch recommendation</h3>
+            <p className="mt-0.5 text-xs text-blue-800/80 dark:text-blue-200/80">Decision support only — nothing is assigned until a dispatcher confirms it.</p>
+          </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            <span
-              title="Automation readiness is advisory only. No automatic dispatch is executed."
-              className={`px-2 py-1 text-[11px] font-medium rounded-full border ${readinessClass}`}
+            <ContextHint
+              title={needsReview ? 'Human confirmation required' : 'Recommendation ready to inspect'}
+              description={needsReview
+                ? 'One or more confidence, evidence, capacity, or assignment checks still need a dispatcher. No responders are dispatched automatically.'
+                : 'The advisory plan has enough information for dispatcher review. It still does not assign responders until a dispatcher confirms it.'}
+              ariaLabel={`Explain dispatch readiness: ${readinessLabel}`}
             >
-              {readinessLabel}
-            </span>
+              <span className={`px-2 py-1 text-[11px] font-medium rounded-full border ${readinessClass}`}>
+                {readinessLabel}
+              </span>
+            </ContextHint>
             <button
               onClick={openPipelineLog}
-              className="px-2.5 py-1 text-xs rounded border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40"
+              className="min-h-10 px-2.5 py-1 text-xs rounded border border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-blue-900/40"
             >
               View Full Analysis
             </button>
-            <button
-              onClick={applyAIRecommendation}
-              disabled={isLocked}
-              className="px-2.5 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              Apply AI Recommendation
-            </button>
+             <button
+               type="button"
+               onClick={recommendationNeedsRefresh ? refreshDispatchRecommendation : applyAIRecommendation}
+               disabled={isLocked || refreshingDispatchRecommendation || recommendationApplied}
+               aria-disabled={recommendationApplied}
+               className={`min-h-10 px-2.5 py-1 text-xs rounded border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60 ${recommendationApplied
+                 ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
+                 : needsReview
+                 ? 'border-amber-300 bg-white text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:bg-slate-800 dark:text-amber-300 dark:hover:bg-amber-900/20'
+                 : 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700'
+                 }`}
+             >
+               {refreshingDispatchRecommendation
+                 ? 'Refreshing dispatch plan...'
+                 : recommendationNeedsRefresh
+                   ? 'Refresh dispatch plan'
+                   : recommendationApplied ? 'Recommendation staged for review' : 'Review dispatch plan'}
+             </button>
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
           <div>
-            <p className="text-gray-500 dark:text-gray-400">Recommended Status</p>
-            <p className="font-medium text-gray-900 dark:text-white">{aiRecommendation.recommendedStatus}</p>
+            <p className="text-slate-500 dark:text-slate-400">Recommended Status</p>
+            <p className="font-medium text-slate-900 dark:text-white">{aiRecommendation.recommendedStatus}</p>
           </div>
           <div>
-            <p className="text-gray-500 dark:text-gray-400">Recommended Agency</p>
-            <p className="font-medium text-gray-900 dark:text-white">{aiRecommendation.recommendedAgency.toUpperCase()}</p>
+            <p className="text-slate-500 dark:text-slate-400">Recommended Agency</p>
+            <p className="font-medium text-slate-900 dark:text-white">{aiRecommendation.recommendedAgency.toUpperCase()}</p>
           </div>
           <div>
-            <p className="text-gray-500 dark:text-gray-400">Recommended Station</p>
-            <p className="font-medium text-gray-900 dark:text-white">{aiRecommendation.recommendedStationLabel}</p>
+            <p className="text-slate-500 dark:text-slate-400">Recommended Station</p>
+            <p className="font-medium text-slate-900 dark:text-white">{aiRecommendation.recommendedStationLabel}</p>
           </div>
           <div>
-            <p className="text-gray-500 dark:text-gray-400">Confidence</p>
-            <p className="font-medium text-gray-900 dark:text-white">
+            <p className="text-slate-500 dark:text-slate-400">Confidence</p>
+            <p className="font-medium text-slate-900 dark:text-white">
               {confidenceMessage}
             </p>
           </div>
         </div>
+        {Array.isArray(dispatchRecommendation?.dispatch_candidates) && dispatchRecommendation.dispatch_candidates.length > 0 && (
+          <div className="text-sm space-y-1">
+            <p className="text-slate-500 dark:text-slate-400">Candidate stations</p>
+            <div className="space-y-1">
+              {dispatchRecommendation.dispatch_candidates.slice(0, 3).map((candidate: any) => (
+                <div key={candidate.id} className="flex items-center justify-between rounded border border-blue-100 bg-white/70 px-2 py-1.5 text-xs dark:border-blue-800 dark:bg-slate-800/60">
+                  <span>Station #{candidate.station_id || 'Unknown'} · {candidate.distance_meters != null ? `${Math.round(Number(candidate.distance_meters))}m` : 'ETA unavailable'}</span>
+                  <span className="font-semibold">{candidate.eligible ? `Rank ${candidate.rank}` : 'Ineligible'}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">Candidates are advisory and require dispatcher selection and approval.</p>
+            {Array.isArray(dispatchRecommendation.dispatch_recommendation_agencies) && dispatchRecommendation.dispatch_recommendation_agencies.length > 0 && (
+              <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-300">Agency recommendations: {dispatchRecommendation.dispatch_recommendation_agencies.map((item: any) => `${item.role || 'support'} #${item.agency_id}`).join(', ')}</p>
+            )}
+          </div>
+        )}
+        {SHOW_AI_DISPATCH_RECOMMENDATION && (
+          <div className="rounded border border-slate-200 bg-white/70 p-3 text-xs dark:border-slate-700 dark:bg-slate-800/60">
+            <p className="font-semibold text-slate-700 dark:text-slate-200">Reviewer feedback</p>
+            <p className="mt-1 text-slate-500 dark:text-slate-400">Record whether the advisory plan was useful for calibration and weekly monitoring.</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <select value={feedbackVerdict} onChange={(event) => setFeedbackVerdict(event.target.value as typeof feedbackVerdict)} className="rounded border border-slate-300 bg-white px-2 py-1.5 dark:border-slate-600 dark:bg-slate-800">
+                <option value="accepted">Accepted</option><option value="modified">Modified</option><option value="rejected">Rejected</option><option value="not_applicable">Not applicable</option>
+              </select>
+              <select value={feedbackReason} onChange={(event) => setFeedbackReason(event.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5 dark:border-slate-600 dark:bg-slate-800">
+                <option value="">Reason code</option><option value="agency_wrong">Agency wrong</option><option value="severity_wrong">Severity wrong</option><option value="insufficient_evidence">Insufficient evidence</option><option value="capacity_changed">Capacity changed</option><option value="useful">Useful recommendation</option>
+              </select>
+              <button type="button" onClick={saveDispatchFeedback} disabled={savingFeedback} className="rounded bg-slate-700 px-3 py-1.5 font-semibold text-white disabled:opacity-60">{savingFeedback ? 'Saving…' : feedbackSaved ? 'Feedback saved' : 'Save feedback'}</button>
+            </div>
+            <textarea value={feedbackNotes} onChange={(event) => setFeedbackNotes(event.target.value)} placeholder="Optional reviewer note" className="mt-2 min-h-14 w-full rounded border border-slate-300 bg-white px-2 py-1.5 dark:border-slate-600 dark:bg-slate-800" />
+          </div>
+        )}
         <div className="text-sm space-y-1">
-          <p className="text-gray-500 dark:text-gray-400">Recommended Resources</p>
-          <p className="font-medium text-gray-900 dark:text-white">
+          <p className="text-slate-500 dark:text-slate-400">Recommended Resources</p>
+          <p className="font-medium text-slate-900 dark:text-white">
             {aiRecommendation.recommendedResourceNames.length > 0
               ? aiRecommendation.recommendedResourceNames.join(', ')
               : 'No concrete resources selected'}
           </p>
           {aiRecommendation.resourceNeeds.length > 0 && (
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               Resource needs: {aiRecommendation.resourceNeeds.join(' | ')}
             </p>
           )}
         </div>
         <div className="text-sm space-y-1">
-          <p className="text-gray-500 dark:text-gray-400">Recommended Personnel</p>
-          <p className="font-medium text-gray-900 dark:text-white">
+          <p className="text-slate-500 dark:text-slate-400">Recommended Personnel</p>
+          <p className="font-medium text-slate-900 dark:text-white">
             {aiRecommendation.recommendedOfficerNames.length > 0
               ? aiRecommendation.recommendedOfficerNames.join(', ')
               : 'No concrete personnel selected'}
           </p>
           {aiRecommendation.personnelNeeds.length > 0 && (
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               Personnel needs: {aiRecommendation.personnelNeeds.join(' | ')}
             </p>
           )}
@@ -604,7 +776,10 @@ function IncidentDetail() {
       loadIncidentAgencies();
       loadBackupRequests();
       loadAiReport();
+      loadTriageAssessment();
+      loadDispatchRecommendation();
       loadOtherIncidents();
+      window.api.getAgencies().then((data) => setAvailableAgencies(data || [])).catch((error) => console.error('Failed to load agencies:', error));
     }
   }, [id]);
 
@@ -632,9 +807,9 @@ function IncidentDetail() {
     if (incident?.latitude && incident?.longitude) {
       loadStations();
     }
-    if (incident?.agency_type) {
+    if (incident?.agency_type || selectedAgencyType) {
       // Load officers and resources from all involved agencies
-      const agencies = [incident.agency_type];
+      const agencies = [selectedAgencyType || incident?.agency_type].filter((value): value is string => Boolean(value));
       const supportingAgencies = incidentAgencies
         .filter(ia => ia.acknowledged_at)
         .map(ia => ia.agencies?.short_name?.toLowerCase())
@@ -646,16 +821,21 @@ function IncidentDetail() {
       allAgencies.forEach(agency => loadOfficers(agency));
       loadResources();
     }
-  }, [incident?.latitude, incident?.longitude, incident?.agency_type, incidentAgencies]);
+  }, [incident?.latitude, incident?.longitude, incident?.agency_type, incidentAgencies, selectedAgencyType]);
 
   const loadIncident = async () => {
     try {
+      setIncidentError(null);
       const data = await window.api.getIncident(id!);
       console.log('[IncidentDetail] Loaded incident:', data);
       console.log('[IncidentDetail] Location coords:', data?.latitude, data?.longitude);
       setIncident(data);
+      const loadedAgency = toAgencyKey(data?.agency_type);
+      setSelectedAgencyType(loadedAgency);
+      setInitialAgencyType(loadedAgency);
       setNewStatus(data?.status || '');
       setSelectedStationId(data?.assigned_station_id);
+      setStationAssignmentIntent(data?.assigned_station_id ? 'keep' : 'auto');
       setInitialStationId(data?.assigned_station_id);
 
       const officerIds = data?.assigned_officer_ids?.length
@@ -673,6 +853,7 @@ function IncidentDetail() {
       setInitialResourceIds(resourceIds);
     } catch (error) {
       console.error('Failed to load incident:', error);
+      setIncidentError('Incident details could not be refreshed. The information shown may be stale.');
     } finally {
       setLoading(false);
     }
@@ -979,15 +1160,187 @@ function IncidentDetail() {
   };
 
   const handleUpdateStatus = async () => {
-    if (!newStatus) return;
-
-    // If changing to 'closed', show final report modal first
-    if (newStatus === 'closed' && incident?.status !== 'closed') {
-      setShowFinalReportModal(true);
+    const errors: AssignmentFormErrors = {};
+    const effectiveStationId = stationAssignmentIntent === 'keep'
+      ? incident?.assigned_station_id ?? selectedStationId
+      : selectedStationId;
+    if (!newStatus) errors.status = 'Choose the status to apply.';
+    if (newStatus && ['assigned', 'in_progress', 'responding'].includes(newStatus)) {
+      if (!selectedAgencyType && !incident?.agency_type) errors.agency = 'Select a response agency for this active assignment.';
+      if (!effectiveStationId) errors.station = 'Select an assigned station before applying this active assignment.';
+    }
+    const hasAssignment = Boolean(effectiveStationId || selectedOfficerIds.length || selectedResourceIds.length);
+    if (newStatus === 'pending' && hasAssignment) {
+      errors.status = 'Pending incidents cannot have a station, responders, or resources assigned. Choose Assigned or clear the assignment first.';
+    }
+    if (selectedOfficerIds.length > 0 && !effectiveStationId) {
+      errors.station = errors.station || 'Select a station before assigning responders.';
+    }
+    if (selectedOfficerIds.length > 1 && !selectedPrimaryOfficerId) {
+      errors.leadOfficer = 'Choose a lead officer for the assigned team.';
+    }
+    if (selectedResourceIds.length > 0 && !effectiveStationId) {
+      errors.resources = 'Select a station before assigning resources.';
+    }
+    if (['rejected', 'resolved'].includes(newStatus) && !notes.trim()) {
+      errors.notes = `Add a note explaining why this incident is being marked ${newStatus}.`;
+    }
+    setFormErrors(errors);
+    setUpdateError(null);
+    if (Object.keys(errors).length > 0) {
+      const firstInvalidId = errors.status
+        ? 'incident-next-status'
+        : errors.agency
+          ? 'incident-response-agency'
+          : errors.station
+            ? 'incident-assigned-station'
+            : errors.notes
+              ? 'incident-operational-note'
+              : null;
+      if (firstInvalidId) requestAnimationFrame(() => document.getElementById(firstInvalidId)?.focus());
       return;
     }
+    if (!hasChanges()) return;
+    if (newStatus === 'closed' && !finalReport) {
+      setActiveTab('reports');
+      setShowEnhancedReportModal(true);
+      return;
+    }
+    setShowChangeReview(true);
+  };
 
+  const loadTriageAssessment = async () => {
+    try {
+      const assessment = await window.api.getIncidentTriageAssessment(id!);
+      setTriageAssessment(assessment || null);
+    } catch (error) {
+      console.error('Failed to load structured triage assessment:', error);
+      setTriageAssessment(null);
+    }
+  };
+
+  const loadDispatchRecommendation = async () => {
+    try {
+      const recommendation = await window.api.getDispatchRecommendation(id!);
+      setDispatchRecommendation(recommendation || null);
+    } catch (error) {
+      console.error('Failed to load dispatch recommendation:', error);
+      setDispatchRecommendation(null);
+    }
+  };
+
+  const refreshDispatchRecommendation = async (): Promise<boolean> => {
+    if (!id || refreshingDispatchRecommendation) return false;
+    setRefreshingDispatchRecommendation(true);
+    setUpdateError(null);
+    try {
+      await window.api.triggerAIReanalysis(id);
+      await Promise.all([loadAiReport(), loadTriageAssessment(), loadDispatchRecommendation()]);
+      setAppliedAIRecommendationKey(null);
+      return true;
+    } catch (error: any) {
+      console.error('Failed to refresh dispatch recommendation:', error);
+      setUpdateError(error?.message || 'Failed to refresh the dispatch recommendation.');
+      return false;
+    } finally {
+      setRefreshingDispatchRecommendation(false);
+    }
+  };
+
+  const saveDispatchFeedback = async () => {
+    if (!incident?.id || !scope.userId) {
+      setUpdateError('A signed-in dispatch reviewer is required to record feedback.');
+      return;
+    }
+    setSavingFeedback(true);
+    setUpdateError(null);
+    try {
+      await window.api.recordDispatchReviewFeedback({
+        incidentId: incident.id,
+        recommendationId: dispatchRecommendation?.id || null,
+        reviewerId: scope.userId,
+        verdict: feedbackVerdict,
+        actualIncidentType: triageAssessment?.incident_type || undefined,
+        actualSeverity: triageAssessment?.severity ?? null,
+        actualAgencyCodes: selectedAgencyType ? [selectedAgencyType] : [],
+        finalCapabilities: triageAssessment?.required_capabilities || [],
+        reasonCodes: feedbackReason ? [feedbackReason] : [],
+        notes: feedbackNotes || undefined,
+      });
+      setFeedbackSaved(true);
+      setFeedbackNotes('');
+    } catch (error: any) {
+      setUpdateError(error?.message || 'Failed to record dispatch feedback.');
+    } finally {
+      setSavingFeedback(false);
+    }
+  };
+
+  const getAllowedStatuses = () => {
+    if (!incident) return [];
+    const transitions: Record<string, string[]> = {
+      pending: ['pending', 'assigned', 'rejected'],
+      assigned: ['assigned', 'in_progress', 'pending'],
+      in_progress: ['in_progress', 'resolved'],
+      responding: ['responding', 'resolved'],
+      resolved: ['resolved', 'closed'],
+      ai_routing: ['ai_routing', 'pending', 'assigned', 'rejected'],
+      rejected: ['rejected', 'pending'],
+      closed: ['closed'],
+    };
+    return transitions[incident.status] ?? [incident.status];
+  };
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tabId: typeof activeTab) => {
+    const tabIds = tabs.map((tab) => tab.id);
+    const currentIndex = tabIds.indexOf(tabId);
+    let nextIndex = currentIndex;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabIds.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabIds.length) % tabIds.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = tabIds.length - 1;
+    else return;
+    event.preventDefault();
+    setActiveTab(tabIds[nextIndex]);
+    requestAnimationFrame(() => document.getElementById(`incident-tab-${tabIds[nextIndex]}`)?.focus());
+  };
+
+  const confirmChangeReview = async () => {
+    setShowChangeReview(false);
     await performStatusUpdate();
+  };
+
+  const handleStationChange = (value: string) => {
+    const isKeepCurrent = value === 'keep';
+    const isAutoAssign = value === 'auto';
+    const nextStationId = !isKeepCurrent && !isAutoAssign && value ? Number(value) : isKeepCurrent ? incident?.assigned_station_id ?? null : null;
+    const incompatibleOfficerIds = selectedOfficerIds.filter((officerId) => {
+      const officer = officers.find((item) => item.id === officerId);
+      return nextStationId !== null && officer?.station_id !== nextStationId;
+    });
+    const incompatibleResourceIds = selectedResourceIds.filter((resourceId) => {
+      const resource = resources.find((item) => item.id === resourceId);
+      return nextStationId !== null && resource?.station_id !== nextStationId;
+    });
+
+    setStationReconciliationError(
+      incompatibleOfficerIds.length || incompatibleResourceIds.length
+        ? 'Station changed. Personnel or resources from the previous station were removed; review the remaining selections.'
+        : null,
+    );
+    setSelectedStationId(nextStationId);
+    if (nextStationId !== null && newStatus === 'pending') {
+      setNewStatus('assigned');
+    }
+    setFormErrors((current) => ({ ...current, station: undefined, officers: undefined, resources: undefined }));
+    setStationAssignmentIntent(isKeepCurrent ? 'keep' : isAutoAssign ? 'auto' : 'explicit');
+    if (incompatibleOfficerIds.length) {
+      setSelectedOfficerIds((ids) => ids.filter((officerId) => !incompatibleOfficerIds.includes(officerId)));
+      setSelectedPrimaryOfficerId((primaryId) => primaryId && incompatibleOfficerIds.includes(primaryId) ? null : primaryId);
+    }
+    if (incompatibleResourceIds.length) {
+      setSelectedResourceIds((ids) => ids.filter((resourceId) => !incompatibleResourceIds.includes(resourceId)));
+    }
   };
 
   // Check if officer selection has changed
@@ -1044,39 +1397,82 @@ function IncidentDetail() {
 
   const hasChanges = () => {
     return newStatus !== incident?.status ||
+      selectedAgencyType !== initialAgencyType ||
       (selectedStationId !== initialStationId) ||
       hasOfficerChanges() ||
       hasPrimaryOfficerChanges() ||
       hasResourceChanges() ||
-      (notes.trim().length > 0);
+      (notes.trim().length > 0) || releaseAssignments;
+  };
+
+  const changeSummary = () => {
+    const changes: string[] = [];
+    const stationLabel = (stationId: number | null) => {
+      if (!stationId) return 'None';
+      return stations.find((station) => station.id === stationId)?.name || `Station #${stationId}`;
+    };
+    const officerLabel = (officerId: string) => officers.find((officer) => officer.id === officerId)?.display_name || officerId;
+    const resourceLabel = (resourceId: number) => resources.find((resource) => resource.id === resourceId)?.name || `Resource #${resourceId}`;
+    const statusLabel = (status: string | undefined) => STATUS_OPTIONS.find((option) => option.value === status)?.label || status || 'Unknown';
+
+    if (selectedAgencyType !== initialAgencyType) changes.push(`Agency: ${initialAgencyType.toUpperCase() || 'Not assigned'} -> ${selectedAgencyType.toUpperCase() || 'Not assigned'}`);
+    if (newStatus !== incident?.status) changes.push(`Status: ${statusLabel(incident?.status)} → ${statusLabel(newStatus)}`);
+    if (selectedStationId !== initialStationId) changes.push(`Station: ${stationLabel(initialStationId)} → ${stationAssignmentIntent === 'auto' ? 'Select manually' : stationLabel(selectedStationId)}`);
+    if (hasOfficerChanges()) changes.push(`Officers: ${initialOfficerIds.map(officerLabel).join(', ') || 'None'} → ${selectedOfficerIds.map(officerLabel).join(', ') || 'None'}`);
+    if (hasPrimaryOfficerChanges()) changes.push(`Lead officer: ${initialPrimaryOfficerId ? officerLabel(initialPrimaryOfficerId) : 'None'} → ${selectedPrimaryOfficerId ? officerLabel(selectedPrimaryOfficerId) : 'None'}`);
+    if (hasResourceChanges()) changes.push(`Resources: ${initialResourceIds.map(resourceLabel).join(', ') || 'None'} → ${selectedResourceIds.map(resourceLabel).join(', ') || 'None'}`);
+    if (notes.trim()) changes.push('Operational note added');
+    return changes;
   };
 
   const performStatusUpdate = async () => {
     if (!incident) return;
 
-    // Confirmation for critical status changes
-    if ((newStatus === 'resolved' || newStatus === 'closed') &&
-      !confirm(`Are you sure you want to mark this incident as ${newStatus}? This action cannot be easily undone.`)) {
-      return;
-    }
-
     setUpdating(true);
     setUpdateError(null);
+    setFormErrors({});
     setUpdateSuccess(false);
 
     try {
       const scope = getSessionScope();
-      await window.api.updateIncidentStatus({
-        id: incident.id,
-        status: newStatus,
-        notes: notes,
-        updatedBy: scope.role === 'Admin' ? 'Admin' : (scope.role || 'User'),
-        updatedById: scope.userId || undefined,
-        stationId: selectedStationId ?? undefined,
-        officerIds: selectedOfficerIds,
-        primaryOfficerId: selectedPrimaryOfficerId,
-        resourceIds: selectedResourceIds
-      });
+      const applyingAIRecommendation = Boolean(
+        newStatus === 'assigned' &&
+        selectedStationId &&
+        aiRecommendationKey &&
+        appliedAIRecommendationKey === aiRecommendationKey,
+      );
+
+      if (applyingAIRecommendation) {
+        if (!dispatchRecommendation?.id) {
+          throw new Error('The AI dispatch plan is no longer current and must be refreshed before approval.');
+        }
+        if (!scope.userId) {
+          throw new Error('A signed-in dispatcher account is required to approve an AI dispatch recommendation.');
+        }
+        await window.api.approveDispatchRecommendation({
+          recommendationId: dispatchRecommendation.id,
+          incidentId: incident.id,
+          stationId: selectedStationId!,
+          officerIds: selectedOfficerIds,
+          resourceIds: selectedResourceIds,
+          approvedBy: scope.userId,
+          overrideReason: notes.trim() || undefined,
+        });
+      } else {
+        await window.api.updateIncidentStatus({
+          id: incident.id,
+          status: newStatus,
+          notes: notes,
+          updatedBy: scope.role === 'Admin' ? 'Admin' : (scope.role || 'User'),
+          updatedById: scope.userId || undefined,
+          agencyType: selectedAgencyType || undefined,
+          stationId: selectedStationId ?? undefined,
+          officerIds: selectedOfficerIds,
+          primaryOfficerId: selectedPrimaryOfficerId,
+          resourceIds: selectedResourceIds,
+          releaseAssignments: newStatus === 'resolved' || newStatus === 'closed' ? releaseAssignments : undefined,
+        });
+      }
 
       // Log security action
       await window.api.logSecurityAction({
@@ -1095,13 +1491,28 @@ function IncidentDetail() {
       await loadHistory();
       await loadAssignmentHistory();
       setNotes('');
-      setSelectedStationId(null);
+      setReleaseAssignments(false);
       // Don't clear selectedOfficerIds - loadIncident will update them from server
+      setLastRefreshed(new Date());
       setUpdateSuccess(true);
       setTimeout(() => setUpdateSuccess(false), 3000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to update status:', error);
-      setUpdateError('Failed to update status. Please try again.');
+      const message = String(error?.message || '');
+      if (message.includes('Dispatch recommendation has expired')) {
+        const refreshed = await refreshDispatchRecommendation();
+        if (refreshed) {
+          setUpdateError('The previous dispatch plan expired. A fresh plan is ready for dispatcher review.');
+        }
+      } else {
+        const friendly = normalizeUpdateError(error);
+        setUpdateError(friendly);
+        if (/dispatch_plan_required/i.test(message)) {
+          setFormErrors({ agency: !selectedAgencyType && !incident?.agency_type ? 'Select a response agency.' : undefined, station: !selectedStationId && !incident?.assigned_station_id ? 'Select an assigned station.' : undefined });
+        } else if (/final_report_required/i.test(message)) {
+          setFormErrors({ form: friendly });
+        }
+      }
     } finally {
       setUpdating(false);
     }
@@ -1201,14 +1612,14 @@ function IncidentDetail() {
                   href={url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="relative group aspect-square rounded-lg overflow-hidden bg-gray-200 dark:bg-gray-600 hover:ring-2 hover:ring-blue-500 transition-all"
+                  className="relative group aspect-square rounded-lg overflow-hidden bg-slate-200 dark:bg-slate-600 hover:ring-2 hover:ring-blue-500 transition-all"
                 >
                   {isVideo ? (
-                    <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                    <div className="w-full h-full flex items-center justify-center bg-slate-800">
                       <video src={url} className="w-full h-full object-cover" muted preload="metadata" />
                       <div className="absolute inset-0 flex items-center justify-center bg-black/30">
                         <div className="w-10 h-10 rounded-full bg-white/80 flex items-center justify-center">
-                          <div className="w-0 h-0 border-t-6 border-t-transparent border-l-10 border-l-gray-800 border-b-6 border-b-transparent ml-1"></div>
+                          <div className="w-0 h-0 border-t-6 border-t-transparent border-l-10 border-l-slate-800 border-b-6 border-b-transparent ml-1"></div>
                         </div>
                       </div>
                     </div>
@@ -1231,7 +1642,7 @@ function IncidentDetail() {
           </div>
         );
       }
-      return <p className="mt-1 text-gray-500 italic">No media attached</p>;
+      return <p className="mt-1 text-slate-500 italic">No media attached</p>;
     }
 
     if (Array.isArray(content)) {
@@ -1247,22 +1658,22 @@ function IncidentDetail() {
                     {patient.age && `${patient.age} years old`} {patient.sex && `• ${patient.sex}`}
                   </p>
                 </div>
-                <p className="font-medium text-gray-900 dark:text-white mb-2">{patient.name}</p>
-                {patient.address && <p className="text-sm text-gray-600 dark:text-gray-400">📍 {patient.address}</p>}
+                <p className="font-medium text-slate-900 dark:text-white mb-2">{patient.name}</p>
+                {patient.address && <p className="text-sm text-slate-600 dark:text-slate-400">📍 {patient.address}</p>}
                 {patient.chiefComplaint && (
-                  <p className="text-sm text-gray-700 dark:text-gray-300 mt-2">
+                  <p className="text-sm text-slate-700 dark:text-slate-300 mt-2">
                     <span className="font-medium">Chief Complaint:</span> {patient.chiefComplaint}
                   </p>
                 )}
                 {patient.condition && (
-                  <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
+                  <p className="text-sm text-slate-700 dark:text-slate-300 mt-1">
                     <span className="font-medium">Condition:</span> {patient.condition}
                   </p>
                 )}
                 {(patient.vitals?.bp || patient.vitals?.pulse || patient.vitals?.spo2) && (
                   <div className="mt-2 pt-2 border-t border-cyan-200 dark:border-cyan-700">
                     <p className="text-xs font-medium text-cyan-700 dark:text-cyan-300 mb-1">Vitals:</p>
-                    <div className="grid grid-cols-3 gap-2 text-xs text-gray-600 dark:text-gray-400">
+                    <div className="grid grid-cols-3 gap-2 text-xs text-slate-600 dark:text-slate-400">
                       {patient.vitals.bp && <span>BP: {patient.vitals.bp}</span>}
                       {patient.vitals.pulse && <span>Pulse: {patient.vitals.pulse}</span>}
                       {patient.vitals.spo2 && <span>SpO2: {patient.vitals.spo2}%</span>}
@@ -1279,17 +1690,17 @@ function IncidentDetail() {
         return (
           <div className="space-y-2 mt-1">
             {content.map((person: any, idx: number) => (
-              <div key={idx} className="bg-gray-50 dark:bg-gray-700/50 p-2 rounded text-sm border border-gray-100 dark:border-gray-700">
-                <p className="font-medium text-gray-800 dark:text-gray-200">
+              <div key={idx} className="bg-slate-50 dark:bg-slate-700/50 p-2 rounded text-sm border border-slate-100 dark:border-slate-700">
+                <p className="font-medium text-slate-800 dark:text-slate-200">
                   {person.firstName} {person.middleName} {person.lastName}
                 </p>
-                {person.alias && <p className="text-xs text-gray-500">Alias: {person.alias}</p>}
+                {person.alias && <p className="text-xs text-slate-500">Alias: {person.alias}</p>}
                 {(person.address || person.occupation) && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-slate-500 mt-1">
                     {[person.address, person.occupation].filter(Boolean).join(' • ')}
                   </p>
                 )}
-                {person.status && <p className="text-xs text-gray-500">Status: {person.status}</p>}
+                {person.status && <p className="text-xs text-slate-500">Status: {person.status}</p>}
               </div>
             ))}
           </div>
@@ -1299,7 +1710,7 @@ function IncidentDetail() {
       return (
         <ul className="list-disc list-inside mt-1">
           {content.map((item: any, idx: number) => (
-            <li key={idx} className="text-gray-800 dark:text-gray-200">
+            <li key={idx} className="text-slate-800 dark:text-slate-200">
               {typeof item === 'object' ? JSON.stringify(item) : String(item)}
             </li>
           ))}
@@ -1308,10 +1719,10 @@ function IncidentDetail() {
     }
 
     if (typeof content === 'object' && content !== null) {
-      return <pre className="text-xs bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto">{JSON.stringify(content, null, 2)}</pre>;
+      return <pre className="text-xs bg-slate-50 dark:bg-slate-900 p-2 rounded overflow-x-auto">{JSON.stringify(content, null, 2)}</pre>;
     }
 
-    return <p className="mt-1 text-gray-800 dark:text-white whitespace-pre-wrap">{String(content)}</p>;
+    return <p className="mt-1 text-slate-800 dark:text-white whitespace-pre-wrap">{String(content)}</p>;
   };
 
   const handleExportPDF = async () => {
@@ -1320,7 +1731,7 @@ function IncidentDetail() {
     try {
       const doc = await exportFinalReportToPDF(incident, finalReport, incident.agency_type);
       const filenameAgency = (incident.agency_type?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : incident.agency_type).toUpperCase();
-      const filename = `Final_Report_${filenameAgency}_${incident.id.substring(0, 8)}_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `Final_Report_${filenameAgency}_${getIncidentReference(incident)}_${new Date().toISOString().split('T')[0]}.pdf`;
       doc.save(filename);
     } catch (error) {
       console.error('Error exporting PDF:', error);
@@ -1401,7 +1812,7 @@ function IncidentDetail() {
     printWindow.document.write(`
       <html>
         <head>
-          <title>Final Report - Incident #${incident?.id?.slice(0, 8).toUpperCase()}</title>
+          <title>Final Report - ${getIncidentReference(incident || {})}</title>
           <style>
             body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding: 40px; color: #111; line-height: 1.5; }
             .header { border-bottom: 2px solid #e5e7eb; padding-bottom: 20px; margin-bottom: 30px; }
@@ -1416,7 +1827,7 @@ function IncidentDetail() {
         <body>
           <div class="header">
             <div class="title">${getAgencyName(incident?.agency_type || '')} - Final Report</div>
-            <div class="subtitle">Incident ID: #${incident?.id?.toUpperCase()}</div>
+            <div class="subtitle">Incident reference: ${getIncidentReference(incident || {})}</div>
           </div>
           
           <div class="meta">
@@ -1472,10 +1883,11 @@ function IncidentDetail() {
         details: { incident_id: id }
       });
 
-      // Close modal and proceed with status update
-      setShowFinalReportModal(false);
-      await performStatusUpdate();
-      await loadFinalReport(); // Reload to show the new final report
+       // finalReports:create is the authoritative close operation. Do not issue
+       // a second status update, which would turn a successful close into a
+       // misleading partial-failure state.
+       setShowFinalReportModal(false);
+       await Promise.all([loadIncident(), loadHistory(), loadAssignmentHistory(), loadFinalReport()]);
 
       // Reset form
       setFinalReportData({
@@ -1550,13 +1962,7 @@ function IncidentDetail() {
   };
 
   const getAgencyName = (agency: string) => {
-    switch (agency?.toLowerCase()) {
-      case 'pnp': return 'Philippine National Police';
-      case 'bfp': return 'Bureau of Fire Protection';
-      case 'mdrrmo': return 'Municipal Disaster Risk Reduction Management Office';
-      case 'pdrrmo': return 'Municipal Disaster Risk Reduction Management Office';
-      default: return agency;
-    }
+    return getAgencyPresentation(agency).fullLabel;
   };
 
   const getMediaUrls = (): string[] => {
@@ -1631,28 +2037,48 @@ function IncidentDetail() {
 
   const getAgencyIcon = (shortName: string) => {
     switch (shortName?.toUpperCase()) {
-      case 'PNP': return '🚔';
-      case 'BFP': return '🚒';
-      case 'MDRRMO': return '🚑';
-      default: return '📍';
+      case 'PNP': return 'PNP';
+      case 'BFP': return 'BFP';
+      case 'MDRRMO': return 'MDRRMO';
+      default: return 'UNIT';
     }
   };
 
-  const handleRefresh = () => {
+  const formatIncidentAge = (dateStr: string) => {
+    const minutes = Math.max(0, Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000));
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
+    return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
+  };
+
+  const handleRefresh = async () => {
     if (!id) return;
     setLoading(true);
-    loadIncident();
-    loadHistory();
-    loadAssignmentHistory();
-    loadUnitReports();
-    loadFinalReport();
-    loadDraft();
+    setIncidentError(null);
+    await Promise.allSettled([
+      loadIncident(),
+      loadHistory(),
+      loadAssignmentHistory(),
+      loadUnitReports(),
+      loadFinalReport(),
+      loadDraft(),
+      loadIncidentAgencies(),
+      loadBackupRequests(),
+      loadAiReport(),
+      loadOtherIncidents(),
+      loadStations(),
+      loadResources(),
+    ]);
+    setLastRefreshed(new Date());
+    setLoading(false);
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex items-center justify-center h-full" role="status" aria-label="Loading incident details">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <span className="sr-only">Loading incident details</span>
       </div>
     );
   }
@@ -1660,8 +2086,13 @@ function IncidentDetail() {
   if (!incident) {
     return (
       <div className="flex flex-col items-center justify-center h-full">
-        <p className="text-gray-500 mb-4">Incident not found</p>
-        <button
+        {incidentError ? (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">{incidentError}</div>
+        ) : (
+          <p className="text-slate-500 mb-4">Incident not found</p>
+        )}
+
+                 <button
           onClick={() => navigate('/incidents')}
           className="text-blue-600 hover:underline"
         >
@@ -1682,27 +2113,134 @@ function IncidentDetail() {
   const historicalBackupRequests = backupRequests.filter(br => !['pending', 'acknowledged', 'assigned'].includes(br.status));
   const tabs = [
     { id: 'overview' as const, label: 'Overview', icon: FileText },
-    { id: 'reports' as const, label: 'Reports', icon: Edit3 },
     { id: 'management' as const, label: 'Management', icon: Truck },
     { id: 'backups' as const, label: 'Backups', icon: AlertTriangle, badge: activeBackupRequests.length },
+    { id: 'reports' as const, label: 'Final Report', icon: Edit3 },
   ];
+  const assignedOfficerIds = incident.assigned_officer_ids?.length
+    ? incident.assigned_officer_ids
+    : incident.assigned_officer_id ? [incident.assigned_officer_id] : [];
+  const assignedOfficerNames = assignedOfficerIds
+    .map((officerId) => officers.find((officer) => officer.id === officerId)?.display_name)
+    .filter(Boolean) as string[];
+  const assignedStation = getAssignedStation();
+  const effectiveDraftStationId = stationAssignmentIntent === 'keep'
+    ? incident.assigned_station_id ?? selectedStationId
+    : selectedStationId;
+  const leadOfficerId = incident.assigned_officer_id || assignedOfficerIds[0] || null;
+  const leadOfficerName = leadOfficerId
+    ? officers.find((officer) => officer.id === leadOfficerId)?.display_name || 'Officer details unavailable'
+    : null;
+  const hasOperationalAssignment = Boolean(
+    incident.assigned_station_id || assignedOfficerIds.length > 0 || incident.assigned_resource_ids?.length,
+  );
+  const hasAssignmentStatusConflict = incident.status === 'pending' && hasOperationalAssignment;
+  const officialAgency = getAgencyPresentation(incident.agency_type);
+  const recommendedAgency = aiRecommendation ? getAgencyPresentation(aiRecommendation.recommendedAgency) : null;
+  const severityValue = triageAssessment?.severity ?? aiReport?.severity ?? null;
+  const statusHint = STATUS_HINTS[incident.status] || {
+    title: 'Incident lifecycle status',
+    description: 'This is the official workflow state recorded for the incident.',
+  };
+  const responseState = assignedStation
+    ? assignedOfficerNames.length > 0 ? `${assignedOfficerNames.length} officer${assignedOfficerNames.length === 1 ? '' : 's'} assigned` : 'Station assigned, no officer'
+    : 'No station assigned';
+  const aiSeverity = aiReport?.status === 'completed' && aiReport.severity ? `Level ${aiReport.severity} / 5` : 'Not assessed';
+  const nextRequiredAction = hasAssignmentStatusConflict
+    ? 'Align the status with the active assignment'
+    : incident.status === 'pending'
+      ? 'Choose a response agency and station'
+      : incident.status === 'assigned' && !leadOfficerName
+        ? 'Assign a lead officer'
+        : incident.status === 'assigned'
+          ? 'Begin the field response'
+          : ['in_progress', 'responding'].includes(incident.status)
+            ? 'Monitor the response and update resources'
+            : incident.status === 'resolved'
+              ? 'Complete the final report and close the record'
+              : incident.status === 'closed'
+                ? 'No further operational action'
+                : 'Review the incident record';
+  const proposedStation = effectiveDraftStationId
+    ? stations.find((station) => station.id === effectiveDraftStationId)
+    : null;
+  const proposedLeadOfficer = selectedPrimaryOfficerId
+    ? officers.find((officer) => officer.id === selectedPrimaryOfficerId)
+    : null;
+  const proposedAssignmentConflict = newStatus === 'pending' && Boolean(
+    effectiveDraftStationId || selectedOfficerIds.length || selectedResourceIds.length,
+  );
+  const openResponseManagement = (proposedStatus?: string) => {
+    if (proposedStatus) setNewStatus(proposedStatus);
+    setFormErrors({});
+    setUpdateError(null);
+    setActiveTab('management');
+  };
 
   return (
-    <div className="p-4 sm:p-6 max-w-7xl mx-auto dark:bg-gray-950">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto dark:bg-slate-950">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4 mb-6">
-        <div className="flex items-center gap-4">
+      <div className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:px-4">
+        <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3">
           <button
             onClick={() => navigate('/incidents')}
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg dark:text-white"
+            aria-label="Back to incidents"
+            className="min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-slate-200 bg-white p-2 text-slate-600 shadow-sm hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
           >
             <ArrowLeft size={24} />
           </button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800 dark:text-white">
-              Incident #{incident.id.substring(0, 8).toUpperCase()}
+          <div className="min-w-0">
+            <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 dark:text-slate-500">Incident details</p>
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900 dark:text-white sm:text-2xl">
+              {getIncidentReference(incident)}
             </h1>
-            <p className="text-gray-500 dark:text-gray-400">{getAgencyName(incident.agency_type)}</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <ContextHint
+                title={officialAgency.isApproved ? 'Official response agency' : 'Agency assignment pending'}
+                description={officialAgency.isApproved
+                  ? `${officialAgency.fullLabel} is the agency currently recorded as operationally responsible for this incident.`
+                  : 'No approved response agency is recorded yet. Review the evidence and assign the responsible agency and station in Management.'}
+                ariaLabel={`Explain agency tag: ${officialAgency.fullLabel}`}
+              >
+                <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-semibold ${officialAgency.badgeClass}`}>
+                  {!officialAgency.isApproved && <HelpCircle size={13} aria-hidden="true" />}
+                  {officialAgency.fullLabel}
+                </span>
+              </ContextHint>
+              {!officialAgency.isApproved && recommendedAgency?.isApproved && (
+                <ContextHint
+                  title="AI agency recommendation"
+                  description={`${recommendedAgency.fullLabel} is suggested from the available report evidence. This is advisory and does not change the official agency or assign a station.`}
+                  ariaLabel={`Explain AI recommendation for ${recommendedAgency.shortLabel}`}
+                >
+                  <span className="rounded-full bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 ring-1 ring-inset ring-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-800">
+                    AI recommends {recommendedAgency.shortLabel}
+                  </span>
+                </ContextHint>
+              )}
+              {!officialAgency.isApproved && (severityValue || triageAssessment?.urgency) && (
+                <ContextHint
+                  title="AI severity and urgency"
+                  description="Severity estimates impact on a 1-5 scale. Urgency describes how quickly action may be needed. Both are advisory until a dispatcher verifies the report."
+                  ariaLabel="Explain AI severity and urgency"
+                >
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    {severityValue ? `Severity ${severityValue}` : ''}{severityValue && triageAssessment?.urgency ? ' · ' : ''}{triageAssessment?.urgency || ''}
+                  </span>
+                </ContextHint>
+              )}
+              <ContextHint
+                title={statusHint.title}
+                description={statusHint.description}
+                ariaLabel={`Explain ${STATUS_OPTIONS.find(s => s.value === incident.status)?.label || incident.status} status`}
+              >
+                <span className={`rounded-full px-2 py-1 text-[11px] font-semibold text-white ${STATUS_OPTIONS.find(s => s.value === incident.status)?.color || 'bg-slate-500'}`}>
+                  {STATUS_OPTIONS.find(s => s.value === incident.status)?.label || incident.status}
+                </span>
+              </ContextHint>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Reported {formatIncidentAge(incident.created_at)}</span>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1710,7 +2248,7 @@ function IncidentDetail() {
             <button
               onClick={handleReopenIncident}
               disabled={reopening}
-              className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors shadow-sm"
+            className="inline-flex items-center gap-2 min-h-10 px-3 py-2 text-sm font-medium text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 rounded-lg hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:bg-amber-900/20 transition-colors shadow-sm"
               title="Unlock incident for editing (Admin only)"
             >
               {reopening ? (
@@ -1723,26 +2261,42 @@ function IncidentDetail() {
           )}
           <button
             onClick={handleRefresh}
-            className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-600 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+            disabled={loading}
+            className="inline-flex items-center gap-2 min-h-10 px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-600 rounded-lg hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-blue-900/30 transition-colors"
           >
             <RefreshCcw size={16} />
             Refresh
           </button>
+          {lastRefreshed && <span className="hidden text-xs text-slate-500 dark:text-slate-400 xl:inline">Updated {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+        </div>
         </div>
       </div>
 
-      <div className="mb-6 overflow-x-auto">
-        <div className="inline-flex min-w-full sm:min-w-0 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1 shadow-sm">
+      {incidentError && (
+        <div role="alert" className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+          <span>{incidentError}</span>
+          <button type="button" onClick={handleRefresh} className="min-h-10 rounded-lg border border-red-300 px-3 font-semibold hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-red-700 dark:hover:bg-red-900/40">Retry</button>
+        </div>
+      )}
+
+      <div className="mb-4 overflow-x-auto">
+        <div role="tablist" aria-label="Incident details" className="inline-flex min-w-full sm:min-w-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1 shadow-sm">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
+                id={`incident-tab-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-1 sm:flex-none items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${isActive
+                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={`incident-panel-${tab.id}`}
+                tabIndex={isActive ? 0 : -1}
+                className={`flex flex-1 sm:flex-none min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${isActive
                   ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700'
+                  : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700'
                   }`}
               >
                 <Icon size={16} />
@@ -1758,23 +2312,78 @@ function IncidentDetail() {
         </div>
       </div>
 
-      <div className={`grid grid-cols-1 gap-6 ${(activeTab === 'overview' || activeTab === 'reports' || activeTab === 'management') ? 'lg:grid-cols-[minmax(0,1fr)_360px]' : ''}`}>
+       <div id={`incident-panel-${activeTab}`} role="tabpanel" aria-labelledby={`incident-tab-${activeTab}`} tabIndex={0} className={`grid grid-cols-1 gap-4 ${(activeTab === 'overview' || activeTab === 'reports' || activeTab === 'management') ? 'xl:grid-cols-[minmax(620px,1fr)_320px]' : ''}`}>
         {/* Main Content */}
         <div className="space-y-6">
           {activeTab === 'overview' && (
             <>
-              {/* Initial Incident Report (from Reporter) */}
-              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
-                    <FileText size={20} />
-                    Initial Incident Report
-                  </h2>
-                  <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
-                    From Reporter
-                  </span>
+              {hasAssignmentStatusConflict && (
+                <section className="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20" aria-labelledby="assignment-conflict-title" role="alert">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <AlertTriangle size={20} className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden="true" />
+                      <div>
+                        <h2 id="assignment-conflict-title" className="text-sm font-semibold text-amber-950 dark:text-amber-100">Status does not match the response assignment</h2>
+                        <p className="mt-1 text-sm leading-5 text-amber-900 dark:text-amber-200">
+                          {assignedStation?.name || 'A response unit'} is assigned while this incident remains Pending. Review the response plan before further updates.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button type="button" onClick={() => openResponseManagement('assigned')} className="min-h-11 rounded-lg bg-amber-700 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">Set status to Assigned</button>
+                      <button type="button" onClick={() => openResponseManagement()} className="min-h-11 rounded-lg border border-amber-400 bg-white px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-900/30">Review assignment</button>
+                    </div>
+                  </div>
+                </section>
+              )}
+              <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/20" aria-labelledby="operational-summary-title">
+                <div className="mb-3">
+                  <div>
+                    <h2 id="operational-summary-title" className="text-base font-semibold text-slate-900 dark:text-white">Current response state</h2>
+                    <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">Live assignment and readiness information</p>
+                  </div>
                 </div>
-                <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{incident.description}</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4">
+                  <div><p className="text-xs text-slate-500 dark:text-slate-400">Status</p><p className="mt-1 font-semibold text-slate-900 dark:text-white">{STATUS_OPTIONS.find((option) => option.value === incident.status)?.label || incident.status}</p></div>
+                  <div><p className="text-xs text-slate-500 dark:text-slate-400">Incident age</p><p className="mt-1 font-semibold text-slate-900 dark:text-white">{formatIncidentAge(incident.created_at)}</p></div>
+                  <div><p className="text-xs text-slate-500 dark:text-slate-400">AI severity</p><p className="mt-1 font-semibold text-slate-900 dark:text-white">{aiSeverity}</p></div>
+                  <div><p className="text-xs font-medium text-slate-600 dark:text-slate-300">Affected people</p><p className="mt-1 font-semibold text-slate-900 dark:text-white">{incident.casualties_count ? `${incident.casualties_count} recorded` : incident.casualties_category || 'Not confirmed'}</p></div>
+                  <div className="col-span-2 md:col-span-2"><p className="text-xs text-slate-500 dark:text-slate-400">Assigned station</p><p className="mt-1 truncate font-semibold text-slate-900 dark:text-white">{assignedStation ? `${assignedStation.agencies?.short_name?.toUpperCase() || ''} · ${assignedStation.name}` : 'Not assigned'}</p></div>
+                  <div><p className="text-xs text-slate-500 dark:text-slate-400">Response team</p><p className="mt-1 font-semibold text-slate-900 dark:text-white">{responseState}</p></div>
+                  <div><p className="text-xs text-slate-500 dark:text-slate-400">Resources</p><p className="mt-1 font-semibold text-slate-900 dark:text-white">{incident.assigned_resource_ids?.length || 0} assigned</p></div>
+                </div>
+              </section>
+
+              {/* Incident evidence: reporter narrative and attached media belong together. */}
+              <div id="incident-evidence" className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between mb-4">
+                   <h2 className="text-base font-semibold text-slate-800 dark:text-white flex items-center gap-2">
+                    <FileText size={20} />
+                    Incident Evidence
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">From Reporter</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{mediaItems.length} attachment{mediaItems.length === 1 ? '' : 's'}</span>
+                  </div>
+                </div>
+                <p className="text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{incident.description || 'No written description provided.'}</p>
+
+                {mediaItems.length > 0 && (
+                  <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"><ImageIcon size={14} /> Attached evidence</p>
+                      <button type="button" onClick={() => setSelectedEvidenceIndex(0)} className="min-h-10 rounded-lg px-2 text-xs font-semibold text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20">View all</button>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+                      {mediaItems.slice(0, 6).map((item, index) => (
+                        <button key={`${item.url}-${index}`} type="button" onClick={() => setSelectedEvidenceIndex(index)} aria-label={`Open evidence ${index + 1} of ${mediaItems.length}`} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-700 dark:bg-slate-900">
+                          {item.type === 'video' ? <video src={item.url} preload="metadata" className="h-full w-full object-cover" /> : <img src={item.url} alt={`Incident evidence attachment ${index + 1}`} className="h-full w-full object-cover transition-transform group-hover:scale-105" />}
+                          {index === 5 && mediaItems.length > 6 && <span className="absolute inset-0 flex items-center justify-center bg-black/55 text-sm font-semibold text-white">+{mediaItems.length - 6}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Casualties Information */}
                 {(incident.casualties_category || incident.casualties_count) && (
@@ -1810,34 +2419,57 @@ function IncidentDetail() {
 
           {activeTab === 'reports' && (
             <>
-              {/* Final Report Section - with Edit/Create Draft button */}
-              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+              <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800" aria-labelledby="final-report-title">
+                <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-700 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h2 id="final-report-title" className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
                     <FileText size={20} />
-                    Final Report
-                  </h2>
+                      Official final report
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Complete the record, request review, then publish after verification.</p>
+                  </div>
                   <button
+                    type="button"
                     onClick={() => setShowEnhancedReportModal(true)}
-                    className={`px-4 py-2 text-white rounded-lg flex items-center gap-2 text-sm transition-colors ${isLocked
-                      ? 'bg-gray-500 hover:bg-gray-600'
+                    className={`flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${isLocked
+                      ? 'bg-slate-600 hover:bg-slate-700'
                       : 'bg-blue-600 hover:bg-blue-700'
                       }`}
                   >
                     {isLocked ? <FileText size={16} /> : <Edit3 size={16} />}
-                    {isLocked ? 'View Report' : finalReport ? 'Edit Report' : 'Create/Edit Draft'}
+                    {isLocked ? 'View official report' : draftReport ? 'Open working report' : 'Start final report'}
                   </button>
                 </div>
 
+                <div className="grid grid-cols-1 gap-3 py-4 sm:grid-cols-3" aria-label="Final report workflow status">
+                  {[
+                    { label: '1. Working report', complete: Boolean(draftReport || finalReport), active: !finalReport && (!draftReport || draftReport.status === 'draft') },
+                    { label: '2. Review', complete: Boolean(finalReport || draftReport?.status === 'ready_for_review'), active: !finalReport && draftReport?.status === 'ready_for_review' },
+                    { label: '3. Published', complete: Boolean(finalReport), active: Boolean(finalReport) }
+                  ].map((step) => (
+                    <div key={step.label} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${step.active
+                      ? 'border-blue-300 bg-blue-50 font-semibold text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-200'
+                      : step.complete
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200'
+                        : 'border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400'
+                      }`}>
+                      {step.complete ? <CheckCircle2 size={16} /> : <span className="h-4 w-4 rounded-full border border-current" aria-hidden="true" />}
+                      {step.label}
+                    </div>
+                  ))}
+                </div>
+
                 {finalReport ? (
-                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-lg p-4 border border-green-200 dark:border-green-800">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-800 dark:bg-emerald-900/10">
                     <div className="flex items-center justify-between mb-3">
-                      <span className="text-xs px-2 py-1 bg-green-600 text-white rounded">
-                        Published
-                      </span>
+                      <div>
+                        <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Published record</span>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Published {formatDate(finalReport.completed_at)}</p>
+                      </div>
                       <button
+                        type="button"
                         onClick={handleExportPDF}
-                        className="px-3 py-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-600 text-sm flex items-center gap-1"
+                        className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                       >
                         <FileText size={14} />
                         Export PDF
@@ -1847,49 +2479,55 @@ function IncidentDetail() {
                     <div className="space-y-4">
                       {formatReportDetails(finalReport.report_details)?.map(([key, value]) => (
                         <div key={key}>
-                          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 uppercase text-xs">
+                          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1 uppercase text-xs">
                             {formatFieldLabel(key)}
                           </h3>
                           {renderReportValue(key, value)}
                         </div>
                       ))}
 
-                      <div className="pt-2 border-t border-green-200 dark:border-green-800 text-xs text-gray-500 dark:text-gray-400">
-                        Completed on {formatDate(finalReport.completed_at)}
-                      </div>
                     </div>
                   </div>
                 ) : draftReport ? (
-                  <div className="bg-gradient-to-br from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 rounded-lg p-4 border border-yellow-200 dark:border-yellow-800">
+                  <div className={`rounded-lg border p-4 ${draftReport.status === 'ready_for_review'
+                    ? 'border-blue-200 bg-blue-50/60 dark:border-blue-800 dark:bg-blue-900/10'
+                    : 'border-amber-200 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-900/10'
+                    }`}>
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
-                        <span className={`text-xs px-2 py-1 rounded ${draftReport.status === 'ready_for_review'
-                          ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
-                          : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${draftReport.status === 'ready_for_review'
+                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
+                          : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
                           }`}>
                           {draftReport.status === 'ready_for_review' ? 'Ready for Review' : 'Draft In Progress'}
                         </span>
                         {draftReport.draft_details?.source === 'responder' && (
-                          <span className="text-xs px-2 py-1 bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 rounded">
-                            📱 Submitted by Responder
+                          <span className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                            <Smartphone size={13} /> Responder submission
                           </span>
                         )}
                       </div>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        Last saved: {draftReport.updated_at ? new Date(draftReport.updated_at).toLocaleDateString() : 'N/A'}
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        Saved {draftReport.updated_at ? formatDate(draftReport.updated_at) : 'date unavailable'}
                       </span>
                     </div>
 
+                    <p className="mb-3 text-sm text-slate-700 dark:text-slate-300">
+                      {draftReport.status === 'ready_for_review'
+                        ? 'Required fields are complete. Verify the report before publishing and closing the incident.'
+                        : 'This report is still being authored. Complete required fields before submitting it for review.'}
+                    </p>
+
                     {draftReport.draft_details?.source === 'responder' && draftReport.draft_details?.title && (
-                      <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-3">
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">
                         {draftReport.draft_details.title}
                       </p>
                     )}
 
-                    <div className="space-y-4 opacity-80">
+                    <div className="grid gap-3 sm:grid-cols-2">
                       {formatReportDetails(draftReport.draft_details)?.slice(0, 3).map(([key, value]) => (
                         <div key={key}>
-                          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1 uppercase text-xs">
+                          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1 uppercase text-xs">
                             {formatFieldLabel(key)}
                           </h3>
                           <div className="line-clamp-2 text-sm">
@@ -1898,27 +2536,28 @@ function IncidentDetail() {
                         </div>
                       ))}
                       {(!draftReport.draft_details || Object.keys(draftReport.draft_details).length === 0) && (
-                        <p className="text-sm text-gray-500 italic">No details entered yet.</p>
+                        <p className="text-sm text-slate-500 italic">No details entered yet.</p>
                       )}
                     </div>
 
-                    <div className="mt-4 pt-3 border-t border-yellow-200 dark:border-yellow-800 flex justify-end">
+                    <div className="mt-4 flex justify-end border-t border-slate-200 pt-3 dark:border-slate-700">
                       <button
+                        type="button"
                         onClick={() => setShowEnhancedReportModal(true)}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                        className="flex min-h-10 items-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300 dark:hover:bg-blue-900/20"
                       >
-                        Continue Editing <ArrowLeft className="rotate-180" size={14} />
+                        {draftReport.status === 'ready_for_review' ? 'Review report' : 'Continue editing'} <ArrowLeft className="rotate-180" size={14} />
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                    <FileText size={48} className="mx-auto mb-3 opacity-50" />
-                    <p>No final report yet</p>
-                    <p className="text-sm">Click "Create/Edit Draft" to start</p>
+                  <div className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                    <FileText size={36} className="mx-auto mb-3 opacity-50" />
+                    <p className="font-medium text-slate-700 dark:text-slate-200">No working report</p>
+                    <p className="mt-1 text-sm">Start the agency report and save it before requesting review.</p>
                   </div>
                 )}
-              </div>
+              </section>
 
             </>
           )}
@@ -1926,12 +2565,12 @@ function IncidentDetail() {
           {activeTab === 'overview' && (
             <>
               {/* Location */}
-              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+              <div id="incident-location" className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                 <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-3 flex items-center gap-2">
                   <MapPin size={20} />
-                  Location
+                  Incident Location
                 </h2>
-                <p className="text-gray-700 dark:text-gray-300 mb-2">{incident.location_address || 'Address not available'}</p>
+                <p className="text-slate-700 dark:text-slate-300 mb-2">{incident.location_address || 'Address not available'}</p>
                 {/* Assigned Station Badge */}
                 {incident.assigned_station_id && (() => {
                   const assignedStation = stations.find(s => s.id === incident.assigned_station_id);
@@ -1939,7 +2578,7 @@ function IncidentDetail() {
                     const isPrimary = assignedStation.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
                     return (
                       <div className="flex items-center gap-2 mb-3">
-                        <span className="text-sm text-gray-500 dark:text-gray-400">Assigned to:</span>
+                        <span className="text-sm text-slate-500 dark:text-slate-400">Assigned to:</span>
                         <span className={`px-2 py-1 text-xs font-medium rounded ${isPrimary
                           ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
                           : 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
@@ -1954,26 +2593,27 @@ function IncidentDetail() {
                 })()}
                 {incident.latitude != null && incident.longitude != null ? (
                   <>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-                      Coordinates: {Number(incident.latitude).toFixed(6)}, {Number(incident.longitude).toFixed(6)}
-                    </p>
+                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                       Coordinates: {Number(incident.latitude).toFixed(6)}, {Number(incident.longitude).toFixed(6)}
+                     </p>
                     {/* Interactive Map with Route */}
-                    <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
+                    <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
                       {/* Route Toggle Button */}
                       {incident.assigned_station_id && getAssignedStation() && (
-                        <div className="bg-gray-50 dark:bg-gray-700 p-2 border-b border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                        <div className="bg-slate-50 dark:bg-slate-700 p-2 border-b border-slate-200 dark:border-slate-600 flex items-center justify-between">
                           <button
                             onClick={() => setShowRoute(!showRoute)}
-                            className={`px-3 py-1.5 text-sm rounded-lg flex items-center gap-2 transition-colors ${showRoute
+                            aria-pressed={showRoute}
+                            className={`min-h-10 px-3 py-1.5 text-sm rounded-lg flex items-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${showRoute
                               ? 'bg-blue-600 text-white'
-                              : 'bg-white dark:bg-gray-600 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-500'
+                              : 'bg-white dark:bg-slate-600 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-500 hover:bg-slate-100 dark:hover:bg-slate-500'
                               }`}
                           >
                             <Truck size={16} />
                             {showRoute ? 'Hide Route' : 'Show Route from Station'}
                           </button>
                           {showRoute && routeInfo && (
-                            <div className="text-sm text-gray-600 dark:text-gray-300">
+                            <div className="text-sm text-slate-600 dark:text-slate-300">
                               <span className="font-medium">{routeInfo.distance.toFixed(1)} km</span>
                               <span className="mx-2">•</span>
                               <span className="font-medium">~{Math.round(routeInfo.duration)} min</span>
@@ -1983,7 +2623,7 @@ function IncidentDetail() {
                       )}
 
                       {/* Leaflet Map with Route */}
-                      <RouteMap
+                       <RouteMap
                         incidentLat={Number(incident.latitude)}
                         incidentLng={Number(incident.longitude)}
                         incidentAddress={incident.location_address}
@@ -1991,59 +2631,64 @@ function IncidentDetail() {
                         stationLng={getAssignedStation()?.longitude}
                         stationName={getAssignedStation()?.name}
                         showRoute={showRoute}
-                        onRouteLoaded={handleRouteLoaded}
-                      />
+                         onRouteLoaded={handleRouteLoaded}
+                       />
+                       <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" aria-label="Map legend">
+                         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-600" /> Incident</span>
+                         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-600" /> Responding station</span>
+                         {showRoute && <span className="flex items-center gap-1.5"><span className="h-0.5 w-4 bg-blue-600" /> Suggested route</span>}
+                       </div>
 
-                      {/* Map Actions */}
-                      <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 px-3 py-2 border-t border-gray-200 dark:border-gray-600">
-                        <button
-                          onClick={() => {
-                            const url = `https://www.openstreetmap.org/?mlat=${incident.latitude}&mlon=${incident.longitude}#map=16/${incident.latitude}/${incident.longitude}`;
-                            window.api.openExternal(url);
-                          }}
-                          className="text-sm text-blue-600 hover:underline cursor-pointer"
-                        >
-                          View larger map ↗
-                        </button>
-                        {showRoute && getAssignedStation() && (
-                          <button
-                            onClick={() => {
-                              const station = getAssignedStation();
-                              if (station) {
-                                const url = `https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${station.latitude}%2C${station.longitude}%3B${incident.latitude}%2C${incident.longitude}`;
-                                window.api.openExternal(url);
-                              }
-                            }}
-                            className="text-sm text-green-600 hover:underline flex items-center gap-1 cursor-pointer"
-                          >
-                            <Truck size={14} />
-                            Open directions ↗
-                          </button>
-                        )}
+                       {/* Map Actions */}
+                      <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-700 px-3 py-2 border-t border-slate-200 dark:border-slate-600">
+                         <button
+                           type="button"
+                           onClick={() => {
+                             if (getAssignedStation()) setShowRoute(true);
+                             setMapView('larger');
+                           }}
+                           className="min-h-10 inline-flex items-center gap-1 text-sm text-blue-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer"
+                         >
+                           <Maximize2 size={14} />
+                           View larger map
+                         </button>
+                         {getAssignedStation() && (
+                           <button
+                             type="button"
+                             onClick={() => {
+                               setShowRoute(true);
+                               setMapView('directions');
+                             }}
+                             className="min-h-10 text-sm text-green-600 hover:underline flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 cursor-pointer"
+                           >
+                             <Truck size={14} />
+                             Open directions
+                           </button>
+                         )}
                       </div>
                     </div>
 
                     {/* Nearby Stations */}
                     {getNearbyStations().length > 0 && (
-                      <div className="mt-4">
-                        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Nearby Response Units</h3>
+                       <div className="mt-4">
+                        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Nearby Response Units</h3>
                         <div className="space-y-2">
                           {getNearbyStations().map((station) => (
                             <div
                               key={station.id}
-                              className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm"
+                               className="flex min-h-12 items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-2 text-sm transition-colors hover:border-blue-300 focus-within:ring-2 focus-within:ring-blue-500 dark:border-slate-700 dark:bg-slate-700"
                             >
                               <div className="flex items-center gap-2">
-                                <span className="text-lg">{getAgencyIcon(station.agencies?.short_name)}</span>
+                                 <span className="min-w-14 text-xs font-bold text-slate-500 dark:text-slate-300">{station.agencies?.short_name?.toUpperCase()}</span>
                                 <div>
-                                  <p className="font-medium text-gray-800 dark:text-white">{station.name}</p>
-                                  <p className="text-xs text-gray-500 dark:text-gray-400">{station.agencies?.short_name}</p>
+                                  <p className="font-medium text-slate-800 dark:text-white">{station.name}</p>
+                                  <p className="text-xs text-slate-500 dark:text-slate-400">{station.agencies?.short_name}</p>
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <p className="font-medium text-gray-700 dark:text-gray-300">{station.distance.toFixed(1)} km</p>
+                               <div className="text-right">
+                                 <p className="font-medium text-slate-700 dark:text-slate-300">{station.distance.toFixed(1)} km</p>
                                 {station.contact_number && (
-                                  <p className="text-xs text-gray-500 dark:text-gray-400">{station.contact_number}</p>
+                                  <p className="text-xs text-slate-500 dark:text-slate-400">{station.contact_number}</p>
                                 )}
                               </div>
                             </div>
@@ -2053,14 +2698,14 @@ function IncidentDetail() {
                     )}
                   </>
                 ) : (
-                  <p className="text-sm text-gray-500">Map coordinates not available</p>
+                  <p className="text-sm text-slate-500">Map coordinates not available</p>
                 )}
               </div>
 
               {/* Media */}
-              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+               <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                   <h2 className="text-base font-semibold text-slate-800 dark:text-white flex items-center gap-2">
                     <ImageIcon size={20} />
                     Media ({mediaItems.length})
                   </h2>
@@ -2083,7 +2728,7 @@ function IncidentDetail() {
                   </button>
                 </div>
                 {mediaItems.length > 0 ? (
-                  <div className="grid grid-cols-3 gap-4">
+                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {mediaItems.map((item, index) => {
                       const isVideo = item.type === 'video';
                       const isImage = item.type === 'image';
@@ -2092,7 +2737,7 @@ function IncidentDetail() {
                         return (
                           <div
                             key={index}
-                            className="relative aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg overflow-hidden"
+                            className="relative aspect-square bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden"
                           >
                             <video
                               src={item.url}
@@ -2123,17 +2768,17 @@ function IncidentDetail() {
                         return (
                           <div
                             key={index}
-                            className="relative aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
+                            className="relative aspect-square bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden hover:opacity-80 transition-opacity"
                           >
                             <a
                               href={item.url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="block w-full h-full"
+                              className="block w-full h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset"
                             >
                               <img
                                 src={item.url}
-                                alt={`Media ${index + 1}`}
+                                alt={`Incident evidence ${index + 1}`}
                                 className="w-full h-full object-cover"
                               />
                             </a>
@@ -2152,7 +2797,7 @@ function IncidentDetail() {
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center justify-center aspect-square bg-gray-100 dark:bg-gray-900 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors"
+                          className="flex items-center justify-center aspect-square bg-slate-100 dark:bg-slate-900 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-800 transition-colors"
                         >
                           View file
                         </a>
@@ -2160,14 +2805,14 @@ function IncidentDetail() {
                     })}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">No media uploaded yet. Click "Upload Media" to add photos or videos.</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">No media uploaded yet. Click "Upload Media" to add photos or videos.</p>
                 )}
               </div>
 
               {/* Assigned Officers */}
               {(incident.assigned_officer_ids?.length || incident.assigned_officer_id) && (
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-                  <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                 <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                   <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-3 flex items-center gap-2">
                     <UserCheck size={20} />
                     Assigned Officers ({incident.assigned_officer_ids?.length || 1})
                   </h2>
@@ -2189,16 +2834,16 @@ function IncidentDetail() {
                       return orderedOfficers.map((officer) => (
                         <div
                           key={officer.id}
-                          className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
+                          className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg"
                         >
                           <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
                             <User size={20} className="text-blue-600 dark:text-blue-400" />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="font-medium text-gray-800 dark:text-white truncate">
+                            <p className="font-medium text-slate-800 dark:text-white truncate">
                               {officer.display_name || officer.email}
                             </p>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                            <p className="text-sm text-slate-500 dark:text-slate-400">
                               {officer.role}
                               {officer.phone_number && ` • ${officer.phone_number}`}
                             </p>
@@ -2215,7 +2860,7 @@ function IncidentDetail() {
                                       </span>
                                     )}
                                     {stationName && (
-                                      <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 rounded">
+                                      <span className="px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300 rounded">
                                         {stationName}
                                       </span>
                                     )}
@@ -2229,7 +2874,7 @@ function IncidentDetail() {
                               Lead
                             </span>
                           ) : (
-                            <span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 rounded">
+                            <span className="px-2 py-1 text-xs font-medium bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 rounded">
                               Supporting
                             </span>
                           )}
@@ -2238,7 +2883,7 @@ function IncidentDetail() {
                     })()}
                     {/* Show placeholder if officers not loaded yet */}
                     {officers.length === 0 && (
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Loading officer details...</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">Loading officer details...</p>
                     )}
                   </div>
                 </div>
@@ -2246,8 +2891,8 @@ function IncidentDetail() {
 
               {/* Unit Reports from Field Officers */}
               {unitReports.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-                  <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                  <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-3 flex items-center gap-2">
                     <FileText size={20} />
                     Field Officer Reports ({unitReports.length})
                   </h2>
@@ -2284,62 +2929,62 @@ function IncidentDetail() {
                       }
 
                       return (
-                        <div key={report.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                        <div key={report.id} className="p-4 bg-slate-50 dark:bg-slate-700 rounded-lg">
                           <div className="flex items-center justify-between mb-2">
-                            <span className="font-medium text-gray-800 dark:text-white">{report.title}</span>
+                            <span className="font-medium text-slate-800 dark:text-white">{report.title}</span>
                             <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
                               {report.agency}
                             </span>
                           </div>
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                          <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                             By: {report.profiles?.display_name || 'Unknown Officer'}
                           </p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
                             Submitted: {formatDate(report.created_at)}
                           </p>
 
                           {/* Formatted Details */}
                           {report.details && (
-                            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                            <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-600">
                               <div className="space-y-2 text-sm">
                                 {/* Narrative */}
                                 {details.narrative && (
                                   <div>
-                                    <span className="font-medium text-gray-700 dark:text-gray-300">Narrative:</span>
-                                    <p className="mt-1 text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{details.narrative}</p>
+                                    <span className="font-medium text-slate-700 dark:text-slate-300">Narrative:</span>
+                                    <p className="mt-1 text-slate-600 dark:text-slate-400 whitespace-pre-wrap">{details.narrative}</p>
                                   </div>
                                 )}
 
                                 {/* Suspects */}
                                 {details.suspects && (
                                   <div>
-                                    <span className="font-medium text-gray-700 dark:text-gray-300">Suspects:</span>
-                                    <p className="mt-1 text-gray-600 dark:text-gray-400">{details.suspects}</p>
+                                    <span className="font-medium text-slate-700 dark:text-slate-300">Suspects:</span>
+                                    <p className="mt-1 text-slate-600 dark:text-slate-400">{details.suspects}</p>
                                   </div>
                                 )}
 
                                 {/* Victims */}
                                 {details.victims && (
                                   <div>
-                                    <span className="font-medium text-gray-700 dark:text-gray-300">Victims:</span>
-                                    <p className="mt-1 text-gray-600 dark:text-gray-400">{details.victims}</p>
+                                    <span className="font-medium text-slate-700 dark:text-slate-300">Victims:</span>
+                                    <p className="mt-1 text-slate-600 dark:text-slate-400">{details.victims}</p>
                                   </div>
                                 )}
 
                                 {/* Counts */}
                                 <div className="flex flex-wrap gap-4 mt-2">
                                   {details.victims_count && (
-                                    <span className="text-gray-600 dark:text-gray-400">
+                                    <span className="text-slate-600 dark:text-slate-400">
                                       <strong>Victims:</strong> {details.victims_count}
                                     </span>
                                   )}
                                   {details.suspects_count && (
-                                    <span className="text-gray-600 dark:text-gray-400">
+                                    <span className="text-slate-600 dark:text-slate-400">
                                       <strong>Suspects:</strong> {details.suspects_count}
                                     </span>
                                   )}
                                   {details.evidence_count && (
-                                    <span className="text-gray-600 dark:text-gray-400">
+                                    <span className="text-slate-600 dark:text-slate-400">
                                       <strong>Evidence:</strong> {details.evidence_count}
                                     </span>
                                   )}
@@ -2347,7 +2992,7 @@ function IncidentDetail() {
 
                                 {/* Timestamp */}
                                 {details.timestamp && (
-                                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                                  <p className="text-xs text-slate-500 dark:text-slate-400">
                                     Report Time: {new Date(details.timestamp).toLocaleString()}
                                   </p>
                                 )}
@@ -2355,7 +3000,7 @@ function IncidentDetail() {
                                 {/* Media Gallery */}
                                 {mediaUrls.length > 0 && (
                                   <div className="mt-3">
-                                    <span className="font-medium text-gray-700 dark:text-gray-300 block mb-2">
+                                    <span className="font-medium text-slate-700 dark:text-slate-300 block mb-2">
                                       Attached Media ({mediaUrls.length}):
                                     </span>
                                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -2367,10 +3012,10 @@ function IncidentDetail() {
                                             href={url}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="relative group aspect-square rounded-lg overflow-hidden bg-gray-200 dark:bg-gray-600 hover:ring-2 hover:ring-blue-500 transition-all"
+                                            className="relative group aspect-square rounded-lg overflow-hidden bg-slate-200 dark:bg-slate-600 hover:ring-2 hover:ring-blue-500 transition-all"
                                           >
                                             {isVideo ? (
-                                              <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                                              <div className="w-full h-full flex items-center justify-center bg-slate-800">
                                                 <video
                                                   src={url}
                                                   className="w-full h-full object-cover"
@@ -2379,7 +3024,7 @@ function IncidentDetail() {
                                                 />
                                                 <div className="absolute inset-0 flex items-center justify-center bg-black/30">
                                                   <div className="w-12 h-12 rounded-full bg-white/80 flex items-center justify-center">
-                                                    <div className="w-0 h-0 border-t-8 border-t-transparent border-l-12 border-l-gray-800 border-b-8 border-b-transparent ml-1"></div>
+                                                    <div className="w-0 h-0 border-t-8 border-t-transparent border-l-12 border-l-slate-800 border-b-8 border-b-transparent ml-1"></div>
                                                   </div>
                                                 </div>
                                               </div>
@@ -2418,60 +3063,179 @@ function IncidentDetail() {
           )}
 
           {activeTab === 'management' && !isUpdateStatusExpanded && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Update Status</h2>
+            <>
+            <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/20" aria-labelledby="decision-context-title">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 id="decision-context-title" className="text-sm font-semibold text-slate-900 dark:text-white">Decision context</h2>
+                  <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{getIncidentReference(incident)} · {incident.location_address || 'Location unavailable'}</p>
+                </div>
+                <button type="button" onClick={() => setActiveTab('overview')} className="shrink-0 text-xs font-semibold text-blue-700 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300">View overview</button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                <div><span className="block text-slate-500 dark:text-slate-400">Status</span><strong className="mt-0.5 block text-slate-900 dark:text-white">{STATUS_OPTIONS.find((option) => option.value === incident.status)?.label || incident.status}</strong></div>
+                <div><span className="block text-slate-500 dark:text-slate-400">AI severity</span><strong className="mt-0.5 block text-slate-900 dark:text-white">{aiSeverity}</strong></div>
+                <div><span className="block text-slate-500 dark:text-slate-400">Recommendation</span><strong className="mt-0.5 block text-slate-900 dark:text-white">{recommendedAgency?.shortLabel || officialAgency.shortLabel}</strong></div>
+                <div><span className="block text-slate-500 dark:text-slate-400">Evidence</span><strong className="mt-0.5 block text-slate-900 dark:text-white">{mediaItems.length} attachment{mediaItems.length === 1 ? '' : 's'}</strong></div>
+              </div>
+              {mediaItems.length > 0 && (
                 <button
-                  onClick={() => setIsUpdateStatusExpanded(true)}
-                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                  title="Expand to modal"
+                  type="button"
+                  onClick={() => setSelectedEvidenceIndex(0)}
+                  aria-label={`Open evidence, ${mediaItems.length} attachment${mediaItems.length === 1 ? '' : 's'}`}
+                  className="mt-3 flex w-full items-center gap-3 rounded-lg border border-blue-200/80 bg-white/70 p-2 text-left transition-colors hover:border-blue-400 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-blue-800/70 dark:bg-slate-900/30 dark:hover:bg-slate-900/60"
                 >
-                  <Maximize2 size={18} className="text-gray-600 dark:text-gray-400" />
+                  <span className="relative h-14 w-16 shrink-0 overflow-hidden rounded-md bg-slate-200 dark:bg-slate-800">
+                    {mediaItems[0].type === 'video' ? (
+                      <video src={mediaItems[0].url} muted preload="metadata" className="h-full w-full object-cover" />
+                    ) : (
+                      <img src={mediaItems[0].url} alt="First incident evidence" className="h-full w-full object-cover" />
+                    )}
+                    {mediaItems.length > 1 && (
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/50 text-xs font-bold text-white">+{mediaItems.length - 1}</span>
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold text-slate-800 dark:text-slate-100">Open evidence preview</span>
+                    <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">{mediaItems.length > 1 ? 'View all attachments' : 'View full-size attachment'}</span>
+                  </span>
+                  <ImageIcon size={16} className="ml-auto shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
                 </button>
+              )}
+              <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-700 dark:text-slate-300">{incident.description || 'No written description provided.'}</p>
+            </section>
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm border border-slate-100 dark:border-slate-700">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase text-blue-700 dark:text-blue-300">Response plan</p>
+                  <h2 className="mt-0.5 text-base font-semibold text-slate-800 dark:text-white">Update operational state</h2>
+                </div>
               </div>
 
-              <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Current Status</p>
-                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-sm font-medium ${STATUS_OPTIONS.find(s => s.value === incident.status)?.color || 'bg-gray-500'
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-700">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Current status</p>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${STATUS_OPTIONS.find(s => s.value === incident.status)?.color || 'bg-slate-500'
                   } text-white`}>
                   {STATUS_OPTIONS.find(s => s.value === incident.status)?.label || incident.status}
                 </span>
               </div>
 
+              {incident.status === 'pending' && (incident.assigned_station_id || initialOfficerIds.length > 0 || initialResourceIds.length > 0) && (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200" role="alert">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+                    <span><strong>Assignment status needs review.</strong> This incident is Pending but already has response assignments.</span>
+                  </div>
+                  <button type="button" onClick={() => { setNewStatus('assigned'); setFormErrors((current) => ({ ...current, status: undefined })); }} className="ml-5 mt-2 min-h-10 rounded-lg bg-amber-700 px-3 py-1.5 font-semibold text-white hover:bg-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">Set status to Assigned</button>
+                </div>
+              )}
+
               {updateSuccess && (
-                <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg text-green-700 dark:text-green-400 text-sm">
-                  Status updated successfully!
+                 <div className="mb-3 p-2.5 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg text-green-700 dark:text-green-400 text-sm" role="status" aria-live="polite">
+                  Response plan updated successfully.
                 </div>
               )}
 
               {updateError && (
-                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400 text-sm">
-                  {updateError}
+                 <div className="mb-3 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200" role="alert" aria-live="assertive">
+                  <AlertTriangle size={17} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <div><p className="font-semibold">Could not save changes</p><p className="mt-0.5">{updateError}</p></div>
                 </div>
               )}
 
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {renderAIRecommendationPanel()}
+                {(newStatus === 'resolved' || newStatus === 'closed') && (initialOfficerIds.length > 0 || initialResourceIds.length > 0) && (
+                  <fieldset className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+                    <legend className="px-1 text-sm font-semibold text-amber-900 dark:text-amber-200">Assignment disposition</legend>
+                    <div className="space-y-2">
+                    <label className="flex min-h-10 items-start gap-3 text-sm text-amber-900 dark:text-amber-100">
+                      <input
+                        type="radio"
+                        name="assignment-disposition"
+                        checked={releaseAssignments}
+                        onChange={() => setReleaseAssignments(true)}
+                        disabled={isLocked}
+                        className="mt-1 h-4 w-4 border-amber-400 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>
+                        <strong>Release assigned personnel and resources</strong>
+                        <span className="mt-1 block text-xs text-amber-800 dark:text-amber-200">Mark the response team available when this update is applied.</span>
+                      </span>
+                    </label>
+                    <label className="flex min-h-10 items-start gap-3 text-sm text-amber-900 dark:text-amber-100">
+                      <input type="radio" name="assignment-disposition" checked={!releaseAssignments} onChange={() => setReleaseAssignments(false)} disabled={isLocked} className="mt-1 h-4 w-4 border-amber-400 text-blue-600 focus:ring-blue-500" />
+                      <span><strong>Keep the team attached for follow-up</strong><span className="mt-1 block text-xs text-amber-800 dark:text-amber-200">Preserve the current assignment after the status change.</span></span>
+                    </label>
+                    </div>
+                  </fieldset>
+                )}
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Change To</label>
+                  <label htmlFor="incident-next-status" className="block text-xs font-semibold uppercase text-slate-700 dark:text-slate-300 mb-1.5">1. Next operational state</label>
                   <select
+                    id="incident-next-status"
                     value={newStatus}
-                    onChange={(e) => setNewStatus(e.target.value)}
+                     onChange={(e) => {
+                       const nextStatus = e.target.value;
+                       setNewStatus(nextStatus);
+                       setFormErrors((current) => ({ ...current, status: nextStatus === 'pending' && hasOperationalAssignment ? 'Clear the response plan before returning to Pending.' : undefined, notes: undefined }));
+                     }}
                     disabled={isLocked}
-                    className={`w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    aria-invalid={Boolean(formErrors.status)}
+                    aria-describedby={formErrors.status ? 'incident-status-error' : undefined}
+                    className={`w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
                   >
-                    {STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
+                     {STATUS_OPTIONS.filter((option) => getAllowedStatuses().includes(option.value)).map((option) => (
+                      <option key={option.value} value={option.value} disabled={option.value === 'pending' && hasOperationalAssignment}>
                         {option.label} {option.value === incident.status ? '(current)' : ''}
                       </option>
                     ))}
                   </select>
+                  {formErrors.status && <p id="incident-status-error" className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.status}</p>}
+                </div>
+
+                {/* Response Agency - explicit dispatcher choice */}
+                {getSessionScope().role === 'Admin' && (
+                  <div>
+                    <label htmlFor="incident-response-agency" className="block text-xs font-semibold uppercase text-slate-700 dark:text-slate-300 mb-1.5">2. Response agency</label>
+                    <select
+                      id="incident-response-agency"
+                      value={selectedAgencyType}
+                      onChange={(event) => {
+                        const nextAgency = event.target.value;
+                        const clearedPlan = Boolean(selectedStationId || selectedOfficerIds.length || selectedResourceIds.length);
+                        setSelectedAgencyType(nextAgency);
+                        setFormErrors((current) => ({ ...current, agency: undefined, station: undefined }));
+                        setSelectedStationId(null);
+                        setStationAssignmentIntent('explicit');
+                        setSelectedOfficerIds([]);
+                        setSelectedPrimaryOfficerId(null);
+                        setSelectedResourceIds([]);
+                        setStationReconciliationError(clearedPlan ? 'Response agency changed. The previous station, personnel, and resources were cleared.' : null);
+                      }}
+                      disabled={isLocked}
+                      aria-invalid={Boolean(formErrors.agency)}
+                      aria-describedby={formErrors.agency ? 'incident-agency-error' : 'incident-agency-help'}
+                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
+                    >
+                      <option value="">Select an agency</option>
+                      {availableAgencies.map((agency) => {
+                        const code = String(agency.short_name || '').toLowerCase();
+                        return ['pnp', 'bfp', 'mdrrmo'].includes(code) ? <option key={agency.id} value={code}>{agency.name} ({code.toUpperCase()})</option> : null;
+                      })}
+                    </select>
+                    {formErrors.agency && <p id="incident-agency-error" className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.agency}</p>}
+                    <p id="incident-agency-help" className="mt-1 text-xs text-slate-500 dark:text-slate-400">Determines the available stations, personnel, and resources.</p>
+                  </div>
+                )}
                 </div>
 
                 {/* Station Assignment - Editable for Admin, read-only for others */}
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
-                    Assigned Station
+                  <label htmlFor="incident-assigned-station" className="block text-xs font-semibold uppercase text-slate-700 dark:text-slate-300 mb-1.5">
+                    3. Assigned station
                     {incident.assigned_station_id && (
                       <span className="ml-2 text-xs text-green-600 dark:text-green-400">
                         (Currently assigned: Station #{incident.assigned_station_id})
@@ -2487,18 +3251,19 @@ function IncidentDetail() {
                       return (
                         <>
                           <select
-                            value={selectedStationId || ''}
-                            onChange={(e) => setSelectedStationId(e.target.value ? Number(e.target.value) : null)}
+                            id="incident-assigned-station"
+                             value={stationAssignmentIntent === 'keep' ? 'keep' : stationAssignmentIntent === 'auto' ? 'auto' : selectedStationId?.toString() || ''}
+                             onChange={(e) => handleStationChange(e.target.value)}
                             disabled={isLocked}
-                            className={`w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
+                            aria-invalid={Boolean(formErrors.station)}
+                            aria-describedby={formErrors.station ? 'incident-station-error' : undefined}
+                            className={`w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
                           >
-                            <option value="">
-                              {incident.assigned_station_id
-                                ? 'Keep current assignment'
-                                : 'Auto-assign closest station'}
-                            </option>
+                             <option value={incident.assigned_station_id ? 'keep' : 'auto'}>
+                               {incident.assigned_station_id ? 'Keep current station' : 'Select a station'}
+                             </option>
                             {stations
-                              .filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase()))
+                              .filter(s => (selectedAgencyType ? s.agencies?.short_name?.toLowerCase() === selectedAgencyType : involvedAgencies.includes(s.agencies?.short_name?.toLowerCase())))
                               .map((station) => {
                                 const isPrimary = station.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
                                 const agencyRole = incidentAgencies.find(ia =>
@@ -2511,20 +3276,26 @@ function IncidentDetail() {
                                   </option>
                                 );
                               })}
-                            {stations.filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase())).length === 0 && (
-                              <option disabled>No stations available</option>
+                            {stations.filter(s => (selectedAgencyType ? s.agencies?.short_name?.toLowerCase() === selectedAgencyType : involvedAgencies.includes(s.agencies?.short_name?.toLowerCase()))).length === 0 && (
+                              <option disabled>No stations configured for this agency</option>
                             )}
                           </select>
-                          <div className="mt-2 flex items-center gap-2 text-xs">
-                            <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                          {formErrors.station && <p id="incident-station-error" className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.station}</p>}
+                          <div className="mt-1 flex items-center gap-2 text-xs">
+                            <span className="text-slate-500 dark:text-slate-400">Selected Agency:</span>
                             <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
-                              {incident.agency_type?.toUpperCase()}
+                              {selectedAgencyType ? selectedAgencyType.toUpperCase() : 'Not selected'}
                             </span>
                           </div>
-                          <p className="mt-2 text-xs text-gray-400">
-                            {!incident.assigned_station_id && newStatus !== 'pending'
-                              ? 'Will auto-assign to closest station if left empty'
-                              : 'Select a station to reassign or leave empty to keep current'}
+                   {stationReconciliationError && (
+                     <p role="alert" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+                       {stationReconciliationError}
+                     </p>
+                   )}
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                             {stationAssignmentIntent === 'auto'
+                               ? newStatus === 'pending' ? 'Choose a station before assigning responders.' : 'Select a station before applying an active assignment.'
+                               : stationAssignmentIntent === 'keep' ? 'The current station will remain assigned.' : 'Changing station may remove incompatible responders or resources.'}
                           </p>
                         </>
                       );
@@ -2532,7 +3303,7 @@ function IncidentDetail() {
                       // Non-admin: read-only
                       return (
                         <>
-                          <div className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                          <div className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                             {incident.assigned_station_id ? (
                               (() => {
                                 const assignedStation = stations.find(s => s.id === incident.assigned_station_id);
@@ -2547,13 +3318,13 @@ function IncidentDetail() {
                               'No station assigned yet'
                             )}
                           </div>
-                          <div className="mt-2 flex items-center gap-2 text-xs">
-                            <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                          <div className="mt-1 flex items-center gap-2 text-xs">
+                            <span className="text-slate-500 dark:text-slate-400">Selected Agency:</span>
                             <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
-                              {incident.agency_type?.toUpperCase()}
+                              {getAgencyPresentation(incident.agency_type).shortLabel}
                             </span>
                           </div>
-                          <p className="mt-2 text-xs text-gray-400">
+                          <p className="mt-1 text-xs text-slate-400">
                             Station assignment is locked. Contact admin to reassign.
                           </p>
                         </>
@@ -2565,13 +3336,13 @@ function IncidentDetail() {
                 {/* Agency Filter - Show for all incidents with involved agencies */}
                 {incidentAgencies.length > 0 && (
                   <div>
-                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <label className="block text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-400 mb-1.5">
                       View Officers By Agency
                     </label>
                     <select
                       value={viewAgencyFilter}
                       onChange={(e) => setViewAgencyFilter(e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                     >
                       <option value="all">All Agencies</option>
                       {incidentAgencies.map((ia) => {
@@ -2587,26 +3358,26 @@ function IncidentDetail() {
                   </div>
                 )}
 
-                <div className="flex items-center gap-2 mt-4 mb-4">
+                <div className="flex items-center gap-2 mt-2 mb-2">
                   <input
                     type="checkbox"
                     id="hideBusyToggle"
                     checked={hideBusy}
                     onChange={(e) => setHideBusy(e.target.checked)}
-                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
+                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
                   />
-                  <label htmlFor="hideBusyToggle" className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer select-none font-medium">
+                  <label htmlFor="hideBusyToggle" className="text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none font-medium">
                     Show only available officers
                   </label>
                 </div>
 
 
                 {/* Officer Assignment */}
-                <div className="rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50/70 dark:bg-gray-800/40 p-3 sm:p-4">
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50/70 dark:bg-slate-800/40 p-3">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200 flex items-center gap-2">
                       <UserCheck size={14} />
-                      Assign Officers
+                      4. Response personnel
                     </label>
                     <div className="flex items-center gap-2">
                       {selectedOfficerIds.length > 0 && (
@@ -2622,9 +3393,14 @@ function IncidentDetail() {
                     </div>
                   </div>
 
-                  <div className={`border border-gray-200 dark:border-gray-600 rounded-xl ${isUpdateStatusExpanded ? 'max-h-96' : 'max-h-48'} overflow-y-auto bg-white dark:bg-gray-700 divide-y divide-gray-100 dark:divide-gray-600`}>
+                  <div className={`border border-slate-200 dark:border-slate-600 rounded-xl ${isUpdateStatusExpanded ? 'max-h-96' : 'max-h-48'} overflow-y-auto bg-white dark:bg-slate-700 divide-y divide-slate-100 dark:divide-slate-600`}>
                     {(() => {
-                      const visibleOfficers = officers.filter(officer => {
+                       const targetStationId = effectiveDraftStationId || null;
+                       if (!targetStationId) {
+                         return <p className="px-4 py-4 text-sm text-slate-600 dark:text-slate-300">Select a response agency and station to view eligible personnel.</p>;
+                       }
+                       const visibleOfficers = officers.filter(officer => {
+                         if (officer.station_id !== targetStationId) return false;
                         // Filter by agency if multi-agency and filter is set
                         if (viewAgencyFilter !== 'all') {
                           const officerStation = stations.find(s => s.id === officer.station_id);
@@ -2652,7 +3428,7 @@ function IncidentDetail() {
 
                       if (visibleOfficers.length === 0) {
                         return (
-                          <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          <p className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
                             No officers available {selectedStationId ? 'at selected station' : 'for involved agencies'}
                           </p>
                         );
@@ -2671,15 +3447,14 @@ function IncidentDetail() {
                         });
 
                         const isBusyOnOther = busyIncidents.length > 0;
-                        const isAvailable = (officer.status === 'available' || !officer.status) && !isBusyOnOther;
-
-                        // Show busy indicator if not available and not currently assigned to THIS incident
-                        const showBusy = isBusyOnOther;
+                         const profileUnavailable = Boolean(officer.status && !['available', 'online'].includes(officer.status.toLowerCase()));
+                         // Keep currently assigned officers visible, but prevent adding unavailable officers.
+                         const showBusy = !isCurrentlyAssigned && (isBusyOnOther || profileUnavailable);
 
                         return (
                           <label
                             key={officer.id}
-                            className={`flex items-start gap-3 px-3 py-3 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer transition-colors ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                             className={`flex items-start gap-3 px-3 py-3 ${showBusy ? 'cursor-not-allowed opacity-75' : 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-600'} transition-colors ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
                               }`}
                           >
                             <input
@@ -2689,6 +3464,7 @@ function IncidentDetail() {
                                 if (e.target.checked) {
                                   const newOfficerIds = [...selectedOfficerIds, officer.id];
                                   setSelectedOfficerIds(newOfficerIds);
+                                  if (newStatus === 'pending') setNewStatus('assigned');
                                   if (newOfficerIds.length === 1 || !selectedPrimaryOfficerId) {
                                     setSelectedPrimaryOfficerId(officer.id);
                                   }
@@ -2702,24 +3478,24 @@ function IncidentDetail() {
                                   }
                                 }
                               }}
-                              disabled={showBusy || isLocked} // Disable if busy on another incident or locked
-                              className="mt-1 w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
+                               disabled={showBusy || isLocked} // Disable if deployed/unavailable or locked
+                              className="mt-1 w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50"
                             />
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-800 dark:text-white flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-medium text-slate-800 dark:text-white flex flex-wrap items-center gap-2">
                                 <span className="truncate">{officer.display_name || officer.email}</span>
                                 {isCurrentlyAssigned && (
                                   <span className="text-[11px] px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded-full font-medium">
                                     Assigned
                                   </span>
                                 )}
-                                {showBusy && (
-                                  <span className="text-[11px] px-2 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded-full font-medium">
-                                    Busy
-                                  </span>
-                                )}
+                                 {showBusy && (
+                                   <span className="text-[11px] px-2 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded-full font-medium">
+                                     {isBusyOnOther ? 'Busy' : officer.status}
+                                   </span>
+                                 )}
                               </p>
-                              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-2">
+                              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-2">
                                 <span>{officer.role}</span>
                                 {(() => {
                                   const officerStation = stations.find(s => s.id === officer.station_id);
@@ -2747,15 +3523,16 @@ function IncidentDetail() {
                       });
                     })()}
                   </div>
-                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     Select one or more officers to respond to this incident
                   </p>
+                  {formErrors.officers && <p className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.officers}</p>}
                 </div>
 
 
                 {selectedOfficerIds.length > 0 && (
                   <div>
-                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <label className="block text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-400 mb-1.5">
                       Lead Officer
                       {hasPrimaryOfficerChanges() && (
                         <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">
@@ -2767,7 +3544,7 @@ function IncidentDetail() {
                       value={selectedPrimaryOfficerId || ''}
                       onChange={(e) => setSelectedPrimaryOfficerId(e.target.value || null)}
                       disabled={selectedOfficerIds.length === 1 || isLocked}
-                      className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white disabled:opacity-70"
+                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white disabled:opacity-70"
                     >
                       {selectedOfficerIds.map(officerId => {
                         const officer = officers.find(o => o.id === officerId);
@@ -2778,16 +3555,17 @@ function IncidentDetail() {
                         );
                       })}
                     </select>
-                    <p className="mt-1 text-xs text-gray-400">
+                    {formErrors.leadOfficer && <p className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.leadOfficer}</p>}
+                    <p className="mt-1 text-xs text-slate-400">
                       The lead officer is the report owner. If only one officer is assigned, they are automatically the lead.
                     </p>
                   </div>
                 )}{/* Assign Resources */}
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  <label className="block text-xs font-semibold uppercase text-slate-700 dark:text-slate-300 mb-2">
                     <span className="flex items-center gap-1">
                       <Truck size={14} />
-                      Assign Resources
+                      5. Response resources
                     </span>
                     {selectedResourceIds.length > 0 && (
                       <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">
@@ -2795,10 +3573,10 @@ function IncidentDetail() {
                       </span>
                     )}
                   </label>
-                  <div className={`border border-gray-200 dark:border-gray-600 rounded-lg ${isUpdateStatusExpanded ? 'max-h-96' : 'max-h-48'} overflow-y-auto bg-white dark:bg-gray-700`}>
+                  <div className={`border border-slate-200 dark:border-slate-600 rounded-lg ${isUpdateStatusExpanded ? 'max-h-96' : 'max-h-48'} overflow-y-auto bg-white dark:bg-slate-700`}>
                     {(() => {
-                      const visibleResources = resources.filter(res => {
-                        const targetStationId = selectedStationId || incident.assigned_station_id;
+                       const visibleResources = resources.filter(res => {
+                        const targetStationId = effectiveDraftStationId;
                         // Filter by station (must match assigned station)
                         if (targetStationId) {
                           return res.station_id === targetStationId;
@@ -2810,7 +3588,7 @@ function IncidentDetail() {
 
                       if (visibleResources.length === 0) {
                         return (
-                          <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          <p className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
                             {selectedStationId ? 'No resources available at selected station' : 'Select a station to see resources'}
                           </p>
                         );
@@ -2828,7 +3606,7 @@ function IncidentDetail() {
                         return (
                           <label
                             key={res.id}
-                            className={`flex items-center gap-3 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer border-b border-gray-100 dark:border-gray-600 last:border-b-0 ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                            className={`flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-600 cursor-pointer border-b border-slate-100 dark:border-slate-600 last:border-b-0 ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
                               }`}
                           >
                             <input
@@ -2837,15 +3615,16 @@ function IncidentDetail() {
                               onChange={(e) => {
                                 if (e.target.checked) {
                                   setSelectedResourceIds([...selectedResourceIds, res.id]);
+                                  if (newStatus === 'pending') setNewStatus('assigned');
                                 } else {
                                   setSelectedResourceIds(selectedResourceIds.filter(id => id !== res.id));
                                 }
                               }}
                               disabled={showBusy || isLocked}
-                              className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
+                              className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50"
                             />
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-800 dark:text-white truncate flex items-center gap-2">
+                              <p className="text-sm font-medium text-slate-800 dark:text-white truncate flex items-center gap-2">
                                 {res.name}
                                 {isCurrentlyAssigned && (
                                   <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded">
@@ -2858,7 +3637,7 @@ function IncidentDetail() {
                                   </span>
                                 )}
                               </p>
-                              <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">
+                              <p className="text-xs text-slate-500 dark:text-slate-400 capitalize">
                                 {res.type}
                               </p>
                             </div>
@@ -2867,42 +3646,86 @@ function IncidentDetail() {
                       });
                     })()}
                   </div>
+                  {formErrors.resources && <p className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.resources}</p>}
                 </div>
 
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Notes (optional)</label>
+                   <label htmlFor="incident-operational-note" className="block text-xs font-semibold uppercase text-slate-700 dark:text-slate-300 mb-2">6. {['rejected', 'resolved'].includes(newStatus) ? 'Reason / resolution note' : 'Operational record (optional)'}</label>
                   <textarea
+                    id="incident-operational-note"
                     value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
+                    onChange={(e) => { setNotes(e.target.value); if (e.target.value.trim()) setFormErrors((current) => ({ ...current, notes: undefined })); }}
                     disabled={isLocked}
-                    placeholder={isLocked ? "Cannot add notes to a locked incident" : "Add notes about this status change..."}
+                    aria-invalid={Boolean(formErrors.notes)}
+                    aria-describedby={formErrors.notes ? 'incident-note-error' : undefined}
+                     placeholder={isLocked ? "Cannot add notes to a locked incident" : ['rejected', 'resolved'].includes(newStatus) ? 'Explain the decision and operational outcome...' : 'Add notes about this status change...'}
                     rows={3}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white dark:bg-gray-700 dark:text-white disabled:opacity-70"
+                    className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white dark:bg-slate-700 dark:text-white disabled:opacity-70"
                   />
+                  {formErrors.notes && <p id="incident-note-error" className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.notes}</p>}
                 </div>
 
-                <button
-                  onClick={handleUpdateStatus}
-                  disabled={updating || !hasChanges() || isLocked}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    <button
+                      onClick={handleUpdateStatus}
+                      disabled={updating || !hasChanges() || isLocked}
+                      className="sticky bottom-0 w-full min-h-11 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-md xl:hidden"
                 >
                   <Send size={18} />
-                  {updating ? 'Updating...' : hasOfficerChanges() && newStatus === incident.status ? 'Update Officers' : 'Update Status'}
+                    {updating ? 'Applying changes...' : hasChanges() ? `Review ${changeSummary().length} change${changeSummary().length === 1 ? '' : 's'}` : 'No changes to review'}
                 </button>
               </div>
             </div>
+            </>
           )}
         </div>
 
         {/* Sidebar */}
         {(activeTab === 'overview' || activeTab === 'reports') && (
-          <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
+          <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+            {activeTab === 'overview' && (
+              <section className="rounded-xl border border-blue-200 bg-white p-4 dark:border-blue-900/60 dark:bg-slate-800" aria-labelledby="response-context-title">
+                <p className="text-xs font-semibold uppercase text-blue-700 dark:text-blue-300">Next required action</p>
+                <h2 id="response-context-title" className="mt-1 text-base font-semibold leading-6 text-slate-900 dark:text-white">{nextRequiredAction}</h2>
+                <dl className="mt-4 space-y-3 border-t border-slate-200 pt-3 text-sm dark:border-slate-700">
+                  <div><dt className="text-xs font-medium text-slate-600 dark:text-slate-300">Lead officer</dt><dd className="mt-0.5 font-semibold text-slate-900 dark:text-white">{leadOfficerName || 'Not assigned'}</dd></div>
+                  <div><dt className="text-xs font-medium text-slate-600 dark:text-slate-300">Backup requests</dt><dd className="mt-0.5 font-semibold text-slate-900 dark:text-white">{activeBackupRequests.length > 0 ? `${activeBackupRequests.length} active` : 'None active'}</dd></div>
+                  <div><dt className="text-xs font-medium text-slate-600 dark:text-slate-300">Facts to verify</dt><dd className="mt-0.5 text-slate-800 dark:text-slate-200">{triageAssessment?.missing_facts?.length ? `${triageAssessment.missing_facts.length} outstanding` : 'No AI verification prompts'}</dd></div>
+                </dl>
+                {!isLocked && <button type="button" onClick={() => openResponseManagement(hasAssignmentStatusConflict ? 'assigned' : undefined)} className="mt-4 min-h-11 w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">Manage response</button>}
+              </section>
+            )}
+            {activeTab === 'reports' && (
+              <>
+                <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800" aria-labelledby="record-context-title">
+                  <h2 id="record-context-title" className="mb-3 text-base font-semibold text-slate-900 dark:text-white">Record context</h2>
+                  <dl className="space-y-3 text-sm">
+                    <div><dt className="text-xs text-slate-500 dark:text-slate-400">Agency decision</dt><dd className="mt-0.5 font-medium text-slate-900 dark:text-white">{getAgencyPresentation(incident.agency_type).fullLabel}</dd></div>
+                    <div><dt className="text-xs text-slate-500 dark:text-slate-400">Incident status</dt><dd className="mt-0.5 font-medium capitalize text-slate-900 dark:text-white">{incident.status.replace(/_/g, ' ')}</dd></div>
+                    <div><dt className="text-xs text-slate-500 dark:text-slate-400">Field reports available</dt><dd className="mt-0.5 font-medium text-slate-900 dark:text-white">{unitReports.length}</dd></div>
+                    <div><dt className="text-xs text-slate-500 dark:text-slate-400">Draft attachments</dt><dd className="mt-0.5 font-medium text-slate-900 dark:text-white">{draftMediaUrls.length}</dd></div>
+                    <div><dt className="text-xs text-slate-500 dark:text-slate-400">Reporter</dt><dd className="mt-0.5 font-medium text-slate-900 dark:text-white">{incident.reporter_name || 'Anonymous'}</dd></div>
+                    <div><dt className="text-xs text-slate-500 dark:text-slate-400">Incident location</dt><dd className="mt-0.5 text-slate-800 dark:text-slate-200">{incident.location_address || 'Not recorded'}</dd></div>
+                  </dl>
+                </section>
+                <section className="rounded-xl border border-amber-200 bg-amber-50/60 p-4 dark:border-amber-800 dark:bg-amber-900/10" aria-labelledby="publishing-impact-title">
+                  <h2 id="publishing-impact-title" className="mb-2 text-base font-semibold text-slate-900 dark:text-white">Publishing impact</h2>
+                  <p className="text-sm leading-6 text-slate-700 dark:text-slate-300">Publishing creates the official final record and closes the incident. Confirm field details, casualty figures, response times, and supporting evidence first.</p>
+                </section>
+              </>
+            )}
             {/* AI Triage Summary */}
-            {aiReport && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-[0px_0px_15px_rgba(59,130,246,0.15)] border-2 border-blue-100 dark:border-blue-900/50">
-                <h2 className="text-lg font-semibold text-blue-800 dark:text-blue-300 mb-4 flex items-center gap-2">
+            {activeTab === 'overview' && aiReport && (
+              <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-blue-200 dark:border-blue-900/50">
+                <h2 className="text-base font-semibold text-blue-800 dark:text-blue-300 mb-3 flex items-center gap-2">
                   <BrainCircuit size={20} className="text-blue-600 dark:text-blue-400" />
-                  AI Triage Summary
+                  <ContextHint
+                    title="Decision support, not a dispatch order"
+                    description="Severity estimates what the report appears to show. Urgency and priority combine available evidence with safety rules. Missing facts lower confidence and identify what the dispatcher should verify next."
+                    ariaLabel="Explain AI triage advisory"
+                    className="text-blue-800 dark:text-blue-300"
+                  >
+                    <span>AI triage <span className="text-xs font-normal text-blue-700/70 dark:text-blue-300/70">Advisory</span></span>
+                  </ContextHint>
                   {aiReport.status === 'processing' && (
                     <Loader2 size={16} className="animate-spin text-blue-500 ml-auto" />
                   )}
@@ -2915,19 +3738,55 @@ function IncidentDetail() {
                   <div className="space-y-4">
                     {/* Severity Badge */}
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-500 dark:text-gray-400">Predicted Severity</span>
-                      <span className={`px-2 py-1 text-xs font-bold rounded-full text-white ${aiReport.severity >= 4 ? 'bg-red-600' :
-                        aiReport.severity == 3 ? 'bg-orange-500' :
-                          aiReport.severity == 2 ? 'bg-yellow-500' : 'bg-green-500'
-                        }`}>
-                        Level {aiReport.severity} / 5
-                      </span>
+                      <span className="text-sm text-slate-500 dark:text-slate-400">Predicted Severity</span>
+                      <ContextHint
+                        title="AI-predicted impact level"
+                        description="A 1-5 estimate of the incident's apparent impact based on the submitted evidence. It supports triage but does not set the official status or dispatch responders."
+                        ariaLabel={`Explain predicted severity level ${aiReport.severity}`}
+                      >
+                        <span className={`px-2 py-1 text-xs font-bold rounded-full text-white ${aiReport.severity >= 4 ? 'bg-red-600' :
+                          aiReport.severity == 3 ? 'bg-orange-500' :
+                            aiReport.severity == 2 ? 'bg-yellow-500' : 'bg-green-500'
+                          }`}>
+                          Level {aiReport.severity} / 5
+                        </span>
+                      </ContextHint>
                     </div>
+
+                    {triageAssessment && (
+                      <details className="group rounded-lg border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+                        <summary className="flex min-h-8 cursor-pointer list-none items-center justify-between gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">
+                          <span className="text-sm font-semibold text-amber-900 dark:text-amber-200">Structured triage</span>
+                          <span className="text-xs font-medium text-amber-800 dark:text-amber-200">
+                            {triageAssessment.urgency || 'Unknown urgency'} · {triageAssessment.evidence_confidence || 'Unknown confidence'}
+                          </span>
+                        </summary>
+                        <div className="mt-2 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                          <div><span className="block text-amber-700/80 dark:text-amber-300/80">Emergency state</span><strong className="capitalize text-amber-950 dark:text-amber-100">{(triageAssessment.emergency_state || 'unknown').replace(/_/g, ' ')}</strong></div>
+                          <div><span className="block text-amber-700/80 dark:text-amber-300/80">Incident type</span><strong className="capitalize text-amber-950 dark:text-amber-100">{triageAssessment.incident_type || 'unknown'}</strong></div>
+                          <div><span className="block text-amber-700/80 dark:text-amber-300/80">Urgency</span><strong className="text-amber-950 dark:text-amber-100">{triageAssessment.urgency || 'Unknown'}</strong></div>
+                          <div><span className="block text-amber-700/80 dark:text-amber-300/80">Evidence</span><strong className="capitalize text-amber-950 dark:text-amber-100">{triageAssessment.evidence_confidence || 'Unknown'}</strong></div>
+                          <div><span className="block text-amber-700/80 dark:text-amber-300/80">Priority</span><strong className="text-amber-950 dark:text-amber-100">{triageAssessment.dispatch_priority ?? 'Unknown'} / 5</strong></div>
+                          <div><span className="block text-amber-700/80 dark:text-amber-300/80">Rules fired</span><strong className="text-amber-950 dark:text-amber-100">{triageAssessment.triggered_rules?.length || 0}</strong></div>
+                        </div>
+                        {triageAssessment.missing_facts && triageAssessment.missing_facts.length > 0 && (
+                          <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
+                            Missing confirmation: {triageAssessment.missing_facts.join(', ').replace(/_/g, ' ')}. Verify these facts before finalizing the response plan.
+                          </p>
+                        )}
+                        {triageAssessment.contradictions && triageAssessment.contradictions.length > 0 && (
+                          <p className="mt-2 text-xs text-red-800 dark:text-red-200">Contradictions to resolve: {triageAssessment.contradictions.join(', ').replace(/_/g, ' ')}.</p>
+                        )}
+                        {triageAssessment.required_capabilities && triageAssessment.required_capabilities.length > 0 && (
+                          <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">Required capabilities: {triageAssessment.required_capabilities.join(', ').replace(/_/g, ' ')}.</p>
+                        )}
+                      </details>
+                    )}
 
                     {/* Summary */}
                     <div>
-                      <span className="text-sm text-gray-500 dark:text-gray-400 block mb-1">AI Overview</span>
-                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200 bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800">
+                      <span className="text-sm text-slate-500 dark:text-slate-400 block mb-1">AI Overview</span>
+                      <p className="text-sm font-medium text-slate-800 dark:text-slate-200 bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800">
                         {aiReport.summary}
                       </p>
                     </div>
@@ -2935,7 +3794,7 @@ function IncidentDetail() {
                     {/* Hazards */}
                     {aiReport.hazards && aiReport.hazards.length > 0 && (
                       <div>
-                        <span className="text-sm text-gray-500 dark:text-gray-400 block mb-2 flex items-center gap-1">
+                        <span className="text-sm text-slate-500 dark:text-slate-400 block mb-2 flex items-center gap-1">
                           <AlertTriangle size={14} /> Identified Hazards
                         </span>
                         <div className="flex flex-wrap gap-2">
@@ -2948,43 +3807,48 @@ function IncidentDetail() {
                       </div>
                     )}
 
-                    {aiRecommendation && (
-                      <div className="border-t border-gray-100 dark:border-gray-700 pt-3 space-y-2">
+                    {SHOW_AI_DISPATCH_RECOMMENDATION && aiRecommendation && (
+                      <div className="border-t border-slate-100 dark:border-slate-700 pt-3 space-y-2">
                         {(() => {
                           const confidenceLow = aiRecommendation.confidence !== null && aiRecommendation.confidence < 0.75;
                           const needsReview = aiRecommendation.requiresHumanReview || aiRecommendation.reviewReasons.length > 0 || confidenceLow;
-                          const readinessLabel = needsReview ? 'Needs Human Review' : 'Eligible for Auto';
+                          const readinessLabel = needsReview ? 'Dispatcher review required' : 'Ready for dispatcher review';
                           const readinessClass = needsReview
                             ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-700'
                             : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-emerald-200 dark:border-emerald-700';
 
                           return (
                             <div className="flex justify-end">
-                              <span
-                                title="Automation readiness is advisory only. No automatic dispatch is executed."
-                                className={`px-2 py-1 text-[11px] font-medium rounded-full border ${readinessClass}`}
+                              <ContextHint
+                                title={needsReview ? 'Human confirmation required' : 'Recommendation ready to inspect'}
+                                description={needsReview
+                                  ? 'One or more confidence, evidence, capacity, or assignment checks still need a dispatcher. No responders are dispatched automatically.'
+                                  : 'The advisory plan has enough information for dispatcher review. It still does not assign responders until a dispatcher confirms it.'}
+                                ariaLabel={`Explain dispatch readiness: ${readinessLabel}`}
                               >
-                                {readinessLabel}
-                              </span>
+                                <span className={`px-2 py-1 text-[11px] font-medium rounded-full border ${readinessClass}`}>
+                                  {readinessLabel}
+                                </span>
+                              </ContextHint>
                             </div>
                           );
                         })()}
                         <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium text-gray-600 dark:text-gray-300">AI Dispatch Recommendation</span>
-                          <button
+                          <span className="text-sm font-medium text-slate-600 dark:text-slate-300">AI Dispatch Recommendation</span>
+                 <button
                             onClick={openPipelineLog}
-                            className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600"
+                            className="text-xs px-2 py-1 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600"
                           >
                             View Full Analysis
                           </button>
                         </div>
-                        <p className="text-xs text-gray-600 dark:text-gray-300">
+                        <p className="text-xs text-slate-600 dark:text-slate-300">
                           Agency: <span className="font-medium">{aiRecommendation.recommendedAgency.toUpperCase()}</span>
                         </p>
-                        <p className="text-xs text-gray-600 dark:text-gray-300">
+                        <p className="text-xs text-slate-600 dark:text-slate-300">
                           Station: <span className="font-medium">{aiRecommendation.recommendedStationLabel}</span>
                         </p>
-                        <p className="text-xs text-gray-600 dark:text-gray-300">
+                        <p className="text-xs text-slate-600 dark:text-slate-300">
                           Resources: <span className="font-medium">
                             {aiRecommendation.recommendedResourceNames.length > 0
                               ? aiRecommendation.recommendedResourceNames.join(', ')
@@ -2994,8 +3858,8 @@ function IncidentDetail() {
                       </div>
                     )}
 
-                    <div className="pt-2 border-t border-gray-100 dark:border-gray-700 text-right">
-                      <span className="text-[10px] text-gray-400 uppercase tracking-wider">
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700 text-right">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider">
                         Processed in {aiReport.processing_time_ms}ms ({aiReport.model_metadata?.vlm_model})
                       </span>
                     </div>
@@ -3010,7 +3874,7 @@ function IncidentDetail() {
                 )}
 
                 {['processing', 'queued'].includes(aiReport.status) && (
-                  <div className="text-sm text-gray-500 dark:text-gray-400 animate-pulse text-center p-4">
+                  <div className="text-sm text-slate-500 dark:text-slate-400 animate-pulse text-center p-4">
                     Evaluating media and details...
                   </div>
                 )}
@@ -3018,25 +3882,25 @@ function IncidentDetail() {
             )}
 
             {/* Reporter Info */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+            {activeTab === 'overview' && <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                   <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-3 flex items-center gap-2">
                 <User size={20} />
                 Reporter
               </h2>
               <div className="space-y-3">
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Name</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Name</p>
                   <p className="font-medium dark:text-white">{incident.reporter_name || 'Anonymous'}</p>
                 </div>
                 {incident.reporter_age && (
                   <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Age</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Age</p>
                     <p className="font-medium dark:text-white">{incident.reporter_age} years old</p>
                   </div>
                 )}
                 {incident.reporter_phone && (
                   <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Phone</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Phone</p>
                     <a
                       href={`tel:${incident.reporter_phone}`}
                       className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
@@ -3047,7 +3911,7 @@ function IncidentDetail() {
                 )}
                 {incident.reporter?.email && (
                   <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Email</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Email</p>
                     <a
                       href={`mailto:${incident.reporter.email}`}
                       className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
@@ -3058,7 +3922,7 @@ function IncidentDetail() {
                 )}
                 {incident.reporter?.phone_number && (
                   <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Profile Contact</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Profile Contact</p>
                     <a
                       href={`tel:${incident.reporter.phone_number}`}
                       className="font-medium text-blue-600 dark:text-blue-400 hover:underline"
@@ -3069,7 +3933,7 @@ function IncidentDetail() {
                 )}
                 {incident.reporter_latitude != null && incident.reporter_longitude != null && (
                   <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Reporter Location</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Reporter Location</p>
                     {(() => {
                       const reporterLocationText = incident.reporter_location_address || incident.location_address;
                       return (
@@ -3084,123 +3948,163 @@ function IncidentDetail() {
                       );
                     })()}
                     {(incident.reporter_location_address || incident.location_address) && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                         {incident.reporter_latitude.toFixed(6)}, {incident.reporter_longitude.toFixed(6)}
                       </p>
                     )}
                   </div>
                 )}
               </div>
-            </div>
+            </div>}
 
             {/* Timestamps */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+            {activeTab === 'overview' && <div className="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm border border-slate-100 dark:border-slate-700">
+              <h2 className="text-lg font-semibold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
                 <Clock size={20} />
                 Timeline
               </h2>
               <div className="space-y-3">
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Reported</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Reported</p>
                   <p className="font-medium dark:text-white">{formatDate(incident.created_at)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Last Updated</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Last Updated</p>
                   <p className="font-medium dark:text-white">{formatDate(incident.updated_at || incident.created_at)}</p>
                 </div>
               </div>
-            </div>
+            </div>}
 
           </div>
         )}
-        <div className={(activeTab === 'management' || activeTab === 'backups') ? 'space-y-6 lg:sticky lg:top-6 lg:self-start' : 'hidden'}>
+        <div className={(activeTab === 'management' || activeTab === 'backups') ? 'space-y-4 lg:sticky lg:top-6 lg:self-start' : 'hidden'}>
           {activeTab === 'management' && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+            <section className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm dark:border-blue-900/60 dark:bg-slate-800" aria-labelledby="review-response-plan-title">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase text-blue-700 dark:text-blue-300">Proposed result</p>
+                  <h2 id="review-response-plan-title" className="mt-1 text-base font-semibold text-slate-900 dark:text-white">Review response plan</h2>
+                </div>
+                <span className={`rounded-full px-2 py-1 text-xs font-semibold text-white ${STATUS_OPTIONS.find((option) => option.value === newStatus)?.color || 'bg-slate-500'}`}>
+                  {STATUS_OPTIONS.find((option) => option.value === newStatus)?.label || newStatus}
+                </span>
+              </div>
+
+              <dl className="mt-4 divide-y divide-slate-100 border-y border-slate-200 text-sm dark:divide-slate-700 dark:border-slate-700">
+                <div className="grid grid-cols-[88px_1fr] gap-2 py-2.5"><dt className="text-slate-600 dark:text-slate-300">Agency</dt><dd className="text-right font-semibold text-slate-900 dark:text-white">{selectedAgencyType ? selectedAgencyType.toUpperCase() : 'Not selected'}</dd></div>
+                <div className="grid grid-cols-[88px_1fr] gap-2 py-2.5"><dt className="text-slate-600 dark:text-slate-300">Station</dt><dd className="text-right font-semibold text-slate-900 dark:text-white">{proposedStation?.name || assignedStation?.name || 'Not selected'}</dd></div>
+                <div className="grid grid-cols-[88px_1fr] gap-2 py-2.5"><dt className="text-slate-600 dark:text-slate-300">Lead</dt><dd className="text-right font-semibold text-slate-900 dark:text-white">{proposedLeadOfficer?.display_name || proposedLeadOfficer?.email || 'Not assigned'}</dd></div>
+                <div className="grid grid-cols-[88px_1fr] gap-2 py-2.5"><dt className="text-slate-600 dark:text-slate-300">Personnel</dt><dd className="text-right font-semibold text-slate-900 dark:text-white">{selectedOfficerIds.length}</dd></div>
+                <div className="grid grid-cols-[88px_1fr] gap-2 py-2.5"><dt className="text-slate-600 dark:text-slate-300">Resources</dt><dd className="text-right font-semibold text-slate-900 dark:text-white">{selectedResourceIds.length}</dd></div>
+              </dl>
+
+              {proposedAssignmentConflict && (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200" role="alert">
+                  <AlertTriangle size={15} className="mt-0.5 shrink-0" /> Pending cannot retain an active response plan.
+                </div>
+              )}
+
+              {hasChanges() ? (
+                <div className="mt-3">
+                  <p className="text-xs font-semibold uppercase text-slate-600 dark:text-slate-300">Changes</p>
+                  <ul className="mt-2 space-y-1.5 text-xs leading-5 text-slate-700 dark:text-slate-200">
+                    {changeSummary().slice(0, 5).map((change) => <li key={change} className="flex gap-2"><span className="text-blue-600" aria-hidden="true">•</span><span>{change}</span></li>)}
+                  </ul>
+                </div>
+              ) : <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">No unsaved changes.</p>}
+
+              <button type="button" onClick={handleUpdateStatus} disabled={updating || !hasChanges() || isLocked || proposedAssignmentConflict} className="mt-4 hidden min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 xl:flex">
+                <Send size={17} /> {updating ? 'Applying changes...' : `Review ${changeSummary().length} change${changeSummary().length === 1 ? '' : 's'}`}
+              </button>
+            </section>
+          )}
+          {activeTab === 'management' && (
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm border border-slate-100 dark:border-slate-700">
+              <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-3 flex items-center gap-2">
                 <History size={20} />
-                Status History
+                Recent status activity
               </h2>
               {history.length > 0 ? (
-                <div className="space-y-4">
-                  {history.map((entry) => (
-                    <div key={entry.id} className="flex gap-4 pb-4 border-b border-gray-100 dark:border-gray-700 last:border-0">
+                <div className="space-y-3">
+                  {history.slice(0, 5).map((entry, index) => (
+                    <div key={entry.id} className="flex gap-3 pb-3 border-b border-slate-100 dark:border-slate-700 last:border-0">
                       <div className="w-3 h-3 rounded-full bg-blue-500 mt-1.5"></div>
                       <div className="flex-1">
                         <div className="flex items-center justify-between">
-                          <span className="font-medium text-gray-800 dark:text-white">
-                            Status changed to <span className="uppercase">{entry.status}</span>
+                          <span className="text-sm font-medium text-slate-800 dark:text-white">
+                             Status changed {history[index + 1]?.status ? `from ${history[index + 1].status.toUpperCase()} ` : ''}to <span className="uppercase">{entry.status}</span>
                           </span>
-                          <span className="text-sm text-gray-500 dark:text-gray-400">
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
                             {formatDate(entry.changed_at)}
                           </span>
                         </div>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                        <p className="text-xs text-slate-600 dark:text-slate-400">
                           by {entry.profiles?.display_name || entry.changed_by}
                         </p>
                         {entry.notes && (
-                          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 italic">"{entry.notes}"</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic">"{entry.notes}"</p>
                         )}
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-gray-500 dark:text-gray-400">No status changes recorded</p>
+                <p className="text-slate-500 dark:text-slate-400">No status changes recorded</p>
               )}
             </div>
           )}
           {activeTab === 'management' && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm border border-slate-100 dark:border-slate-700">
+              <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-3 flex items-center gap-2">
                 <Truck size={20} />
-                Assignment History
+                Recent assignment activity
               </h2>
               {assignmentHistory.length > 0 ? (
                 <div className="space-y-4">
-                  {assignmentHistory.map((entry) => {
+                  {assignmentHistory.slice(0, 3).map((entry) => {
                     const officerNames = (entry.previous_officers || []).map(officer => officer.display_name || officer.email || officer.id);
                     const resourceNames = (entry.previous_resources || []).map(resource => resource.name || `Resource #${resource.id}`);
                     const agencyNames = (entry.agencies || []).map(agency => agency.short_name || agency.name || `Agency #${agency.id}`);
 
                     return (
-                      <div key={entry.id} className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40">
+                      <div key={entry.id} className="p-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/40">
                         <div className="flex items-start justify-between gap-3 mb-3">
                           <div>
-                            <p className="font-medium text-gray-800 dark:text-white capitalize">
+                            <p className="font-medium text-slate-800 dark:text-white capitalize">
                               {entry.from_status || 'New'} → {entry.to_status}
                             </p>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
                               {entry.reason.replace(/_/g, ' ')} by {entry.changed_by_label || 'Unknown'} • {formatDate(entry.created_at)}
                             </p>
                           </div>
                         </div>
                         <div className="space-y-2 text-sm">
                           <div>
-                            <span className="text-gray-500 dark:text-gray-400">Station: </span>
-                            <span className="text-gray-800 dark:text-gray-200">
-                              {entry.previous_station?.name || entry.new_station?.name || 'None recorded'}
+                            <span className="text-slate-500 dark:text-slate-400">Station: </span>
+                            <span className="text-slate-800 dark:text-slate-200">
+                               {entry.previous_station?.name || 'None'} → {entry.new_station?.name || 'None'}
                             </span>
                           </div>
                           <div>
-                            <span className="text-gray-500 dark:text-gray-400">Agencies: </span>
-                            <span className="text-gray-800 dark:text-gray-200">
+                            <span className="text-slate-500 dark:text-slate-400">Agencies: </span>
+                            <span className="text-slate-800 dark:text-slate-200">
                               {agencyNames.length > 0 ? agencyNames.join(', ') : 'None recorded'}
                             </span>
                           </div>
                           <div>
-                            <span className="text-gray-500 dark:text-gray-400">Officers used: </span>
-                            <span className="text-gray-800 dark:text-gray-200">
-                              {officerNames.length > 0 ? officerNames.join(', ') : 'None recorded'}
+                             <span className="text-slate-500 dark:text-slate-400">Officers: </span>
+                            <span className="text-slate-800 dark:text-slate-200">
+                               {officerNames.length > 0 ? officerNames.join(', ') : 'None'} → {(entry.new_officers || []).map(officer => officer.display_name || officer.email || officer.id).join(', ') || 'None'}
                             </span>
                           </div>
                           <div>
-                            <span className="text-gray-500 dark:text-gray-400">Resources used: </span>
-                            <span className="text-gray-800 dark:text-gray-200">
-                              {resourceNames.length > 0 ? resourceNames.join(', ') : 'None recorded'}
+                             <span className="text-slate-500 dark:text-slate-400">Resources: </span>
+                            <span className="text-slate-800 dark:text-slate-200">
+                               {resourceNames.length > 0 ? resourceNames.join(', ') : 'None'} → {(entry.new_resources || []).map(resource => resource.name || `Resource #${resource.id}`).join(', ') || 'None'}
                             </span>
                           </div>
                           {entry.notes && (
-                            <p className="text-gray-500 dark:text-gray-400 italic">"{entry.notes}"</p>
+                            <p className="text-slate-500 dark:text-slate-400 italic">"{entry.notes}"</p>
                           )}
                         </div>
                       </div>
@@ -3208,13 +4112,13 @@ function IncidentDetail() {
                   })}
                 </div>
               ) : (
-                <p className="text-gray-500 dark:text-gray-400">No assignment or resource usage history recorded yet</p>
+                <p className="text-slate-500 dark:text-slate-400">No assignment or resource usage history recorded yet</p>
               )}
             </div>
           )}
           {activeTab === 'management' && (incident.assigned_officer_ids?.length || incident.assigned_officer_id) && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm border border-slate-100 dark:border-slate-700">
+              <h2 className="text-base font-semibold text-slate-800 dark:text-white mb-3 flex items-center gap-2">
                 <UserCheck size={20} />
                 Assigned Officers ({incident.assigned_officer_ids?.length || 1})
               </h2>
@@ -3236,16 +4140,16 @@ function IncidentDetail() {
                   return orderedOfficers.map((officer) => (
                     <div
                       key={officer.id}
-                      className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
+                      className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg"
                     >
                       <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
                         <User size={18} className="text-blue-600 dark:text-blue-400" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-800 dark:text-white truncate text-sm">
+                        <p className="font-medium text-slate-800 dark:text-white truncate text-sm">
                           {officer.display_name || officer.email}
                         </p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
                           {officer.role}
                           {officer.phone_number && ` • ${officer.phone_number}`}
                         </p>
@@ -3255,7 +4159,7 @@ function IncidentDetail() {
                           Lead
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 rounded">
+                        <span className="px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 rounded">
                           Support
                         </span>
                       )}
@@ -3263,26 +4167,28 @@ function IncidentDetail() {
                   ));
                 })()}
                 {officers.length === 0 && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Loading officer details...</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Loading officer details...</p>
                 )}
               </div>
             </div>
           )}
           {/* Multi-Agency Coordination */}
           {activeTab === 'management' && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm border border-slate-100 dark:border-slate-700">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-base font-semibold text-slate-800 dark:text-white flex items-center gap-2">
                   <Users size={20} />
                   Agency Coordination
                 </h2>
                 <button
+                  type="button"
                   onClick={() => {
                     loadAvailableAgencies();
                     setShowAddAgencyModal(true);
                   }}
                   disabled={isLocked}
-                  className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Request agency support"
+                  className="min-h-10 min-w-10 flex items-center justify-center text-blue-600 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-blue-900/30 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   title={isLocked ? "Cannot request support for closed incidents" : "Request Support"}
                 >
                   <Plus size={18} />
@@ -3294,9 +4200,15 @@ function IncidentDetail() {
                 <div className="flex items-center gap-2">
                   <Building2 size={16} className="text-blue-600 dark:text-blue-400" />
                   <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
-                    {incident.agency_type?.toUpperCase()}
+                    {getAgencyPresentation(incident.agency_type).shortLabel}
                   </span>
-                  <span className="text-xs px-1.5 py-0.5 bg-blue-600 text-white rounded">Primary</span>
+                  <ContextHint
+                    title="Primary response agency"
+                    description="This agency owns the operational response and final coordination decisions. Supporting agencies assist without replacing that responsibility."
+                    ariaLabel="Explain primary agency role"
+                  >
+                    <span className="rounded bg-blue-600 px-1.5 py-0.5 text-xs text-white">Primary</span>
+                  </ContextHint>
                 </div>
               </div>
 
@@ -3317,35 +4229,47 @@ function IncidentDetail() {
                           <span className="text-sm font-medium dark:text-white">
                             {ia.agencies?.short_name || ia.agencies?.name}
                           </span>
-                          <span className={`text-xs px-1.5 py-0.5 rounded capitalize ${ia.role === 'lead'
-                            ? 'bg-purple-600 text-white'
-                            : 'bg-gray-500 text-white'
-                            }`}>
-                            {ia.role}
-                          </span>
+                          <ContextHint
+                            title={ia.role === 'lead' ? 'Lead coordination role' : 'Supporting agency role'}
+                            description={ia.role === 'lead'
+                              ? 'This requested agency is expected to lead its part of the coordinated response. The incident\'s official primary agency remains unchanged.'
+                              : 'This agency provides requested support while the primary agency retains overall operational responsibility.'}
+                            ariaLabel={`Explain ${ia.role || 'supporting'} agency role`}
+                          >
+                            <span className={`text-xs px-1.5 py-0.5 rounded capitalize ${ia.role === 'lead'
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-slate-500 text-white'
+                              }`}>
+                              {ia.role || 'supporting'}
+                            </span>
+                          </ContextHint>
                         </div>
                         <div className="flex items-center gap-1">
                           {!ia.acknowledged_at && (
                             <button
-                              onClick={() => handleAcknowledgeAgency(ia.id)}
-                              disabled={isLocked}
-                              className="p-1 text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 rounded disabled:opacity-50"
+                               type="button"
+                               onClick={() => handleAcknowledgeAgency(ia.id)}
+                               disabled={isLocked}
+                               aria-label={`Acknowledge ${ia.agencies?.short_name || 'agency'} support request`}
+                               className="min-h-10 min-w-10 flex items-center justify-center text-green-600 hover:bg-green-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 dark:hover:bg-green-900/30 rounded disabled:opacity-50"
                               title="Acknowledge"
                             >
                               <Check size={14} />
                             </button>
                           )}
                           <button
+                            type="button"
                             onClick={() => handleRemoveAgency(ia.id)}
                             disabled={isLocked}
-                            className="p-1 text-red-600 hover:bg-red-100 dark:hover:bg-red-900/30 rounded disabled:opacity-50"
+                            aria-label={`Remove ${ia.agencies?.short_name || 'agency'} from incident`}
+                            className="min-h-10 min-w-10 flex items-center justify-center text-red-600 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-900/30 rounded disabled:opacity-50"
                             title="Remove"
                           >
                             <X size={14} />
                           </button>
                         </div>
                       </div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                         {ia.acknowledged_at
                           ? `Acknowledged ${formatDate(ia.acknowledged_at)}`
                           : `Requested ${formatDate(ia.requested_at)}`
@@ -3355,7 +4279,7 @@ function IncidentDetail() {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-slate-500 dark:text-slate-400">
                   No other agencies involved. Click + to request support.
                 </p>
               )}
@@ -3364,9 +4288,9 @@ function IncidentDetail() {
 
           {/* Backup Requests */}
           {activeTab === 'backups' && (
-            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm border border-slate-100 dark:border-slate-700">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+                <h2 className="text-lg font-semibold text-slate-800 dark:text-white flex items-center gap-2">
                   <AlertTriangle size={20} />
                   Backup Requests
                 </h2>
@@ -3377,16 +4301,20 @@ function IncidentDetail() {
                 )}
               </div>
 
-              {backupRequests.length === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400">No backup requests recorded for this incident.</p>
+                {backupRequests.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-300 dark:border-slate-600 p-6 text-center">
+                  <AlertTriangle size={28} className="mx-auto mb-2 text-slate-400" />
+                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300">No backup requests yet</p>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Requests from responders or supporting agencies will appear here.</p>
+                </div>
               ) : (
                 <div className="space-y-6">
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                    <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
                       Active Requests ({activeBackupRequests.length})
                     </h3>
                     {activeBackupRequests.length === 0 ? (
-                      <p className="text-sm text-gray-500 dark:text-gray-400">No active backup requests.</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">No active backup requests.</p>
                     ) : (
                       <div className="space-y-3">
                         {activeBackupRequests.map((request) => {
@@ -3395,18 +4323,18 @@ function IncidentDetail() {
                             acknowledged: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
                             assigned: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
                             resolved: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300',
-                            cancelled: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
+                            cancelled: 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
                             rejected: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
                           };
 
                           return (
-                            <div key={request.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40">
+                            <div key={request.id} className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/40">
                               <div className="flex items-start justify-between gap-3">
                                 <div>
-                                  <p className="text-sm font-medium text-gray-800 dark:text-white">
+                                  <p className="text-sm font-medium text-slate-800 dark:text-white">
                                     {request.requester?.display_name || request.requester?.email || 'Unknown requester'}
                                   </p>
-                                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                                     Requested {formatDate(request.created_at)}
                                     {request.requested_agency?.short_name ? ` • ${request.requested_agency.short_name.toUpperCase()}` : ''}
                                     {request.requested_station?.name ? ` • ${request.requested_station.name}` : ''}
@@ -3418,11 +4346,11 @@ function IncidentDetail() {
                               </div>
 
                               {request.reason && (
-                                <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">Reason: {request.reason}</p>
+                                <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">Reason: {request.reason}</p>
                               )}
 
                               {request.target_agency?.short_name && (
-                                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                                   Target: {request.target_agency.short_name.toUpperCase()}
                                   {request.target_station?.name ? ` • ${request.target_station.name}` : ''}
                                 </p>
@@ -3451,7 +4379,7 @@ function IncidentDetail() {
                                   <button
                                     onClick={() => handleBackupRequestStatusChange(request.id, 'cancelled')}
                                     disabled={updatingBackupRequestId === request.id || isLocked}
-                                    className="px-2.5 py-1.5 text-xs rounded bg-gray-600 text-white hover:bg-gray-700 disabled:opacity-50"
+                                    className="px-2.5 py-1.5 text-xs rounded bg-slate-600 text-white hover:bg-slate-700 disabled:opacity-50"
                                   >
                                     Cancel
                                   </button>
@@ -3465,11 +4393,11 @@ function IncidentDetail() {
                   </div>
 
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                    <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
                       History ({historicalBackupRequests.length})
                     </h3>
                     {historicalBackupRequests.length === 0 ? (
-                      <p className="text-sm text-gray-500 dark:text-gray-400">No completed backup request history.</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">No completed backup request history.</p>
                     ) : (
                       <div className="space-y-3">
                         {historicalBackupRequests.map((request) => {
@@ -3478,18 +4406,18 @@ function IncidentDetail() {
                             acknowledged: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
                             assigned: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
                             resolved: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300',
-                            cancelled: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
+                            cancelled: 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
                             rejected: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
                           };
 
                           return (
-                            <div key={request.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40">
+                            <div key={request.id} className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/40">
                               <div className="flex items-start justify-between gap-3">
                                 <div>
-                                  <p className="text-sm font-medium text-gray-800 dark:text-white">
+                                  <p className="text-sm font-medium text-slate-800 dark:text-white">
                                     {request.requester?.display_name || request.requester?.email || 'Unknown requester'}
                                   </p>
-                                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                                     Requested {formatDate(request.created_at)}
                                     {request.requested_agency?.short_name ? ` • ${request.requested_agency.short_name.toUpperCase()}` : ''}
                                     {request.requested_station?.name ? ` • ${request.requested_station.name}` : ''}
@@ -3500,7 +4428,7 @@ function IncidentDetail() {
                                 </span>
                               </div>
                               {request.reason && (
-                                <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">Reason: {request.reason}</p>
+                                <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">Reason: {request.reason}</p>
                               )}
                             </div>
                           );
@@ -3517,25 +4445,59 @@ function IncidentDetail() {
         </div>
       </div>
 
+      {selectedEvidenceIndex !== null && mediaItems[selectedEvidenceIndex] && (
+        <div
+          className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/80 p-4"
+          role="presentation"
+          onClick={() => setSelectedEvidenceIndex(null)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setSelectedEvidenceIndex(null);
+            if (event.key === 'ArrowLeft') setSelectedEvidenceIndex((current) => current === null ? 0 : (current - 1 + mediaItems.length) % mediaItems.length);
+            if (event.key === 'ArrowRight') setSelectedEvidenceIndex((current) => current === null ? 0 : (current + 1) % mediaItems.length);
+          }}
+        >
+          <div role="dialog" aria-modal="true" aria-label={`Evidence ${selectedEvidenceIndex + 1} of ${mediaItems.length}`} className="relative flex max-h-[90vh] w-full max-w-5xl flex-col items-center gap-3" onClick={(event) => event.stopPropagation()}>
+            <div className="flex w-full items-center justify-between text-sm text-white">
+              <span>Evidence {selectedEvidenceIndex + 1} of {mediaItems.length}</span>
+              <button type="button" onClick={() => setSelectedEvidenceIndex(null)} aria-label="Close evidence viewer" className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg bg-white/10 text-2xl hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">×</button>
+            </div>
+            <div className="relative flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-xl bg-black/30">
+              {mediaItems[selectedEvidenceIndex].type === 'video' ? (
+                <video src={mediaItems[selectedEvidenceIndex].url} controls autoPlay className="max-h-[78vh] max-w-full rounded-lg" />
+              ) : (
+                <img src={mediaItems[selectedEvidenceIndex].url} alt={`Evidence ${selectedEvidenceIndex + 1}`} className="max-h-[78vh] max-w-full rounded-lg object-contain" />
+              )}
+              {mediaItems.length > 1 && (
+                <>
+                  <button type="button" onClick={() => setSelectedEvidenceIndex((current) => current === null ? 0 : (current - 1 + mediaItems.length) % mediaItems.length)} aria-label="Previous evidence" className="absolute left-3 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/60 text-2xl text-white hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">‹</button>
+                  <button type="button" onClick={() => setSelectedEvidenceIndex((current) => current === null ? 0 : (current + 1) % mediaItems.length)} aria-label="Next evidence" className="absolute right-3 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/60 text-2xl text-white hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">›</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Update Status - Modal View */}
       {isUpdateStatusExpanded && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Update Status</h2>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" role="presentation">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="update-status-title">
+            <div className="sticky top-0 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-4 flex items-center justify-between">
+               <h2 id="update-status-title" className="text-xl font-semibold text-slate-800 dark:text-white">Update response</h2>
               <button
                 onClick={() => setIsUpdateStatusExpanded(false)}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                aria-label="Close update response dialog"
+                className="min-h-10 min-w-10 flex items-center justify-center p-2 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
-                <X size={20} className="text-gray-600 dark:text-gray-400" />
+                <X size={20} className="text-slate-600 dark:text-slate-400" />
               </button>
             </div>
 
             <div className="p-6">
               {/* Current Status Display */}
-              <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Current Status</p>
-                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-sm font-medium ${STATUS_OPTIONS.find(s => s.value === incident.status)?.color || 'bg-gray-500'
+              <div className="mb-4 p-3 bg-slate-50 dark:bg-slate-700 rounded-lg">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Current Status</p>
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-sm font-medium ${STATUS_OPTIONS.find(s => s.value === incident.status)?.color || 'bg-slate-500'
                   } text-white`}>
                   {STATUS_OPTIONS.find(s => s.value === incident.status)?.label || incident.status}
                 </span>
@@ -3543,37 +4505,49 @@ function IncidentDetail() {
 
               {updateSuccess && (
                 <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg text-green-700 dark:text-green-400 text-sm">
-                  Status updated successfully!
+                  Response plan updated successfully.
                 </div>
               )}
 
               {updateError && (
-                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400 text-sm">
-                  {updateError}
+                <div className="mb-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200" role="alert" aria-live="assertive">
+                  <AlertTriangle size={17} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <div><p className="font-semibold">Could not save changes</p><p className="mt-0.5">{updateError}</p></div>
                 </div>
               )}
 
-              <div className="space-y-4">
-                {renderAIRecommendationPanel()}
-                <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Change To</label>
+               <div className="space-y-4">
+                 {renderAIRecommendationPanel()}
+                 {(newStatus === 'resolved' || newStatus === 'closed') && (initialOfficerIds.length > 0 || initialResourceIds.length > 0) && (
+                   <fieldset className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+                     <legend className="px-1 text-sm font-semibold text-amber-900 dark:text-amber-200">Assignment disposition</legend>
+                     <label className="flex min-h-10 items-start gap-3 text-sm text-amber-900 dark:text-amber-100">
+                       <input type="checkbox" checked={releaseAssignments} onChange={(event) => setReleaseAssignments(event.target.checked)} disabled={isLocked} className="mt-1 h-4 w-4 rounded border-amber-400 text-blue-600 focus:ring-blue-500" />
+                       <span><strong>Release assigned personnel and resources</strong><span className="mt-1 block text-xs text-amber-800 dark:text-amber-200">Mark the response team available after this terminal status.</span></span>
+                     </label>
+                   </fieldset>
+                 )}
+                 <div>
+                   <label className="block text-sm text-slate-600 dark:text-slate-400 mb-2">Change To</label>
                   <select
                     value={newStatus}
-                    onChange={(e) => setNewStatus(e.target.value)}
+                    onChange={(e) => { setNewStatus(e.target.value); setFormErrors((current) => ({ ...current, status: undefined, notes: undefined })); }}
                     disabled={isLocked}
-                    className={`w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    aria-invalid={Boolean(formErrors.status)}
+                    className={`w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
                   >
-                    {STATUS_OPTIONS.map((option) => (
+                     {STATUS_OPTIONS.filter((option) => getAllowedStatuses().includes(option.value)).map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label} {option.value === incident.status ? '(current)' : ''}
                       </option>
                     ))}
                   </select>
+                  {formErrors.status && <p className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.status}</p>}
                 </div>
 
                 {/* Station Assignment - Editable for Admin, read-only for others */}
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  <label className="block text-sm text-slate-600 dark:text-slate-400 mb-2">
                     Assigned Station
                     {incident.assigned_station_id && (
                       <span className="ml-2 text-xs text-green-600 dark:text-green-400">
@@ -3589,19 +4563,18 @@ function IncidentDetail() {
                       // Admin can reassign
                       return (
                         <>
-                          <select
-                            value={selectedStationId || ''}
-                            onChange={(e) => setSelectedStationId(e.target.value ? Number(e.target.value) : null)}
+                   <select
+                     value={stationAssignmentIntent === 'keep' ? 'keep' : stationAssignmentIntent === 'auto' ? 'auto' : selectedStationId?.toString() || ''}
+                             onChange={(e) => handleStationChange(e.target.value)}
                             disabled={isLocked}
-                            className={`w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
+                            aria-invalid={Boolean(formErrors.station)}
+                            className={`w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`}
                           >
-                            <option value="">
-                              {incident.assigned_station_id
-                                ? 'Keep current assignment'
-                                : 'Auto-assign closest station'}
-                            </option>
+                             <option value={incident.assigned_station_id ? 'keep' : 'auto'}>
+                               {incident.assigned_station_id ? 'Keep current station' : 'Select a station'}
+                             </option>
                             {stations
-                              .filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase()))
+                              .filter(s => (selectedAgencyType ? s.agencies?.short_name?.toLowerCase() === selectedAgencyType : involvedAgencies.includes(s.agencies?.short_name?.toLowerCase())))
                               .map((station) => {
                                 const isPrimary = station.agencies?.short_name?.toLowerCase() === incident.agency_type?.toLowerCase();
                                 const agencyRole = incidentAgencies.find(ia =>
@@ -3614,20 +4587,21 @@ function IncidentDetail() {
                                   </option>
                                 );
                               })}
-                            {stations.filter(s => involvedAgencies.includes(s.agencies?.short_name?.toLowerCase())).length === 0 && (
-                              <option disabled>No stations available</option>
+                            {stations.filter(s => (selectedAgencyType ? s.agencies?.short_name?.toLowerCase() === selectedAgencyType : involvedAgencies.includes(s.agencies?.short_name?.toLowerCase()))).length === 0 && (
+                              <option disabled>No stations configured for this agency</option>
                             )}
                           </select>
+                          {formErrors.station && <p className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.station}</p>}
                           <div className="mt-2 flex items-center gap-2 text-xs">
-                            <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                            <span className="text-slate-500 dark:text-slate-400">Selected Agency:</span>
                             <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
-                              {incident.agency_type?.toUpperCase()}
+                              {getAgencyPresentation(incident.agency_type).shortLabel}
                             </span>
                           </div>
-                          <p className="mt-2 text-xs text-gray-400">
-                            {!incident.assigned_station_id && newStatus !== 'pending'
-                              ? 'Will auto-assign to closest station if left empty'
-                              : 'Select a station to reassign or leave empty to keep current'}
+                           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                             {stationAssignmentIntent === 'auto'
+                               ? newStatus === 'pending' ? 'No station will be assigned while the incident remains pending.' : 'The closest eligible station will be assigned when changes are applied.'
+                               : stationAssignmentIntent === 'keep' ? 'The current station will remain assigned.' : 'Changing station may remove incompatible responders or resources.'}
                           </p>
                         </>
                       );
@@ -3635,7 +4609,7 @@ function IncidentDetail() {
                       // Non-admin: read-only
                       return (
                         <>
-                          <div className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                          <div className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                             {incident.assigned_station_id ? (
                               (() => {
                                 const assignedStation = stations.find(s => s.id === incident.assigned_station_id);
@@ -3651,12 +4625,12 @@ function IncidentDetail() {
                             )}
                           </div>
                           <div className="mt-2 flex items-center gap-2 text-xs">
-                            <span className="text-gray-500 dark:text-gray-400">Requested Agency:</span>
+                            <span className="text-slate-500 dark:text-slate-400">Selected Agency:</span>
                             <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 rounded font-medium">
-                              {incident.agency_type?.toUpperCase()}
+                              {getAgencyPresentation(incident.agency_type).shortLabel}
                             </span>
                           </div>
-                          <p className="mt-2 text-xs text-gray-400">
+                          <p className="mt-2 text-xs text-slate-400">
                             Station assignment is locked. Contact admin to reassign.
                           </p>
                         </>
@@ -3668,13 +4642,13 @@ function IncidentDetail() {
                 {/* Agency Filter - Show for all incidents with involved agencies */}
                 {incidentAgencies.length > 0 && (
                   <div>
-                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <label className="block text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-400 mb-1.5">
                       View Officers By Agency
                     </label>
                     <select
                       value={viewAgencyFilter}
                       onChange={(e) => setViewAgencyFilter(e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                     >
                       <option value="all">All Agencies</option>
                       {incidentAgencies.map((ia) => {
@@ -3687,16 +4661,16 @@ function IncidentDetail() {
                         );
                       })}
                     </select>
-                    <p className="mt-1 text-xs text-gray-400">
+                    <p className="mt-1 text-xs text-slate-400">
                       Filter officers by agency to see available responders
                     </p>
                   </div>
                 )}
 
                 {/* Officer Assignment */}
-                <div className="rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50/70 dark:bg-gray-800/40 p-3 sm:p-4">
+                <div className="rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50/70 dark:bg-slate-800/40 p-3 sm:p-4">
                   <div className="flex items-center justify-between gap-3 mb-3">
-                    <label className="text-sm font-medium text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-200 flex items-center gap-2">
                       <UserCheck size={14} />
                       Assign Officers
                     </label>
@@ -3714,9 +4688,10 @@ function IncidentDetail() {
                     </div>
                   </div>
 
-                  <div className="border border-gray-200 dark:border-gray-600 rounded-xl max-h-96 overflow-y-auto bg-white dark:bg-gray-700 divide-y divide-gray-100 dark:divide-gray-600">
+                  <div className="border border-slate-200 dark:border-slate-600 rounded-xl max-h-96 overflow-y-auto bg-white dark:bg-slate-700 divide-y divide-slate-100 dark:divide-slate-600">
                     {(() => {
-                      const visibleOfficers = officers.filter(officer => {
+                       const visibleOfficers = officers.filter(officer => {
+                         if (selectedStationId !== null && officer.station_id !== selectedStationId) return false;
                         // Filter by agency if multi-agency and filter is set
                         if (viewAgencyFilter !== 'all') {
                           const officerStation = stations.find(s => s.id === officer.station_id);
@@ -3744,7 +4719,7 @@ function IncidentDetail() {
 
                       if (visibleOfficers.length === 0) {
                         return (
-                          <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          <p className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
                             No officers available {selectedStationId ? 'at selected station' : 'for involved agencies'}
                           </p>
                         );
@@ -3761,12 +4736,13 @@ function IncidentDetail() {
                           return ids.includes(officer.id);
                         });
 
-                        const showBusy = isBusyOnOther;
+                         const profileUnavailable = Boolean(officer.status && !['available', 'online'].includes(officer.status.toLowerCase()));
+                         const showBusy = !isCurrentlyAssigned && (isBusyOnOther || profileUnavailable);
 
                         return (
                           <label
                             key={officer.id}
-                            className={`flex items-start gap-3 px-3 py-3 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer transition-colors ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                             className={`flex items-start gap-3 px-3 py-3 ${showBusy ? 'cursor-not-allowed opacity-75' : 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-600'} transition-colors ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
                               }`}
                           >
                             <input
@@ -3789,24 +4765,24 @@ function IncidentDetail() {
                                   }
                                 }
                               }}
-                              disabled={showBusy || isLocked}
-                              className="mt-1 w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
+                               disabled={showBusy || isLocked}
+                              className="mt-1 w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50"
                             />
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-800 dark:text-white flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-medium text-slate-800 dark:text-white flex flex-wrap items-center gap-2">
                                 <span className="truncate">{officer.display_name || officer.email}</span>
                                 {isCurrentlyAssigned && (
                                   <span className="text-[11px] px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded-full font-medium">
                                     Assigned
                                   </span>
                                 )}
-                                {showBusy && (
-                                  <span className="text-[11px] px-2 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded-full font-medium">
-                                    Busy
-                                  </span>
-                                )}
+                                 {showBusy && (
+                                   <span className="text-[11px] px-2 py-0.5 bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 rounded-full font-medium">
+                                     {isBusyOnOther ? 'Busy' : officer.status}
+                                   </span>
+                                 )}
                               </p>
-                              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-2">
+                              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-2">
                                 <span>{officer.role}</span>
                                 {(() => {
                                   const officerStation = stations.find(s => s.id === officer.station_id);
@@ -3834,7 +4810,7 @@ function IncidentDetail() {
                       });
                     })()}
                   </div>
-                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                     Select one or more officers to respond to this incident
                   </p>
                 </div>
@@ -3843,7 +4819,7 @@ function IncidentDetail() {
 
                 {selectedOfficerIds.length > 0 && (
                   <div>
-                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-2">
                       Lead Officer
                       {hasPrimaryOfficerChanges() && (
                         <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">
@@ -3855,7 +4831,7 @@ function IncidentDetail() {
                       value={selectedPrimaryOfficerId || ''}
                       onChange={(e) => setSelectedPrimaryOfficerId(e.target.value || null)}
                       disabled={selectedOfficerIds.length === 1 || isLocked}
-                      className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white disabled:opacity-70"
+                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white disabled:opacity-70"
                     >
                       {selectedOfficerIds.map(officerId => {
                         const officer = officers.find(o => o.id === officerId);
@@ -3866,13 +4842,13 @@ function IncidentDetail() {
                         );
                       })}
                     </select>
-                    <p className="mt-1 text-xs text-gray-400">
+                    <p className="mt-1 text-xs text-slate-400">
                       The lead officer is the report owner. If only one officer is assigned, they are automatically the lead.
                     </p>
                   </div>
                 )}{/* Assign Resources */}
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  <label className="block text-sm text-slate-600 dark:text-slate-400 mb-2">
                     <span className="flex items-center gap-1">
                       <Truck size={14} />
                       Assign Resources
@@ -3883,7 +4859,7 @@ function IncidentDetail() {
                       </span>
                     )}
                   </label>
-                  <div className="border border-gray-200 dark:border-gray-600 rounded-lg max-h-96 overflow-y-auto bg-white dark:bg-gray-700">
+                  <div className="border border-slate-200 dark:border-slate-600 rounded-lg max-h-96 overflow-y-auto bg-white dark:bg-slate-700">
                     {(() => {
                       const visibleResources = resources.filter(res => {
                         const targetStationId = selectedStationId || incident.assigned_station_id;
@@ -3895,7 +4871,7 @@ function IncidentDetail() {
 
                       if (visibleResources.length === 0) {
                         return (
-                          <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          <p className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
                             {selectedStationId ? 'No resources available at selected station' : 'Select a station to see resources'}
                           </p>
                         );
@@ -3909,7 +4885,7 @@ function IncidentDetail() {
                         return (
                           <label
                             key={res.id}
-                            className={`flex items-center gap-3 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer border-b border-gray-100 dark:border-gray-600 last:border-b-0 ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                            className={`flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-600 cursor-pointer border-b border-slate-100 dark:border-slate-600 last:border-b-0 ${isCurrentlyAssigned ? 'bg-blue-50 dark:bg-blue-900/20' : ''
                               }`}
                           >
                             <input
@@ -3923,10 +4899,10 @@ function IncidentDetail() {
                                 }
                               }}
                               disabled={showBusy || isLocked}
-                              className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 disabled:opacity-50"
+                              className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50"
                             />
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-800 dark:text-white truncate flex items-center gap-2">
+                              <p className="text-sm font-medium text-slate-800 dark:text-white truncate flex items-center gap-2">
                                 {res.name}
                                 {isCurrentlyAssigned && (
                                   <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 rounded">
@@ -3939,7 +4915,7 @@ function IncidentDetail() {
                                   </span>
                                 )}
                               </p>
-                              <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">
+                              <p className="text-xs text-slate-500 dark:text-slate-400 capitalize">
                                 {res.type}
                               </p>
                             </div>
@@ -3951,24 +4927,27 @@ function IncidentDetail() {
                 </div>
 
                 <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Notes (optional)</label>
+                   <label className="block text-sm text-slate-600 dark:text-slate-400 mb-2">{['rejected', 'resolved'].includes(newStatus) ? 'Reason / resolution note' : 'Operational note (optional)'}</label>
                   <textarea
                     value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
+                    onChange={(e) => { setNotes(e.target.value); if (e.target.value.trim()) setFormErrors((current) => ({ ...current, notes: undefined })); }}
                     disabled={isLocked}
-                    placeholder={isLocked ? "Cannot add notes to a locked incident" : "Add notes about this status change..."}
-                    rows={3}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white dark:bg-gray-700 dark:text-white disabled:opacity-70"
+                    aria-invalid={Boolean(formErrors.notes)}
+                     placeholder={isLocked ? "Cannot add notes to a locked incident" : ['rejected', 'resolved'].includes(newStatus) ? 'Explain the decision and operational outcome...' : 'Add notes about this status change...'}
+                    rows={2}
+                    className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white dark:bg-slate-700 dark:text-white disabled:opacity-70"
                   />
+                  {formErrors.notes && <p className="mt-1 text-xs text-red-600 dark:text-red-300" role="alert">{formErrors.notes}</p>}
                 </div>
 
-                <button
+                 <button
+                   type="button"
                   onClick={handleUpdateStatus}
                   disabled={updating || !hasChanges() || isLocked}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   <Send size={18} />
-                  {updating ? 'Updating...' : hasOfficerChanges() && newStatus === incident.status ? 'Update Officers' : 'Update Status'}
+                    {updating ? 'Applying changes...' : hasChanges() ? `Review ${changeSummary().length} change${changeSummary().length === 1 ? '' : 's'}` : 'No changes to review'}
                 </button>
               </div>
             </div>
@@ -3976,18 +4955,76 @@ function IncidentDetail() {
         </div>
       )}
 
+      {mapView && incident.latitude != null && incident.longitude != null && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4" role="presentation">
+          <div className="flex h-[min(92vh,820px)] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-slate-800" role="dialog" aria-modal="true" aria-labelledby="incident-map-dialog-title">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700 sm:px-5">
+              <div>
+                <h2 id="incident-map-dialog-title" className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-white">
+                  <MapPin size={18} />
+                  {mapView === 'directions' ? 'Directions to incident' : 'Incident location map'}
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  {mapView === 'directions'
+                    ? `${getAssignedStation()?.name || 'Responding station'} to ${incident.location_address || 'incident location'}`
+                    : incident.location_address || 'Incident location'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMapView(null)}
+                aria-label="Close map dialog"
+                className="flex min-h-10 min-w-10 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
+              <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-slate-700 dark:text-slate-200" aria-label="Map route summary">
+                <span className="rounded-full bg-red-50 px-2.5 py-1 font-medium text-red-700 dark:bg-red-900/20 dark:text-red-300">Incident</span>
+                <span className="rounded-full bg-blue-50 px-2.5 py-1 font-medium text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">Responding station</span>
+                {routeInfo && <span className="ml-auto font-semibold">{routeInfo.distance.toFixed(1)} km · ~{Math.round(routeInfo.duration)} min</span>}
+              </div>
+              <RouteMap
+                incidentLat={Number(incident.latitude)}
+                incidentLng={Number(incident.longitude)}
+                incidentAddress={incident.location_address}
+                stationLat={getAssignedStation()?.latitude}
+                stationLng={getAssignedStation()?.longitude}
+                stationName={getAssignedStation()?.name}
+                showRoute={Boolean(getAssignedStation())}
+                mapHeight="expanded"
+                onRouteLoaded={handleRouteLoaded}
+              />
+              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-200 pt-3 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300" aria-label="Map legend">
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-600" /> Incident location</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-600" /> Responding station</span>
+                {getAssignedStation() && <span className="flex items-center gap-1.5"><span className="h-0.5 w-5 bg-blue-600" /> Suggested route</span>}
+              </div>
+              {mapView === 'directions' && (
+                <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-100">
+                  <p className="font-semibold">Route overview</p>
+                  <p className="mt-1">The route is shown from the assigned station to the incident. Use the map controls to inspect the route and markers inside the app.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Final Report Modal */}
       {showFinalReportModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" role="presentation">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="final-report-title">
+            <div className="sticky top-0 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-4 flex items-center justify-between">
+               <h2 id="final-report-title" className="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
                 <FileText size={24} />
                 Final Report - Close Incident
               </h2>
               <button
                 onClick={() => setShowFinalReportModal(false)}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
                 <X size={20} />
               </button>
@@ -4002,7 +5039,7 @@ function IncidentDetail() {
 
               {/* Common Fields */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Summary <span className="text-red-500">*</span>
                 </label>
                 <textarea
@@ -4010,12 +5047,12 @@ function IncidentDetail() {
                   onChange={(e) => setFinalReportData(prev => ({ ...prev, summary: e.target.value }))}
                   placeholder="Brief summary of the incident and resolution..."
                   rows={3}
-                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Actions Taken <span className="text-red-500">*</span>
                 </label>
                 <textarea
@@ -4023,12 +5060,12 @@ function IncidentDetail() {
                   onChange={(e) => setFinalReportData(prev => ({ ...prev, actionsTaken: e.target.value }))}
                   placeholder="List all actions taken to resolve this incident..."
                   rows={3}
-                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Outcome <span className="text-red-500">*</span>
                 </label>
                 <textarea
@@ -4036,127 +5073,127 @@ function IncidentDetail() {
                   onChange={(e) => setFinalReportData(prev => ({ ...prev, outcome: e.target.value }))}
                   placeholder="Final outcome and current status..."
                   rows={2}
-                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                 />
               </div>
 
               {/* Agency-Specific Fields */}
               {incident?.agency_type?.toLowerCase() === 'pnp' && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
                   <h3 className="text-sm font-semibold text-blue-600 dark:text-blue-400 mb-3">PNP Specific Details</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Case Number</label>
+                      <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Case Number</label>
                       <input
                         type="text"
                         value={finalReportData.caseNumber || ''}
                         onChange={(e) => setFinalReportData(prev => ({ ...prev, caseNumber: e.target.value }))}
                         placeholder="e.g., PNP-2024-001234"
-                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                        className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Suspects</label>
+                      <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Suspects</label>
                       <input
                         type="text"
                         value={finalReportData.suspects || ''}
                         onChange={(e) => setFinalReportData(prev => ({ ...prev, suspects: e.target.value }))}
                         placeholder="Suspect information if any"
-                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                        className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                       />
                     </div>
                   </div>
                   <div className="mt-3">
-                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Evidence Collected</label>
+                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Evidence Collected</label>
                     <input
                       type="text"
                       value={finalReportData.evidence || ''}
                       onChange={(e) => setFinalReportData(prev => ({ ...prev, evidence: e.target.value }))}
                       placeholder="List of evidence collected"
-                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                     />
                   </div>
                 </div>
               )}
 
               {incident?.agency_type?.toLowerCase() === 'bfp' && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
                   <h3 className="text-sm font-semibold text-red-600 dark:text-red-400 mb-3">BFP Specific Details</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Fire Origin</label>
+                      <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Fire Origin</label>
                       <input
                         type="text"
                         value={finalReportData.fireOrigin || ''}
                         onChange={(e) => setFinalReportData(prev => ({ ...prev, fireOrigin: e.target.value }))}
                         placeholder="Determined origin of fire"
-                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                        className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Estimated Damage</label>
+                      <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Estimated Damage</label>
                       <input
                         type="text"
                         value={finalReportData.estimatedDamage || ''}
                         onChange={(e) => setFinalReportData(prev => ({ ...prev, estimatedDamage: e.target.value }))}
                         placeholder="e.g., ₱500,000"
-                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                        className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                       />
                     </div>
                   </div>
                   <div className="mt-3">
-                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Casualties</label>
+                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Casualties</label>
                     <input
                       type="text"
                       value={finalReportData.casualties || ''}
                       onChange={(e) => setFinalReportData(prev => ({ ...prev, casualties: e.target.value }))}
                       placeholder="Injuries or fatalities if any"
-                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                     />
                   </div>
                 </div>
               )}
 
               {incident?.agency_type?.toLowerCase() === 'mdrrmo' && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
                   <h3 className="text-sm font-semibold text-orange-600 dark:text-orange-400 mb-3">MDRRMO Specific Details</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Affected Families</label>
+                      <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Affected Families</label>
                       <input
                         type="text"
                         value={finalReportData.affectedFamilies || ''}
                         onChange={(e) => setFinalReportData(prev => ({ ...prev, affectedFamilies: e.target.value }))}
                         placeholder="Number of families affected"
-                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                        className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Evacuees</label>
+                      <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Evacuees</label>
                       <input
                         type="text"
                         value={finalReportData.evacuees || ''}
                         onChange={(e) => setFinalReportData(prev => ({ ...prev, evacuees: e.target.value }))}
                         placeholder="Number of evacuees"
-                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                        className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                       />
                     </div>
                   </div>
                   <div className="mt-3">
-                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Assistance Provided</label>
+                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Assistance Provided</label>
                     <input
                       type="text"
                       value={finalReportData.assistanceProvided || ''}
                       onChange={(e) => setFinalReportData(prev => ({ ...prev, assistanceProvided: e.target.value }))}
                       placeholder="Relief goods, shelter, etc."
-                      className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
                     />
                   </div>
                 </div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Recommendations (optional)
                 </label>
                 <textarea
@@ -4164,15 +5201,15 @@ function IncidentDetail() {
                   onChange={(e) => setFinalReportData(prev => ({ ...prev, recommendations: e.target.value }))}
                   placeholder="Any recommendations for future prevention or follow-up..."
                   rows={2}
-                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                 />
               </div>
             </div>
 
-            <div className="sticky bottom-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-end gap-3">
+            <div className="sticky bottom-0 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 px-6 py-4 flex justify-end gap-3">
               <button
                 onClick={() => setShowFinalReportModal(false)}
-                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
                 Cancel
               </button>
@@ -4217,10 +5254,10 @@ function IncidentDetail() {
 
       {/* Add Agency Modal */}
       {showAddAgencyModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full">
-            <div className="border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" role="presentation">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-md w-full" role="dialog" aria-modal="true" aria-labelledby="support-dialog-title">
+            <div className="border-b border-slate-200 dark:border-slate-700 px-6 py-4 flex items-center justify-between">
+               <h2 id="support-dialog-title" className="text-lg font-semibold text-slate-800 dark:text-white flex items-center gap-2">
                 <Users size={20} />
                 Request Agency Support
               </h2>
@@ -4229,7 +5266,8 @@ function IncidentDetail() {
                   setShowAddAgencyModal(false);
                   setSelectedAgencyToAdd(null);
                 }}
-                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                aria-label="Close support request dialog"
+                className="min-h-10 min-w-10 flex items-center justify-center p-1 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-700 rounded"
               >
                 <X size={20} />
               </button>
@@ -4237,13 +5275,13 @@ function IncidentDetail() {
 
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Select Agency
                 </label>
                 <select
                   value={selectedAgencyToAdd || ''}
                   onChange={(e) => setSelectedAgencyToAdd(e.target.value ? Number(e.target.value) : null)}
-                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
                 >
                   <option value="">Choose an agency...</option>
                   {availableAgencies.map((agency) => (
@@ -4253,12 +5291,12 @@ function IncidentDetail() {
                   ))}
                 </select>
                 {availableAgencies.length === 0 && (
-                  <p className="text-sm text-gray-500 mt-1">All agencies are already involved in this incident.</p>
+                  <p className="text-sm text-slate-500 mt-1">All agencies are already involved in this incident.</p>
                 )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Role
                 </label>
                 <div className="flex gap-4">
@@ -4271,7 +5309,7 @@ function IncidentDetail() {
                       onChange={() => setSelectedAgencyRole('supporting')}
                       className="w-4 h-4 text-blue-600"
                     />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">Supporting</span>
+                    <span className="text-sm text-slate-700 dark:text-slate-300">Supporting</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -4282,10 +5320,10 @@ function IncidentDetail() {
                       onChange={() => setSelectedAgencyRole('lead')}
                       className="w-4 h-4 text-purple-600"
                     />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">Lead Coordinator</span>
+                    <span className="text-sm text-slate-700 dark:text-slate-300">Lead Coordinator</span>
                   </label>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-slate-500 mt-1">
                   {selectedAgencyRole === 'lead'
                     ? 'This agency will coordinate the multi-agency response.'
                     : 'This agency will provide support to the primary agency.'
@@ -4294,13 +5332,13 @@ function IncidentDetail() {
               </div>
             </div>
 
-            <div className="border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-end gap-3">
+            <div className="border-t border-slate-200 dark:border-slate-700 px-6 py-4 flex justify-end gap-3">
               <button
                 onClick={() => {
                   setShowAddAgencyModal(false);
                   setSelectedAgencyToAdd(null);
                 }}
-                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                className="px-4 py-2 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
                 Cancel
               </button>
@@ -4328,22 +5366,22 @@ function IncidentDetail() {
 
       {/* Re-open Confirmation Modal */}
       {showReopenConfirmModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden border border-gray-100 dark:border-gray-700 animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] animate-in fade-in duration-200" role="presentation">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden border border-slate-100 dark:border-slate-700 animate-in zoom-in-95 duration-200" role="dialog" aria-modal="true" aria-labelledby="reopen-dialog-title">
             <div className="p-6">
               <div className="flex items-center gap-4 mb-4">
                 <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center flex-shrink-0">
                   <Unlock className="w-6 h-6 text-amber-600 dark:text-amber-400" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900 dark:text-white">Re-open Incident?</h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                   <h3 id="reopen-dialog-title" className="text-xl font-bold text-slate-900 dark:text-white">Re-open incident?</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
                     This will unlock all editing capabilities and return the status to <span className="font-semibold text-orange-600 dark:text-orange-400">In Progress</span>.
                   </p>
                 </div>
               </div>
 
-              <div className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 mb-6 text-sm text-gray-600 dark:text-gray-400 border border-gray-100 dark:border-gray-800">
+              <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 mb-6 text-sm text-slate-600 dark:text-slate-400 border border-slate-100 dark:border-slate-800">
                 <p>Note: This action will be recorded in the audit logs and status history.</p>
               </div>
 
@@ -4351,7 +5389,7 @@ function IncidentDetail() {
                 <button
                   type="button"
                   onClick={() => setShowReopenConfirmModal(false)}
-                  className="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  className="flex-1 px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
                 >
                   Cancel
                 </button>
@@ -4363,6 +5401,31 @@ function IncidentDetail() {
                   Confirm Re-open
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showChangeReview && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 p-4" role="presentation">
+          <div className="w-full max-w-xl rounded-xl bg-white shadow-2xl dark:bg-slate-800" role="dialog" aria-modal="true" aria-labelledby="change-review-title">
+            <div className="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+              <h2 id="change-review-title" className="text-lg font-semibold text-slate-900 dark:text-white">Review response changes</h2>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Confirm the operational changes before they are written to the incident.</p>
+            </div>
+            <div className="space-y-3 px-6 py-5 text-sm">
+              <ul className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                {changeSummary().map((change) => <li key={change}>{change}</li>)}
+              </ul>
+              {(newStatus === 'resolved' || newStatus === 'closed') && (
+                <p className={`rounded-lg border px-3 py-2 ${releaseAssignments ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200'}`}>
+                  {releaseAssignments ? 'Assigned personnel and resources will be released.' : 'Assigned personnel and resources will remain attached.'}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
+              <button type="button" onClick={() => setShowChangeReview(false)} className="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-medium hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-600 dark:hover:bg-slate-700">Back to editing</button>
+              <button type="button" onClick={confirmChangeReview} disabled={updating} className="min-h-10 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50">Confirm response changes</button>
             </div>
           </div>
         </div>

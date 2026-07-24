@@ -1,6 +1,7 @@
 import {
     Activity,
     AlertTriangle,
+    ArrowRight,
     BarChart3,
     Calendar,
     CheckCircle,
@@ -15,11 +16,15 @@ import {
     PieChart,
     Printer,
     RefreshCw,
-    TrendingUp
+    TrendingUp,
+    X
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { barangaysByMunicipality, municipalities } from '../data/camarinesNorteLocations';
 import { ReportsMap } from '../components/ReportsMap';
+import { getAgencyPresentation } from '../utils/agencyPresentation';
+import { getIncidentReference } from '../utils/incidentReference';
 import { getSessionScope, isStationScoped, SessionScope } from '../utils/sessionScope';
 
 interface ReportStats {
@@ -27,6 +32,11 @@ interface ReportStats {
   pending: number;
   responding: number;
   resolved: number;
+  active?: number;
+  unassigned?: number;
+  overdue?: number;
+  casualtyAlerts?: number;
+  awaitingDispatchDecision?: number;
   byAgency: { agency_type: string; count: number }[];
   byStatus: { status: string; count: number }[];
   byDay: { date: string; count: number }[];
@@ -34,10 +44,13 @@ interface ReportStats {
   mostActiveArea?: { area: string; count: number } | null;
   avgResponseTime?: number | null;    // in minutes
   avgResolutionTime?: number | null;  // in minutes
+  responseSampleSize?: number;
+  resolutionSampleSize?: number;
+  trendGranularity?: 'day' | 'week' | 'month';
 }
 
 interface ReportConfig {
-  dateRange: 'today' | '7d' | '30d' | '90d' | 'custom';
+  dateRange: 'today' | '7d' | '30d' | '90d' | '1y' | 'custom';
   customStartDate: string;
   customEndDate: string;
   agencies: string[];
@@ -56,16 +69,57 @@ interface ReportConfig {
 }
 
 const AGENCIES = ['PNP', 'BFP', 'MDRRMO'];
-const STATUSES = ['pending', 'assigned', 'responding', 'resolved', 'closed'];
+const STATUSES = ['pending', 'assigned', 'in_progress', 'responding', 'resolved', 'closed', 'rejected'];
 const normalizeAgency = (agency?: string) => agency?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency;
-const formatAgency = (agency?: string) => normalizeAgency(agency)?.toUpperCase();
+const formatAgency = (agency?: string) => getAgencyPresentation(agency).shortLabel;
+const parseLocalDate = (value: string) => new Date(`${value}T00:00:00`);
+
+function getDateWindow(dateRange: string, customStart: string, customEnd: string) {
+  const to = new Date();
+  let from: Date | null = null;
+
+  if (dateRange === 'today') {
+    from = new Date(to);
+    from.setHours(0, 0, 0, 0);
+  } else if (dateRange === '7d') {
+    from = new Date(to.getTime() - 6 * 24 * 60 * 60 * 1000);
+  } else if (dateRange === '30d') {
+    from = new Date(to.getTime() - 29 * 24 * 60 * 60 * 1000);
+  } else if (dateRange === '90d') {
+    from = new Date(to.getTime() - 89 * 24 * 60 * 60 * 1000);
+  } else if (dateRange === '1y') {
+    from = new Date(to.getTime() - 364 * 24 * 60 * 60 * 1000);
+  } else if (dateRange === 'custom' && customStart && customEnd) {
+    from = parseLocalDate(customStart);
+    const customTo = parseLocalDate(customEnd);
+    customTo.setHours(23, 59, 59, 999);
+    return { from: from.toISOString(), to: customTo.toISOString() };
+  }
+
+  if (!from) return null;
+  const end = new Date(to);
+  end.setHours(23, 59, 59, 999);
+  return { from: from.toISOString(), to: end.toISOString() };
+}
+
+function getVisibleDateLabel(dateRange: string, customStart: string, customEnd: string) {
+  if (dateRange === 'custom') return customStart && customEnd ? `${customStart} to ${customEnd}` : 'Custom range needs dates';
+  if (dateRange === 'today') return 'Today';
+  if (dateRange === '7d') return 'Last 7 days';
+  if (dateRange === '30d') return 'Last 30 days';
+  if (dateRange === '90d') return 'Last 90 days';
+  return 'Last year';
+}
 
 function Reports() {
+  const navigate = useNavigate();
   const initialScope = useMemo(() => getSessionScope(), []);
   const [sessionScope, setSessionScope] = useState<SessionScope>(initialScope);
   const [stats, setStats] = useState<ReportStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [dateRange, setDateRange] = useState('7d');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
+  const [dateRange, setDateRange] = useState<ReportConfig['dateRange']>('7d');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [selectedAgency, setSelectedAgency] = useState(
@@ -74,12 +128,14 @@ function Reports() {
       : 'all'
   );
   const [generating, setGenerating] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportMatchCount, setReportMatchCount] = useState<number | null>(null);
   const [showReportBuilder, setShowReportBuilder] = useState(false);
   const [skipCacheNext, setSkipCacheNext] = useState(false);
   const [activeTab, setActiveTab] = useState<'analytics' | 'map'>('analytics');
   
   const [reportConfig, setReportConfig] = useState<ReportConfig>({
-    dateRange: '30d',
+    dateRange: dateRange as ReportConfig['dateRange'],
     customStartDate: '',
     customEndDate: '',
     agencies:
@@ -101,12 +157,33 @@ function Reports() {
   });
   const stationScopeActive = isStationScoped(sessionScope);
 
+  const syncReportScope = () => {
+    setReportConfig((current) => ({
+      ...current,
+      dateRange: dateRange as ReportConfig['dateRange'],
+      customStartDate: customStart,
+      customEndDate: customEnd,
+      agencies: stationScopeActive && sessionScope.agencyShortName
+        ? [sessionScope.agencyShortName.toUpperCase()]
+        : selectedAgency === 'all' ? [] : [selectedAgency.toUpperCase()],
+    }));
+    setReportError(null);
+    setReportMatchCount(null);
+    setShowReportBuilder(true);
+  };
+
   const barangayOptions = useMemo(
     () => (reportConfig.municipality ? barangaysByMunicipality[reportConfig.municipality] || [] : []),
     [reportConfig.municipality]
   );
 
   useEffect(() => {
+    if (dateRange === 'custom' && (!customStart || !customEnd)) {
+      setLoading(false);
+      setStats(null);
+      setLoadError('Choose both a start and end date to load a custom analytics range.');
+      return;
+    }
     loadStats();
   }, [dateRange, selectedAgency, customStart, customEnd]);
 
@@ -136,6 +213,7 @@ function Reports() {
   const loadStats = async (skipCache = false) => {
     if (skipCache) setSkipCacheNext(true);
     setLoading(true);
+    setLoadError(null);
     try {
       const dateFilters = (() => {
         const to = new Date();
@@ -194,10 +272,9 @@ function Reports() {
       }
 
       const data = await window.api.getStats(Object.keys(payload).length ? payload : undefined);
-      // Use real data from API
       setStats({
         ...data,
-        byStatus: [
+        byStatus: data.byStatus || [
           { status: 'pending', count: data.pending },
           { status: 'responding', count: data.responding },
           { status: 'resolved', count: data.resolved },
@@ -208,8 +285,12 @@ function Reports() {
         avgResponseTime: data.avgResponseTime,
         avgResolutionTime: data.avgResolutionTime,
       });
+      setLastLoadedAt(new Date());
     } catch (error) {
       console.error('Failed to load stats:', error);
+      setLoadError(stats
+        ? 'Live analytics could not be refreshed. The displayed snapshot may be stale.'
+        : 'Live analytics are unavailable. No unverified fallback values are being shown.');
     } finally {
       setLoading(false);
       setSkipCacheNext(false);
@@ -221,7 +302,7 @@ function Reports() {
       case 'pnp': return 'bg-blue-500';
       case 'bfp': return 'bg-red-500';
       case 'mdrrmo': return 'bg-cyan-500';
-      default: return 'bg-gray-500';
+      default: return 'bg-amber-500';
     }
   };
 
@@ -230,9 +311,11 @@ function Reports() {
       case 'pending': return 'bg-yellow-500';
       case 'responding': return 'bg-orange-500';
       case 'resolved': return 'bg-green-500';
-      default: return 'bg-gray-500';
+      default: return 'bg-slate-500';
     }
   };
+
+  const getStatusLabel = (status: string) => status.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 
   // Format duration in minutes to human-readable string
   const formatDuration = (minutes: number): string => {
@@ -284,6 +367,7 @@ function Reports() {
       case '7d': return 'Last 7 days';
       case '30d': return 'Last 30 days';
       case '90d': return 'Last 90 days';
+      case '1y': return 'Last year';
       case 'custom': return 'Custom range';
       default: return 'All time';
     }
@@ -321,14 +405,16 @@ function Reports() {
   };
 
   const generateReport = async () => {
+    setReportError(null);
+    setReportMatchCount(null);
     // Validation
     if (reportConfig.dateRange === 'custom') {
       if (!reportConfig.customStartDate || !reportConfig.customEndDate) {
-        alert('Please select both start and end dates');
+        setReportError('Choose both a start and end date before exporting.');
         return;
       }
-      if (new Date(reportConfig.customStartDate) > new Date(reportConfig.customEndDate)) {
-        alert('Start date cannot be later than end date');
+      if (parseLocalDate(reportConfig.customStartDate) > parseLocalDate(reportConfig.customEndDate)) {
+        setReportError('The start date cannot be later than the end date.');
         return;
       }
     }
@@ -338,11 +424,11 @@ function Reports() {
       // Get incidents with filters
       const filters: any = {};
       
-      if (reportConfig.agencies.length > 0) {
-        filters.agency = reportConfig.agencies[0].toLowerCase(); // API supports single agency for now
+      if (reportConfig.agencies.length === 1) {
+        filters.agency = reportConfig.agencies[0].toLowerCase();
       }
-      if (reportConfig.statuses.length > 0) {
-        filters.status = reportConfig.statuses[0]; // API supports single status for now
+      if (reportConfig.statuses.length === 1) {
+        filters.status = reportConfig.statuses[0];
       }
       if (reportConfig.municipality) {
         filters.municipality = reportConfig.municipality;
@@ -358,10 +444,21 @@ function Reports() {
         filters.agency = scope.agencyShortName?.toLowerCase();
       }
 
-      // Use high limit to get all incidents for report generation
-      const response: any = await window.api.getIncidents({ ...filters, limit: 10000 });
-      // Handle both paginated response and legacy array response
-      const incidents = Array.isArray(response) ? response : (response.data || []);
+      // Read every page so multi-select exports cannot silently omit records.
+      const incidents: any[] = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const response: any = await window.api.getIncidents({ ...filters, page, pageSize: 500 });
+        if (Array.isArray(response)) {
+          incidents.push(...response);
+          totalPages = 1;
+        } else {
+          incidents.push(...(response?.data || []));
+          totalPages = Math.max(1, Number(response?.totalPages || 1));
+        }
+        page += 1;
+      } while (page <= totalPages);
       
       // Filter by date range
       let filteredIncidents = incidents;
@@ -380,12 +477,12 @@ function Reports() {
         };
         const days = daysMap[reportConfig.dateRange] || 365;
         const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-        filteredIncidents = incidents.filter((i: any) => new Date(i.created_at) >= cutoff);
+         filteredIncidents = filteredIncidents.filter((i: any) => new Date(i.created_at) >= cutoff);
       } else if (reportConfig.customStartDate && reportConfig.customEndDate) {
-        const start = new Date(reportConfig.customStartDate);
-        const end = new Date(reportConfig.customEndDate);
+        const start = parseLocalDate(reportConfig.customStartDate);
+        const end = parseLocalDate(reportConfig.customEndDate);
         end.setHours(23, 59, 59, 999);
-        filteredIncidents = incidents.filter((i: any) => {
+         filteredIncidents = filteredIncidents.filter((i: any) => {
           const date = new Date(i.created_at);
           return date >= start && date <= end;
         });
@@ -415,10 +512,16 @@ function Reports() {
         );
       }
 
+      setReportMatchCount(filteredIncidents.length);
+      if (filteredIncidents.length === 0) {
+        setReportError('No incidents match this export scope. Adjust the filters and try again.');
+        return;
+      }
+
       // Build report data based on included fields
       const reportData = filteredIncidents.map((incident: any) => {
         const row: any = {
-          id: incident.id,
+          incident_reference: getIncidentReference(incident),
           agency: formatAgency(incident.agency_type),
           status: incident.status,
           created_at: incident.created_at,
@@ -507,7 +610,7 @@ function Reports() {
           await window.api.previewPdf({ html, filename: pdfFilename });
         } catch (err) {
           console.error('Failed to preview PDF:', err);
-          alert('Failed to generate PDF preview. Please try again.');
+          setReportError('The PDF preview could not be generated. Try again or export CSV.');
         }
         setGenerating(false);
         return;
@@ -526,11 +629,18 @@ function Reports() {
 
     } catch (error) {
       console.error('Failed to generate report:', error);
-      alert('Failed to generate report. Please try again.');
+      setReportError('The export could not be generated. Check the connection and try again.');
     } finally {
       setGenerating(false);
     }
   };
+
+  const escapeHtml = (value: unknown) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 
   const generatePrintableHTML = (data: any, config: ReportConfig) => {
     const title = `Incident Report - ${getDateRangeLabel()}`;
@@ -552,14 +662,14 @@ function Reports() {
       
       tableRows += `
         <tr>
-          <td>${item.id?.substring(0, 8).toUpperCase() || '-'}</td>
-          <td>${item.agency || '-'}</td>
-          <td>${item.status || '-'}</td>
-          ${config.includeFields.description ? `<td>${item.description || '-'}</td>` : ''}
-          ${config.includeFields.location ? `<td>${item.location_address || '-'}</td>` : ''}
-          ${config.includeFields.reporter ? `<td>${item.reporter_name || 'Anonymous'}</td>` : ''}
-          ${config.includeFields.media ? `<td>${mediaCell}</td>` : ''}
-          <td>${item.created_at ? new Date(item.created_at).toLocaleDateString() : '-'}</td>
+          <td>${escapeHtml(item.incident_reference || '-')}</td>
+          <td>${escapeHtml(item.agency || '-')}</td>
+          <td>${escapeHtml(item.status || '-')}</td>
+          ${config.includeFields.description ? `<td>${escapeHtml(item.description || '-')}</td>` : ''}
+          ${config.includeFields.location ? `<td>${escapeHtml(item.location_address || '-')}</td>` : ''}
+          ${config.includeFields.reporter ? `<td>${escapeHtml(item.reporter_name || 'Anonymous')}</td>` : ''}
+          ${config.includeFields.media ? `<td>${escapeHtml(mediaCell)}</td>` : ''}
+          <td>${escapeHtml(item.created_at ? new Date(item.created_at).toLocaleDateString() : '-')}</td>
         </tr>
       `;
     });
@@ -594,7 +704,7 @@ function Reports() {
         <table>
           <thead>
             <tr>
-              <th>ID</th>
+              <th>Incident reference</th>
               <th>Agency</th>
               <th>Status</th>
               ${config.includeFields.description ? '<th>Description</th>' : ''}
@@ -615,31 +725,53 @@ function Reports() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex h-full items-center justify-center" role="status" aria-label="Loading reports and analytics">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <span className="sr-only">Loading reports and analytics</span>
       </div>
     );
   }
 
   const totalIncidents = stats?.total || 0;
+  const awaitingApprovalIncidents = stats?.awaitingDispatchDecision ?? (
+    stats?.byAgency
+      ?.filter((item) => !normalizeAgency(item.agency_type) || normalizeAgency(item.agency_type)?.toLowerCase() === 'unknown')
+      .reduce((sum, item) => sum + item.count, 0) || 0
+  );
   const resolvedRate = totalIncidents > 0 
     ? Math.round((stats?.resolved || 0) / totalIncidents * 100) 
     : 0;
 
   return (
-    <div className="p-6 dark:bg-gray-950">
+    <div className="min-h-full bg-slate-50 p-4 dark:bg-slate-950 sm:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Reports & Analytics</h1>
-          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Incident statistics and trends</p>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-white">Reports & Analytics</h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Operational statistics and trends</p>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Scope: {stationScopeActive ? `${sessionScope.stationName || 'Your station'}${sessionScope.agencyShortName ? ` · ${sessionScope.agencyShortName.toUpperCase()}` : ''}` : selectedAgency === 'all' ? 'All agencies' : selectedAgency.toUpperCase()}
+            {' · '}{getVisibleDateLabel(dateRange, customStart, customEnd)}
+            {lastLoadedAt && ` · Updated ${lastLoadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+          </p>
         </div>
-        {activeTab === 'analytics' && (
-        <div className="flex gap-3">
-          <select
+        <div className="flex flex-wrap items-center gap-2">
+           {!stationScopeActive && (
+             <select
+               value={selectedAgency}
+               onChange={(e) => setSelectedAgency(e.target.value)}
+               aria-label="Analytics agency scope"
+               className="min-h-10 px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
+             >
+               <option value="all">All agencies</option>
+               {AGENCIES.map((agency) => <option key={agency} value={agency.toLowerCase()}>{agency}</option>)}
+             </select>
+           )}
+           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value)}
-            className="px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white"
+             aria-label="Analytics date range"
+             className="min-h-10 px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white"
           >
             <option value="today">Today</option>
             <option value="7d">Last 7 days</option>
@@ -654,33 +786,35 @@ function Reports() {
                 type="date"
                 value={customStart}
                 onChange={(e) => setCustomStart(e.target.value)}
-                className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                className="px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
               />
-              <span className="text-gray-500 dark:text-gray-400">to</span>
+              <span className="text-slate-500 dark:text-slate-400">to</span>
               <input
                 type="date"
                 value={customEnd}
                 onChange={(e) => setCustomEnd(e.target.value)}
-                className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 dark:text-white text-sm"
+                className="px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:text-white text-sm"
               />
             </div>
           )}
-          <button
-            onClick={() => setShowReportBuilder(!showReportBuilder)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
+          {activeTab === 'analytics' && <button
+            type="button"
+            onClick={syncReportScope}
+            aria-expanded={showReportBuilder}
+            className="flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           >
             <FileText className="w-4 h-4" />
-            Generate Report
-          </button>
+            Create export
+          </button>}
           <button
+            type="button"
             onClick={() => loadStats(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors dark:text-white"
+            className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:hover:bg-slate-700"
           >
             <RefreshCw className="w-4 h-4" />
             Refresh
           </button>
         </div>
-        )}
       </div>
 
       {stationScopeActive && (
@@ -689,25 +823,38 @@ function Reports() {
         </div>
       )}
 
+      {loadError && (
+        <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200" role="alert">
+          <span>{loadError}</span>
+          <button type="button" onClick={() => setLoadError(null)} aria-label="Dismiss analytics error" className="min-h-8 min-w-8 rounded-lg hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-900/40"><X size={16} /></button>
+        </div>
+      )}
+
       {/* Tab Switcher */}
-      <div className="flex items-center gap-1 mb-6 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
+      <div role="tablist" aria-label="Reports views" className="mb-5 flex w-fit items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'analytics'}
           onClick={() => setActiveTab('analytics')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+           className={`flex min-h-10 items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
             activeTab === 'analytics'
-              ? 'bg-white dark:bg-gray-700 text-gray-800 dark:text-white shadow-sm'
-              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+              ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
           }`}
         >
           <BarChart3 className="w-4 h-4" />
           Analytics
         </button>
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'map'}
           onClick={() => setActiveTab('map')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+           className={`flex min-h-10 items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
             activeTab === 'map'
-              ? 'bg-white dark:bg-gray-700 text-gray-800 dark:text-white shadow-sm'
-              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+              ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
           }`}
         >
           <Map className="w-4 h-4" />
@@ -715,48 +862,74 @@ function Reports() {
         </button>
       </div>
 
+      {!stats && activeTab === 'analytics' && (
+        <section className="rounded-xl border border-red-200 bg-white p-8 text-center dark:border-red-900/60 dark:bg-slate-900" aria-live="polite">
+          <AlertTriangle className="mx-auto mb-3 h-10 w-10 text-red-500" />
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Verified analytics are unavailable</h2>
+          <p className="mx-auto mt-2 max-w-lg text-sm text-slate-600 dark:text-slate-300">No placeholder counts are shown because the statistics service did not return verified data. Check the connection and retry.</p>
+          <button type="button" onClick={() => loadStats(true)} className="mt-4 min-h-10 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">Retry analytics</button>
+        </section>
+      )}
+
       {/* Map Tab */}
-      {activeTab === 'map' && <ReportsMap />}
+      {activeTab === 'map' && (
+        <ReportsMap
+          agency={selectedAgency}
+          dateRange={dateRange}
+          customStart={customStart}
+          customEnd={customEnd}
+          stationId={stationScopeActive ? sessionScope.stationId : undefined}
+          scopeLabel={stationScopeActive ? sessionScope.stationName || 'Your station' : undefined}
+        />
+      )}
 
       {/* Analytics Tab */}
-      {activeTab === 'analytics' && (<>
+      {activeTab === 'analytics' && stats && (<>
       {/* Report Builder Panel */}
       {showReportBuilder && (
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 mb-6">
+         <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50/40 p-4 dark:border-blue-900/60 dark:bg-blue-950/20 md:p-5">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+            <h3 className="font-semibold text-slate-800 dark:text-white flex items-center gap-2">
               <Filter className="w-5 h-5 text-blue-600" />
               Custom Report Builder
             </h3>
-            <button
-              onClick={() => setShowReportBuilder(false)}
-              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            >
-              ✕
+             <button
+               type="button"
+               onClick={() => setShowReportBuilder(false)}
+               aria-label="Close report builder"
+               className="min-h-10 min-w-10 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+             >
+               <X size={18} />
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-6">
+          <p className="mb-4 text-xs text-slate-600 dark:text-slate-300">
+            Export scope starts from the visible analytics filters. Choose additional fields or grouping below, then verify the matching record count before downloading.
+          </p>
+          {reportError && <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">{reportError}</div>}
+          {reportMatchCount !== null && !reportError && <div role="status" className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200">{reportMatchCount.toLocaleString()} matching incident{reportMatchCount === 1 ? '' : 's'} ready to export.</div>}
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
             {/* Left Column - Filters */}
             <div className="space-y-4">
               {/* Date Range */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   <Calendar className="w-4 h-4 inline mr-1" />
                   Date Range
                 </label>
                 <div className="flex flex-wrap gap-2">
-                  {(['today', '7d', '30d', '90d', 'custom'] as const).map((range) => (
+                  {(['today', '7d', '30d', '90d', '1y', 'custom'] as const).map((range) => (
                     <button
                       key={range}
                       onClick={() => setReportConfig(prev => ({ ...prev, dateRange: range }))}
                       className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
                         reportConfig.dateRange === range
                           ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                          : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
                       }`}
                     >
-                      {range === 'today' ? 'Today' : range === 'custom' ? 'Custom' : `Last ${range.replace('d', ' days')}`}
+                      {range === 'today' ? 'Today' : range === 'custom' ? 'Custom' : range === '1y' ? 'Last year' : `Last ${range.replace('d', ' days')}`}
                     </button>
                   ))}
                 </div>
@@ -766,14 +939,14 @@ function Reports() {
                       type="date"
                       value={reportConfig.customStartDate}
                       onChange={(e) => setReportConfig(prev => ({ ...prev, customStartDate: e.target.value }))}
-                      className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      className="flex-1 px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white text-sm"
                     />
-                    <span className="text-gray-500 dark:text-gray-400 self-center">to</span>
+                    <span className="text-slate-500 dark:text-slate-400 self-center">to</span>
                     <input
                       type="date"
                       value={reportConfig.customEndDate}
                       onChange={(e) => setReportConfig(prev => ({ ...prev, customEndDate: e.target.value }))}
-                      className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white text-sm"
+                      className="flex-1 px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white text-sm"
                     />
                   </div>
                 )}
@@ -781,7 +954,7 @@ function Reports() {
 
               {/* Agencies */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Agencies (leave empty for all)
                 </label>
                 <div className="flex flex-wrap gap-2">
@@ -795,7 +968,7 @@ function Reports() {
                           ? agency === 'PNP' ? 'bg-blue-600 text-white' 
                             : agency === 'BFP' ? 'bg-red-600 text-white'
                             : 'bg-teal-600 text-white'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                          : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
                       } ${
                         stationScopeActive ? 'opacity-60 cursor-not-allowed' : ''
                       }`}
@@ -808,7 +981,7 @@ function Reports() {
 
               {/* Statuses */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Status (leave empty for all)
                 </label>
                 <div className="flex flex-wrap gap-2">
@@ -822,9 +995,9 @@ function Reports() {
                             : status === 'assigned' ? 'bg-blue-500 text-white'
                             : status === 'responding' ? 'bg-orange-500 text-white'
                             : status === 'resolved' ? 'bg-green-500 text-white'
-                            : status === 'closed' ? 'bg-gray-800 text-white'
+                            : status === 'closed' ? 'bg-slate-800 text-white'
                             : 'bg-green-500 text-white'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                          : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
                       }`}
                     >
                       {status}
@@ -836,7 +1009,7 @@ function Reports() {
               {/* Municipality / Barangay */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Municipality
                   </label>
                   <select
@@ -845,7 +1018,7 @@ function Reports() {
                       const value = e.target.value;
                       setReportConfig(prev => ({ ...prev, municipality: value, barangay: '' }));
                     }}
-                    className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white text-sm"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white text-sm"
                   >
                     <option value="">All Municipalities</option>
                     {municipalities.map((m) => (
@@ -854,14 +1027,14 @@ function Reports() {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Barangay
                   </label>
                   <select
                     value={reportConfig.barangay}
                     onChange={(e) => setReportConfig(prev => ({ ...prev, barangay: e.target.value }))}
                     disabled={!reportConfig.municipality}
-                    className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white text-sm disabled:opacity-60"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white text-sm disabled:opacity-60"
                   >
                     <option value="">All Barangays</option>
                     {barangayOptions.map((b) => (
@@ -876,22 +1049,22 @@ function Reports() {
             <div className="space-y-4">
               {/* Include Fields */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Include Fields
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(reportConfig.includeFields).map(([field, enabled]) => (
                     <label
                       key={field}
-                      className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 dark:bg-gray-700 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                      className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-600"
                     >
                       <input
                         type="checkbox"
                         checked={enabled}
                         onChange={() => toggleField(field as keyof ReportConfig['includeFields'])}
-                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                       />
-                      <span className="text-sm text-gray-700 dark:text-gray-300 capitalize">{field}</span>
+                      <span className="text-sm text-slate-700 dark:text-slate-300 capitalize">{field}</span>
                     </label>
                   ))}
                 </div>
@@ -899,13 +1072,13 @@ function Reports() {
 
               {/* Group By */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Group By
                 </label>
                 <select
                   value={reportConfig.groupBy}
                   onChange={(e) => setReportConfig(prev => ({ ...prev, groupBy: e.target.value as any }))}
-                  className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white text-sm"
+                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white text-sm"
                 >
                   <option value="none">No Grouping</option>
                   <option value="agency">Agency</option>
@@ -917,7 +1090,7 @@ function Reports() {
 
               {/* Export Format */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Export Format
                 </label>
                 <div className="flex gap-2">
@@ -926,7 +1099,7 @@ function Reports() {
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
                       reportConfig.format === 'csv'
                         ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/30 dark:border-green-700 dark:text-green-400'
-                        : 'border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        : 'border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                     }`}
                   >
                     <FileSpreadsheet className="w-4 h-4" />
@@ -937,7 +1110,7 @@ function Reports() {
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
                       reportConfig.format === 'pdf'
                         ? 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/30 dark:border-red-700 dark:text-red-400'
-                        : 'border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        : 'border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                     }`}
                   >
                     <Printer className="w-4 h-4" />
@@ -949,15 +1122,15 @@ function Reports() {
           </div>
 
           {/* Generate Button */}
-          <div className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
-            <div className="text-sm text-gray-500 dark:text-gray-400">
+          <div className="mt-6 flex flex-col gap-3 border-t border-blue-100 pt-4 dark:border-blue-900/60 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-slate-600 dark:text-slate-300">
               <span className="font-medium">Preview:</span>{' '}
               {getDateRangeLabel()} • {reportConfig.agencies.length > 0 ? reportConfig.agencies.join(', ') : 'All Agencies'} • {reportConfig.statuses.length > 0 ? reportConfig.statuses.join(', ') : 'All Statuses'} • {reportConfig.format.toUpperCase()}
             </div>
             <button
               onClick={generateReport}
               disabled={generating}
-              className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+              className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-2.5 font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {generating ? (
                 <>
@@ -975,57 +1148,51 @@ function Reports() {
         </div>
       )}
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-4 gap-6 mb-6">
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-xl flex items-center justify-center">
-              <BarChart3 className="w-6 h-6 text-blue-600" />
-            </div>
-<span className="text-xs text-gray-400 italic" title="Trend data coming soon">--</span>
-          </div>
-          <p className="text-3xl font-bold text-gray-800 dark:text-white">{stats?.total || 0}</p>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Total Incidents</p>
-        </div>
+      {/* Operational summary */}
+      <section aria-label="Operational summary" className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: 'Incidents in scope', value: totalIncidents, hint: 'Created in selected period', icon: BarChart3, tone: 'blue', onClick: () => navigate('/incidents') },
+          { label: 'Awaiting assignment', value: stats?.unassigned ?? stats?.pending ?? 0, hint: 'No station or officer assigned', icon: AlertTriangle, tone: 'amber', onClick: () => navigate('/incidents?status=pending') },
+          { label: 'Overdue first response', value: stats?.overdue ?? 0, hint: 'Open for more than 15 minutes', icon: Clock, tone: 'red', onClick: () => navigate('/incidents') },
+          { label: 'Resolved rate', value: `${resolvedRate}%`, hint: `${stats?.resolved || 0} resolved of ${totalIncidents}`, icon: CheckCircle, tone: 'green', onClick: () => navigate('/incidents?status=resolved') },
+        ].map(({ label, value, hint, icon: Icon, tone, onClick }) => (
+          <button key={label} type="button" onClick={onClick} className="group flex min-h-[112px] items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-colors hover:border-blue-400 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-700 dark:bg-slate-800">
+            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tone === 'red' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' : tone === 'amber' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : tone === 'green' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'}`}><Icon size={20} /></span>
+            <span className="min-w-0"><span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</span><span className="mt-1 block text-2xl font-bold tabular-nums text-slate-950 dark:text-white">{value}</span><span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{hint}</span></span>
+          </button>
+        ))}
+      </section>
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-yellow-100 dark:bg-yellow-900/30 rounded-xl flex items-center justify-center">
-              <AlertTriangle className="w-6 h-6 text-yellow-600" />
+       {awaitingApprovalIncidents > 0 && (
+          <div className="mb-5 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between" role="status">
+            <div className="flex min-w-0 items-start gap-3">
+              <Info size={18} className="mt-0.5 shrink-0" />
+              <span><strong>{awaitingApprovalIncidents} incident{awaitingApprovalIncidents === 1 ? '' : 's'}</strong> await a dispatcher agency decision. AI recommendations remain advisory until approved.</span>
             </div>
-<span className="text-xs text-gray-400 italic" title="Trend data coming soon">--</span>
+            <button
+              type="button"
+              onClick={() => {
+                const dateWindow = getDateWindow(dateRange, customStart, customEnd);
+                const params = new URLSearchParams({ status: 'pending' });
+                if (dateWindow) {
+                  params.set('from', dateWindow.from);
+                  params.set('to', dateWindow.to);
+                }
+                navigate(`/incidents?${params.toString()}`);
+              }}
+              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition-colors hover:border-amber-400 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100 dark:hover:bg-amber-900/50 sm:self-auto"
+            >
+              Review incidents
+              <ArrowRight size={14} aria-hidden="true" />
+            </button>
           </div>
-          <p className="text-3xl font-bold text-gray-800 dark:text-white">{stats?.pending || 0}</p>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Pending Response</p>
-        </div>
+        )}
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-xl flex items-center justify-center">
-              <CheckCircle className="w-6 h-6 text-green-600" />
-            </div>
-<span className="text-xs text-gray-400 italic" title="Trend data coming soon">--</span>
-          </div>
-          <p className="text-3xl font-bold text-gray-800 dark:text-white">{stats?.resolved || 0}</p>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Resolved</p>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-100 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-xl flex items-center justify-center">
-              <Activity className="w-6 h-6 text-purple-600" />
-            </div>
-          </div>
-          <p className="text-3xl font-bold text-gray-800 dark:text-white">{resolvedRate}%</p>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Resolution Rate</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-6 mb-6">
+       <div className="grid grid-cols-1 gap-4 mb-5 xl:grid-cols-2">
         {/* Incidents by Agency */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-          <h3 className="font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
-            <PieChart className="w-5 h-5 text-gray-400" />
+         <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+          <h3 className="font-semibold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+            <PieChart className="w-5 h-5 text-slate-400" />
             Incidents by Agency
           </h3>
           <div className="space-y-4">
@@ -1034,34 +1201,34 @@ function Reports() {
                 ? Math.round(item.count / totalIncidents * 100) 
                 : 0;
               return (
-                <div key={item.agency_type}>
+                <button type="button" key={item.agency_type} onClick={() => navigate(`/incidents?agency=${encodeURIComponent(normalizeAgency(item.agency_type) || 'unknown')}`)} className="block w-full rounded-lg p-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-700/40">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300 uppercase">
-                      {formatAgency(item.agency_type)}
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                       {formatAgency(item.agency_type)}
                     </span>
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                    <span className="text-sm text-slate-500 dark:text-slate-400">
                       {item.count} ({percentage}%)
                     </span>
                   </div>
-                  <div className="h-3 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                   <div className="h-3 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden" role="progressbar" aria-label={`${formatAgency(item.agency_type)} incidents`} aria-valuenow={item.count} aria-valuemin={0} aria-valuemax={Math.max(totalIncidents, 1)}>
                     <div
-                      className={`h-full ${getAgencyColor(item.agency_type)} transition-all duration-500`}
+                      className={`h-full ${getAgencyColor(item.agency_type)} transition-all duration-500 motion-reduce:transition-none`}
                       style={{ width: `${percentage}%` }}
                     />
                   </div>
-                </div>
+                </button>
               );
             })}
             {(!stats?.byAgency || stats.byAgency.length === 0) && (
-              <p className="text-gray-400 text-center py-8">No data available</p>
+              <p className="text-slate-400 text-center py-8">No data available</p>
             )}
           </div>
         </div>
 
         {/* Incidents by Status */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-          <h3 className="font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-gray-400" />
+         <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+          <h3 className="font-semibold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+            <Activity className="w-5 h-5 text-slate-400" />
             Incidents by Status
           </h3>
           <div className="space-y-4">
@@ -1070,22 +1237,22 @@ function Reports() {
                 ? Math.round(item.count / totalIncidents * 100) 
                 : 0;
               return (
-                <div key={item.status}>
+                <button type="button" key={item.status} onClick={() => navigate(`/incidents?status=${encodeURIComponent(item.status)}`)} className="block w-full rounded-lg p-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-700/40">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300 capitalize">
-                      {item.status}
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300 capitalize">
+                       {getStatusLabel(item.status)}
                     </span>
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                    <span className="text-sm text-slate-500 dark:text-slate-400">
                       {item.count} ({percentage}%)
                     </span>
                   </div>
-                  <div className="h-3 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                   <div className="h-3 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden" role="progressbar" aria-label={`${getStatusLabel(item.status)} incidents`} aria-valuenow={item.count} aria-valuemin={0} aria-valuemax={Math.max(totalIncidents, 1)}>
                     <div
-                      className={`h-full ${getStatusColor(item.status)} transition-all duration-500`}
+                      className={`h-full ${getStatusColor(item.status)} transition-all duration-500 motion-reduce:transition-none`}
                       style={{ width: `${percentage}%` }}
                     />
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -1093,11 +1260,12 @@ function Reports() {
       </div>
 
       {/* Trend Chart */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 md:p-6">
-        <h3 className="font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-gray-400" />
-          Daily Incident Trend
-          <span className="text-sm font-normal text-gray-400 ml-2">
+       <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800 md:p-5">
+         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+         <h3 className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white">
+          <TrendingUp className="w-5 h-5 text-slate-400" />
+          Incident Volume Over Time
+           <span className="ml-2 text-sm font-normal text-slate-500 dark:text-slate-400">
             {dateRange === 'custom' && customStart && customEnd
               ? `${customStart} to ${customEnd}`
               : dateRange === 'today'
@@ -1112,7 +1280,9 @@ function Reports() {
                         ? 'Last year'
                         : 'All time'}
           </span>
-        </h3>
+         </h3>
+         <span className="text-xs text-slate-500 dark:text-slate-400">{stats?.trendGranularity === 'month' ? 'Monthly' : stats?.trendGranularity === 'week' ? 'Weekly' : 'Daily'} buckets · incident creation date</span>
+         </div>
         {stats?.dailyTrend && stats.dailyTrend.length > 0 ? (
           <div className="flex flex-col gap-4">
             {/* Bar Chart with horizontal scroll when many days */}
@@ -1131,27 +1301,39 @@ function Reports() {
 
                   return stats.dailyTrend.map((day, index) => {
                     const heightPercent = maxCount > 0 ? (day.count / maxCount) * 100 : 0;
-                    const dayName = new Date(day.date).toLocaleDateString('en-US', { weekday: 'short' });
-                    const dayNum = new Date(day.date).getDate();
+                    const parsedDate = new Date(`${day.date}${day.date.length === 10 ? 'T12:00:00' : '-01T12:00:00'}`);
+                    const granularity = stats.trendGranularity || 'day';
+                    const dayName = granularity === 'month'
+                      ? parsedDate.toLocaleDateString('en-US', { month: 'short' })
+                      : granularity === 'week'
+                        ? 'Week'
+                        : parsedDate.toLocaleDateString('en-US', { weekday: 'short' });
+                    const dayNum = granularity === 'month'
+                      ? parsedDate.getFullYear()
+                      : granularity === 'week'
+                        ? parsedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                        : parsedDate.getDate();
                     const showLabel = (index % labelStep === 0) || index === totalDays - 1;
                     
                     return (
                       <div key={index} className="w-8 flex flex-col items-center gap-1">
-                        <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                           {day.count}
                         </span>
                         <div className="w-full h-40 flex items-end">
-                          <div 
-                            className={`w-full rounded-t-md transition-all duration-500 hover:bg-blue-600 cursor-pointer ${day.count > 0 ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                          <button
+                            type="button"
+                            aria-label={`${day.date}: ${day.count} incidents. Open matching incidents.`}
+                            onClick={() => navigate(`/incidents?from=${encodeURIComponent(day.date)}&to=${encodeURIComponent(day.date)}`)}
+                            className={`w-full rounded-t-md transition-colors duration-200 hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 motion-reduce:transition-none ${day.count > 0 ? 'bg-blue-500' : 'bg-slate-300 dark:bg-slate-600'}`}
                             style={{ height: `${day.count > 0 ? heightPercent : 4}%` }}
-                            title={`${day.date}: ${day.count} incidents`}
                           />
                         </div>
                         <div className="text-center h-8">
                           {showLabel ? (
                             <>
-                              <p className="text-[10px] font-medium text-gray-600 dark:text-gray-300 leading-tight">{dayName}</p>
-                              <p className="text-[10px] text-gray-400 leading-tight">{dayNum}</p>
+                              <p className="text-[10px] font-medium text-slate-600 dark:text-slate-300 leading-tight">{dayName}</p>
+                              <p className="text-[10px] text-slate-400 leading-tight">{dayNum}</p>
                             </>
                           ) : (
                             <span className="text-[10px] text-transparent select-none">.</span>
@@ -1164,100 +1346,102 @@ function Reports() {
               </div>
             </div>
             {/* Summary */}
-            <div className="pt-4 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between text-sm px-3 md:px-6">
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between text-sm px-3 md:px-6">
               <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">
-                  Total this week:
+                <span className="text-slate-500 dark:text-slate-400">
+                  Total in period:
                 </span>
-                <span className="font-semibold text-gray-700 dark:text-gray-200">
+                <span className="font-semibold text-slate-700 dark:text-slate-200">
                   {stats.dailyTrend.reduce((sum, d) => sum + d.count, 0)}
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-gray-500 dark:text-gray-400">
-                  Daily avg:
+                <span className="text-slate-500 dark:text-slate-400">
+                  Average per {stats.trendGranularity || 'day'}:
                 </span>
-                <span className="font-semibold text-gray-700 dark:text-gray-200">
+                <span className="font-semibold text-slate-700 dark:text-slate-200">
                   {(stats.dailyTrend.reduce((sum, d) => sum + d.count, 0) / Math.max(stats.dailyTrend.length, 1)).toFixed(1)}
                 </span>
               </div>
             </div>
           </div>
         ) : (
-          <div className="h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-900 rounded-lg border-2 border-dashed border-gray-200 dark:border-gray-600">
+          <div className="h-64 flex items-center justify-center bg-slate-50 dark:bg-slate-900 rounded-lg border-2 border-dashed border-slate-200 dark:border-slate-600">
             <div className="text-center">
-              <BarChart3 className="w-12 h-14 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
-              <p className="text-gray-500 dark:text-gray-400 font-medium">No Data Yet</p>
-              <p className="text-gray-400 dark:text-gray-500 text-sm">Trend data will appear once incidents are recorded</p>
+              <BarChart3 className="w-12 h-14 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+               <p className="font-medium text-slate-700 dark:text-slate-200">No incidents in this period</p>
+               <p className="text-sm text-slate-400 dark:text-slate-500">Try a wider date range or clear the agency filter.</p>
+               <button type="button" onClick={() => { setDateRange('30d'); setSelectedAgency('all'); }} className="mt-3 min-h-10 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-900/20">Show last 30 days</button>
             </div>
           </div>
         )}
       </div>
 
       {/* Response Time Stats */}
-      <div className="mt-6">
-        <div className="flex items-center gap-2 mb-4">
-          <h3 className="font-semibold text-gray-800 dark:text-white">Performance Metrics</h3>
-        </div>
-        <div className="grid grid-cols-3 gap-6">
-          <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 ${stats?.avgResponseTime == null ? 'opacity-60' : ''}`}>
+       <div className="mt-5">
+         <div className="mb-3 flex items-center justify-between gap-3">
+           <h3 className="font-semibold text-slate-800 dark:text-white">Performance Metrics</h3>
+           <p className="text-xs text-slate-500 dark:text-slate-400">Complete timestamp records only</p>
+         </div>
+         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+           <div className={`rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800 ${stats?.avgResponseTime == null ? '' : ''}`}>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
                 <Clock className="w-5 h-5 text-blue-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                <p className="text-2xl font-bold text-slate-800 dark:text-white">
                   {stats?.avgResponseTime != null ? formatDuration(stats.avgResponseTime) : '--'}
                 </p>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Avg. Response Time</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Avg. Response Time</p>
               </div>
             </div>
             {stats?.avgResponseTime != null ? (
-              <p className="text-xs text-gray-500 dark:text-gray-400">Time to first response</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Time to first response · n={stats.responseSampleSize || 0}</p>
             ) : (
-              <p className="text-xs text-gray-400 italic">No response data yet</p>
+              <p className="text-xs text-slate-400 italic">No response data yet</p>
             )}
           </div>
 
-          <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 ${stats?.avgResolutionTime == null ? 'opacity-60' : ''}`}>
+           <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
                 <CheckCircle className="w-5 h-5 text-green-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                <p className="text-2xl font-bold text-slate-800 dark:text-white">
                   {stats?.avgResolutionTime != null ? formatDuration(stats.avgResolutionTime) : '--'}
                 </p>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Avg. Resolution Time</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Avg. Resolution Time</p>
               </div>
             </div>
             {stats?.avgResolutionTime != null ? (
-              <p className="text-xs text-gray-500 dark:text-gray-400">Time to resolve incident</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Time to resolve · n={stats.resolutionSampleSize || 0}</p>
             ) : (
-              <p className="text-xs text-gray-400 italic">
+              <p className="text-xs text-slate-400 italic">
                 {stats?.resolved === 0 ? 'No resolved incidents in this period' : 'No resolution data yet'}
               </p>
             )}
           </div>
 
-          <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 ${!stats?.mostActiveArea ? 'opacity-60' : ''}`}>
+           <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
                 <MapPin className="w-5 h-5 text-purple-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                <p className="text-2xl font-bold text-slate-800 dark:text-white">
                   {stats?.mostActiveArea?.count || '--'}
                 </p>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Most Active Area</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Most Active Area</p>
               </div>
             </div>
             {stats?.mostActiveArea ? (
-              <p className="text-sm text-gray-600 dark:text-gray-400 truncate" title={stats.mostActiveArea.area}>
+              <p className="text-sm text-slate-600 dark:text-slate-400 truncate" title={stats.mostActiveArea.area}>
                 {stats.mostActiveArea.area}
               </p>
             ) : (
-              <p className="text-xs text-gray-400 italic">No location data available</p>
+              <p className="text-xs text-slate-400 italic">No location data available</p>
             )}
           </div>
         </div>

@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Papa from 'papaparse';
+import { getIncidentReference } from './incidentReference';
 
 const formatAgency = (agency: string) => (agency?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency).toUpperCase();
 
@@ -65,7 +66,7 @@ export function exportIncidentsToPDF(incidents: any[], filters?: any) {
   
   // Table
   const tableData = incidents.map(incident => [
-    incident.id.substring(0, 8),
+    getIncidentReference(incident),
     formatAgency(incident.agency_type),
     incident.reporter_name || 'N/A',
     incident.location_address || 'N/A',
@@ -131,7 +132,7 @@ export async function exportFinalReportToPDF(incident: any, finalReport: any, ag
     pnp: [220, 38, 38],      // Red
     bfp: [249, 115, 22],     // Orange
     mdrrmo: [6, 182, 212],   // Cyan
-    mdrrmo: [6, 182, 212]    // Cyan
+    pdrrmo: [6, 182, 212]    // Legacy alias
   };
   
   const headerColor = agencyColors[agencyType] || [59, 130, 246];
@@ -163,7 +164,7 @@ export async function exportFinalReportToPDF(incident: any, finalReport: any, ag
   doc.setFont('helvetica', 'normal');
   
   const incidentInfo = [
-    ['Incident ID:', incident.id],
+    ['Incident Reference:', getIncidentReference(incident)],
     ['Reporter:', incident.reporter_name || 'N/A'],
     ['Location:', incident.location_address || 'N/A'],
     ['Status:', incident.status],
@@ -221,7 +222,7 @@ export async function exportFinalReportToPDF(incident: any, finalReport: any, ag
     renderBFPReport(doc, details, margin, yPos, pageWidth);
   } else if (agencyType === 'mdrrmo') {
     renderMDRRMOReport(doc, details, margin, yPos, pageWidth);
-  } else if (agencyType === 'mdrrmo' || agencyType === 'mdrrmo_disaster') {
+  } else if (agencyType === 'pdrrmo' || agencyType === 'mdrrmo_disaster') {
     renderMDRRMOReport(doc, details, margin, yPos, pageWidth);
   }
   
@@ -809,45 +810,6 @@ function renderMDRRMOReport(doc: jsPDF, details: any, margin: number, startY: nu
       const narrativeLines = doc.splitTextToSize(details.narrative, pageWidth - 2 * margin - 4);
       doc.text(narrativeLines, margin + 2, yPos);
     }
-  }
-}
-
-function renderMDRRMOReport(doc: jsPDF, details: any, margin: number, startY: number, pageWidth: number) {
-  let yPos = startY;
-  
-  const fields = [
-    ['Disaster Type:', details.disaster_type],
-    ['Affected Area:', details.affected_area],
-    ['Casualties (Dead):', details.casualties_dead],
-    ['Casualties (Injured):', details.casualties_injured],
-    ['Casualties (Missing):', details.casualties_missing],
-    ['Actual Casualties Count:', details.casualties_count],
-    ['Families Affected:', details.families_affected],
-    ['Individuals Affected:', details.individuals_affected],
-    ['Damage Level:', details.damage_level],
-    ['Damage Details:', details.damage_details]
-  ];
-  
-  fields.forEach(([label, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
-      doc.setFont('helvetica', 'bold');
-      doc.text(label, margin, yPos);
-      doc.setFont('helvetica', 'normal');
-      doc.text(String(value), margin + 50, yPos);
-      yPos += 6;
-    }
-  });
-  
-  yPos += 4;
-  
-  // Narrative
-  if (details.narrative) {
-    doc.setFont('helvetica', 'bold');
-    doc.text('Narrative:', margin, yPos);
-    yPos += 6;
-    doc.setFont('helvetica', 'normal');
-    const lines = doc.splitTextToSize(details.narrative, pageWidth - 2 * margin);
-    doc.text(lines, margin, yPos);
   }
 }
 

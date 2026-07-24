@@ -186,18 +186,9 @@ Deno.serve(async (req) => {
     const message: any = {
       message: {
         token: payload.token,
-        notification: {
-          title: resolvedTitle,
-          body: resolvedBody,
-        },
         data: payload.data ?? {},
         android: {
           priority: "HIGH",
-          notification: {
-            channel_id: "ireport_notifications",
-            title: resolvedTitle,
-            body: resolvedBody,
-          },
         },
       },
     };

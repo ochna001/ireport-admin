@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Papa from 'papaparse';
+import { getIncidentReference } from './incidentReference';
 
 const formatAgency = (agency: string) => (agency?.toLowerCase() === 'pdrrmo' ? 'mdrrmo' : agency).toUpperCase();
 
@@ -65,7 +66,7 @@ export function exportIncidentsToPDF(incidents: any[], filters?: any) {
   
   // Table
   const tableData = incidents.map(incident => [
-    incident.id.substring(0, 8),
+    getIncidentReference(incident),
     formatAgency(incident.agency_type),
     incident.reporter_name || 'N/A',
     incident.location_address || 'N/A',
@@ -162,7 +163,7 @@ export async function exportFinalReportToPDF(incident: any, finalReport: any, ag
   doc.setFont('helvetica', 'normal');
   
   const incidentInfo = [
-    ['Incident ID:', incident.id],
+    ['Incident Reference:', getIncidentReference(incident)],
     ['Reporter:', incident.reporter_name || 'N/A'],
     ['Location:', incident.location_address || 'N/A'],
     ['Status:', incident.status],

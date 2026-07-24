@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap, Circle, Polygon, Tooltip } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Circle, Polygon, Tooltip, GeoJSON } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   AlertTriangle,
   BarChart3,
-  Calendar,
   Filter,
   Flame,
   Layers as LayersIcon,
@@ -17,6 +16,8 @@ import {
 } from 'lucide-react';
 import { renderToString } from 'react-dom/server';
 import municipalityGeoData from '../data/camarinesNorteMunicipalities.json';
+import barangayGeoData from '../data/camarinesNorteBarangays.json';
+import { getIncidentReference } from '../utils/incidentReference';
 
 // Fix for default marker icons
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -51,6 +52,9 @@ const MAP_LAYERS = {
 
 interface Incident {
   id: string;
+  incident_reference?: string | null;
+  reference_year?: number | null;
+  reference_number?: number | null;
   agency_type: string;
   status: string;
   description: string;
@@ -59,6 +63,18 @@ interface Incident {
   location_address?: string;
   created_at: string;
   reporter_name?: string;
+  assigned_station_id?: number | null;
+}
+
+const parseLocalDate = (value: string) => new Date(`${value}T00:00:00`);
+
+export interface ReportsMapProps {
+  agency?: string;
+  dateRange?: 'today' | '7d' | '30d' | '90d' | '1y' | 'custom';
+  customStart?: string;
+  customEnd?: string;
+  stationId?: number;
+  scopeLabel?: string;
 }
 
 interface HotspotCluster {
@@ -88,55 +104,99 @@ function FitBounds({ markers }: { markers: Incident[] }) {
   return null;
 }
 
-export function ReportsMap() {
+function getDateWindow(
+  dateRange: ReportsMapProps['dateRange'],
+  customStart?: string,
+  customEnd?: string,
+) {
+  const to = new Date();
+  let from: Date;
+
+  if (dateRange === 'custom') {
+    if (!customStart || !customEnd) return null;
+    from = parseLocalDate(customStart);
+    const customTo = parseLocalDate(customEnd);
+    customTo.setHours(23, 59, 59, 999);
+    return { from: from.toISOString(), to: customTo.toISOString() };
+  }
+
+  if (dateRange === 'today') {
+    from = new Date(to);
+    from.setHours(0, 0, 0, 0);
+  } else {
+    const days = dateRange === '30d' ? 30 : dateRange === '90d' ? 90 : dateRange === '1y' ? 365 : 7;
+    from = new Date(to.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+  }
+  to.setHours(23, 59, 59, 999);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+export function ReportsMap({
+  agency = 'all',
+  dateRange = '7d',
+  customStart,
+  customEnd,
+  stationId,
+  scopeLabel,
+}: ReportsMapProps) {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filterAgency, setFilterAgency] = useState({ pnp: true, bfp: true, mdrrmo: true });
-  const [filterTime, setFilterTime] = useState<'7d' | '30d' | '90d' | '1y' | 'all'>('30d');
   const [activeLayer, setActiveLayer] = useState<keyof typeof MAP_LAYERS>('google_hybrid');
   const [showLayerSelector, setShowLayerSelector] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showBoundaries, setShowBoundaries] = useState(true);
-
-  useEffect(() => {
-    loadIncidents();
-  }, []);
+  const [showBarangays, setShowBarangays] = useState(false);
 
   const loadIncidents = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const response: any = await window.api.getIncidents({ limit: 500 });
+      const dateWindow = getDateWindow(dateRange, customStart, customEnd);
+      if (dateRange === 'custom' && !dateWindow) {
+        setIncidents([]);
+        setLoadError('Choose both a start and end date to display the custom map range.');
+        return;
+      }
+      const response: any = await window.api.getIncidents({
+        limit: 500,
+        ...(agency !== 'all' ? { agency: normalizeAgency(agency) } : {}),
+        ...(stationId ? { stationId } : {}),
+        ...(dateWindow || {}),
+      });
       const data = Array.isArray(response) ? response : (response?.data || []);
-      setIncidents(data.filter((i: any) => i.latitude && i.longitude));
+      setIncidents(data.filter((i: any) => Number.isFinite(Number(i.latitude)) && Number.isFinite(Number(i.longitude))));
     } catch (error) {
       console.error('Failed to load incidents for map:', error);
+      setIncidents([]);
+      setLoadError(error instanceof Error ? error.message : 'Map data could not be loaded.');
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    void loadIncidents();
+  }, [agency, dateRange, customStart, customEnd, stationId]);
+
   const filteredIncidents = useMemo(() => {
     return incidents.filter((incident) => {
-      const agency = normalizeAgency(incident.agency_type);
-      if (agency === 'pnp' && !filterAgency.pnp) return false;
-      if (agency === 'bfp' && !filterAgency.bfp) return false;
-      if (agency === 'mdrrmo' && !filterAgency.mdrrmo) return false;
+      const incidentAgency = normalizeAgency(incident.agency_type);
+      const scopedAgency = normalizeAgency(agency === 'all' ? undefined : agency);
+      if (scopedAgency && incidentAgency !== scopedAgency) return false;
+      if (stationId && incident.assigned_station_id !== stationId) return false;
+      if (incidentAgency === 'pnp' && !filterAgency.pnp) return false;
+      if (incidentAgency === 'bfp' && !filterAgency.bfp) return false;
+      if (incidentAgency === 'mdrrmo' && !filterAgency.mdrrmo) return false;
 
-      const createdDate = new Date(incident.created_at);
-      const now = new Date();
-      if (filterTime === '7d') {
-        if (createdDate < new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)) return false;
-      } else if (filterTime === '30d') {
-        if (createdDate < new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)) return false;
-      } else if (filterTime === '90d') {
-        if (createdDate < new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)) return false;
-      } else if (filterTime === '1y') {
-        if (createdDate < new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000)) return false;
-      }
+      const dateWindow = getDateWindow(dateRange, customStart, customEnd);
+      const createdAt = new Date(incident.created_at).getTime();
+      if (dateWindow && (createdAt < new Date(dateWindow.from).getTime() || createdAt > new Date(dateWindow.to).getTime())) return false;
       return true;
     });
-  }, [incidents, filterAgency, filterTime]);
+  }, [incidents, filterAgency, agency, dateRange, customStart, customEnd, stationId]);
 
   // Compute hotspot clusters using simple grid-based clustering
   const hotspots = useMemo((): HotspotCluster[] => {
@@ -280,10 +340,10 @@ export function ReportsMap() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-[600px] bg-gray-50 dark:bg-gray-900 rounded-xl">
+      <div className="flex items-center justify-center h-[600px] bg-slate-50 dark:bg-slate-900 rounded-xl">
         <div className="text-center">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3"></div>
-          <p className="text-gray-500 dark:text-gray-400">Loading map data...</p>
+          <p className="text-slate-500 dark:text-slate-400">Loading map data...</p>
         </div>
       </div>
     );
@@ -293,26 +353,33 @@ export function ReportsMap() {
 
   return (
     <div className="space-y-4">
+      {loadError && (
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+          <span>{loadError}</span>
+          <button type="button" onClick={loadIncidents} className="min-h-9 rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-red-700 dark:hover:bg-red-900/40">Retry</button>
+        </div>
+      )}
+      <p className="text-xs text-slate-500 dark:text-slate-400">Map scope: {scopeLabel || 'All agencies'} · {filteredIncidents.length} mapped incident{filteredIncidents.length === 1 ? '' : 's'}</p>
       {/* Stats Bar */}
       <div className="grid grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <MapPin className="w-4 h-4 text-blue-500" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">Mapped Incidents</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">Mapped Incidents</span>
           </div>
-          <p className="text-2xl font-bold text-gray-800 dark:text-white">{stats.total}</p>
+          <p className="text-2xl font-bold text-slate-800 dark:text-white">{stats.total}</p>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <AlertTriangle className="w-4 h-4 text-amber-500" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">Hotspot Areas</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">Hotspot Areas</span>
           </div>
-          <p className="text-2xl font-bold text-gray-800 dark:text-white">{stats.hotspotCount}</p>
+          <p className="text-2xl font-bold text-slate-800 dark:text-white">{stats.hotspotCount}</p>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <Shield className="w-4 h-4 text-blue-600" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">By Agency</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">By Agency</span>
           </div>
           <div className="flex gap-3 text-sm font-medium">
             <span className="text-blue-600">PNP: {stats.byAgency.pnp}</span>
@@ -320,69 +387,58 @@ export function ReportsMap() {
             <span className="text-cyan-600">MDRRMO: {stats.byAgency.mdrrmo}</span>
           </div>
         </div>
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+        <div className="bg-white dark:bg-slate-800 rounded-xl p-4 border border-slate-100 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
             <BarChart3 className="w-4 h-4 text-green-500" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">Pending</span>
+            <span className="text-sm text-slate-500 dark:text-slate-400">Pending</span>
           </div>
-          <p className="text-2xl font-bold text-gray-800 dark:text-white">
+          <p className="text-2xl font-bold text-slate-800 dark:text-white">
             {stats.byStatus['pending'] || 0}
           </p>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-xl p-3 border border-gray-100 dark:border-gray-700">
+      <div className="flex items-center justify-between bg-white dark:bg-slate-800 rounded-xl p-3 border border-slate-100 dark:border-slate-700">
         <div className="flex items-center gap-3">
-          <Filter className="w-4 h-4 text-gray-400" />
+          <Filter className="w-4 h-4 text-slate-400" />
           {/* Agency toggles */}
           <button
             onClick={() => setFilterAgency((p) => ({ ...p, pnp: !p.pnp }))}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            disabled={agency !== 'all'}
+            className={`flex min-h-9 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
               filterAgency.pnp
                 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
-                : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+                : 'bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500'
             }`}
           >
             <Shield className="w-3.5 h-3.5" /> PNP
           </button>
           <button
             onClick={() => setFilterAgency((p) => ({ ...p, bfp: !p.bfp }))}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            disabled={agency !== 'all'}
+            className={`flex min-h-9 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
               filterAgency.bfp
                 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
-                : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+                : 'bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500'
             }`}
           >
             <Flame className="w-3.5 h-3.5" /> BFP
           </button>
           <button
             onClick={() => setFilterAgency((p) => ({ ...p, mdrrmo: !p.mdrrmo }))}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            disabled={agency !== 'all'}
+            className={`flex min-h-9 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
               filterAgency.mdrrmo
                 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300'
-                : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+                : 'bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500'
             }`}
           >
             <Waves className="w-3.5 h-3.5" /> MDRRMO
           </button>
 
-          <div className="w-px h-6 bg-gray-200 dark:bg-gray-600 mx-1" />
-
-          {/* Time filter */}
-          <div className="flex items-center gap-1">
-            <Calendar className="w-3.5 h-3.5 text-gray-400" />
-            <select
-              value={filterTime}
-              onChange={(e) => setFilterTime(e.target.value as any)}
-              className="text-xs bg-transparent border-none focus:ring-0 text-gray-700 dark:text-gray-300 cursor-pointer"
-            >
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
-              <option value="90d">Last 90 days</option>
-              <option value="1y">Last year</option>
-              <option value="all">All time</option>
-            </select>
+          <div className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+            {scopeLabel || (dateRange === 'custom' ? 'Custom range' : dateRange === '1y' ? 'Last year' : `Last ${dateRange === 'today' ? 'day' : dateRange.replace('d', ' days')}`)}
           </div>
         </div>
 
@@ -390,10 +446,12 @@ export function ReportsMap() {
           {/* Heatmap toggle */}
           <button
             onClick={() => setShowHeatmap(!showHeatmap)}
+            aria-pressed={showHeatmap}
+            aria-label="Toggle hotspot areas"
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               showHeatmap
                 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
             }`}
           >
             Hotspots
@@ -402,25 +460,43 @@ export function ReportsMap() {
           {/* Boundaries toggle */}
           <button
             onClick={() => setShowBoundaries(!showBoundaries)}
+            aria-pressed={showBoundaries}
+            aria-label="Toggle municipality boundaries"
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               showBoundaries
                 ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
             }`}
           >
             Boundaries
+          </button>
+
+          {/* Barangays toggle */}
+          <button
+            onClick={() => setShowBarangays(!showBarangays)}
+            aria-pressed={showBarangays}
+            aria-label="Toggle barangay boundaries"
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              showBarangays
+                ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300'
+                : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
+            }`}
+          >
+            Barangays
           </button>
 
           {/* Layer selector */}
           <div className="relative">
             <button
               onClick={() => setShowLayerSelector(!showLayerSelector)}
-              className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              aria-label="Choose map layer"
+              aria-expanded={showLayerSelector}
+              className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
             >
-              <LayersIcon className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+              <LayersIcon className="w-4 h-4 text-slate-600 dark:text-slate-300" />
             </button>
             {showLayerSelector && (
-              <div className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-[10000] min-w-[160px]">
+              <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 py-1 z-[10000] min-w-[160px]">
                 {Object.entries(MAP_LAYERS).map(([key, val]) => (
                   <button
                     key={key}
@@ -428,10 +504,10 @@ export function ReportsMap() {
                       setActiveLayer(key as keyof typeof MAP_LAYERS);
                       setShowLayerSelector(false);
                     }}
-                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-700 ${
                       activeLayer === key
                         ? 'text-blue-600 font-medium'
-                        : 'text-gray-700 dark:text-gray-300'
+                        : 'text-slate-700 dark:text-slate-300'
                     }`}
                   >
                     {val.name}
@@ -443,16 +519,17 @@ export function ReportsMap() {
 
           <button
             onClick={loadIncidents}
-            className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            aria-label="Refresh map data"
+            className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
             title="Refresh data"
           >
-            <RefreshCw className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+            <RefreshCw className="w-4 h-4 text-slate-600 dark:text-slate-300" />
           </button>
         </div>
       </div>
 
       {/* Map */}
-      <div className="rounded-xl overflow-hidden border border-gray-200 dark:border-gray-700 h-[550px] relative">
+      <div className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 h-[550px] relative">
         <MapContainer
           center={[14.17, 122.95]}
           zoom={11}
@@ -508,6 +585,30 @@ export function ReportsMap() {
               return null;
             })}
 
+          {/* Barangay boundaries (PSA PSGC / NAMRIA via barangay-boundaries-repository, MIT) */}
+          {showBarangays && (
+            <GeoJSON
+              data={barangayGeoData as any}
+              style={() => ({
+                color: '#22d3ee',
+                weight: 0.6,
+                opacity: 0.5,
+                fillColor: '#0f766e',
+                fillOpacity: 0.03,
+              })}
+              onEachFeature={(feature, layer) => {
+                const name = feature.properties?.ADM4_EN;
+                if (name) {
+                  layer.bindTooltip(name, {
+                    sticky: true,
+                    direction: 'center',
+                    className: 'barangay-tooltip',
+                  });
+                }
+              }}
+            />
+          )}
+
           {/* Hotspot circles */}
           {showHeatmap &&
             hotspots.map((spot, i) => (
@@ -561,9 +662,9 @@ export function ReportsMap() {
               <Popup>
                 <div className="text-xs min-w-[180px]">
                   <p className="font-bold text-sm mb-1">
-                    #{incident.id?.slice(0, 8).toUpperCase()}
+                    {getIncidentReference(incident)}
                   </p>
-                  <p className="text-gray-600 mb-1">
+                  <p className="text-slate-600 mb-1">
                     {incident.description?.slice(0, 80) || 'No description'}
                     {(incident.description?.length || 0) > 80 ? '...' : ''}
                   </p>
@@ -579,12 +680,12 @@ export function ReportsMap() {
                     >
                       {normalizeAgency(incident.agency_type)?.toUpperCase()}
                     </span>
-                    <span className="capitalize text-gray-500">{incident.status}</span>
+                    <span className="capitalize text-slate-500">{incident.status}</span>
                   </div>
                   {incident.location_address && (
-                    <p className="text-gray-500 mt-1 truncate">{incident.location_address}</p>
+                    <p className="text-slate-500 mt-1 truncate">{incident.location_address}</p>
                   )}
-                  <p className="text-gray-400 mt-1">
+                  <p className="text-slate-400 mt-1">
                     {new Date(incident.created_at).toLocaleDateString()}
                   </p>
                 </div>
@@ -594,37 +695,37 @@ export function ReportsMap() {
         </MapContainer>
 
         {/* Legend overlay */}
-        <div className="absolute bottom-4 left-4 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-lg p-3 shadow-lg border border-gray-200 dark:border-gray-700 z-[1000]">
-          <p className="text-[10px] font-semibold text-gray-600 dark:text-gray-300 mb-1.5 uppercase tracking-wide">
+        <div className="absolute bottom-4 left-4 bg-white/90 dark:bg-slate-800/90 backdrop-blur-sm rounded-lg p-3 shadow-lg border border-slate-200 dark:border-slate-700 z-[1000]">
+          <p className="text-[10px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5 uppercase tracking-wide">
             Legend
           </p>
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full bg-blue-600" />
-              <span className="text-[11px] text-gray-600 dark:text-gray-300">PNP</span>
+              <span className="text-[11px] text-slate-600 dark:text-slate-300">PNP</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full bg-red-600" />
-              <span className="text-[11px] text-gray-600 dark:text-gray-300">BFP</span>
+              <span className="text-[11px] text-slate-600 dark:text-slate-300">BFP</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full bg-cyan-600" />
-              <span className="text-[11px] text-gray-600 dark:text-gray-300">MDRRMO</span>
+              <span className="text-[11px] text-slate-600 dark:text-slate-300">MDRRMO</span>
             </div>
             {showHeatmap && (
               <>
-                <hr className="border-gray-200 dark:border-gray-600 my-1" />
+                <hr className="border-slate-200 dark:border-slate-600 my-1" />
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-blue-500/30 border border-blue-500" />
-                  <span className="text-[11px] text-gray-600 dark:text-gray-300">2-3 incidents</span>
+                  <span className="text-[11px] text-slate-600 dark:text-slate-300">2-3 incidents</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-amber-500/30 border border-amber-500" />
-                  <span className="text-[11px] text-gray-600 dark:text-gray-300">3-5 incidents</span>
+                  <span className="text-[11px] text-slate-600 dark:text-slate-300">3-5 incidents</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-red-500/30 border border-red-500" />
-                  <span className="text-[11px] text-gray-600 dark:text-gray-300">5+ incidents</span>
+                  <span className="text-[11px] text-slate-600 dark:text-slate-300">5+ incidents</span>
                 </div>
               </>
             )}

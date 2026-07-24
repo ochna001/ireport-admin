@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 // Expose protected methods to renderer
 contextBridge.exposeInMainWorld('api', {
   // Database operations
-  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number }) =>
+  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number; page?: number; pageSize?: number; search?: string; sortBy?: string; sortDirection?: 'asc' | 'desc'; from?: string; to?: string }) =>
     ipcRenderer.invoke('db:getIncidents', filters),
 
   getIncident: (id: string) =>
@@ -12,7 +12,17 @@ contextBridge.exposeInMainWorld('api', {
   getIncidentAIReport: (incidentId: string) =>
     ipcRenderer.invoke('db:getIncidentAIReport', incidentId),
 
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) =>
+  getIncidentTriageAssessment: (incidentId: string) =>
+    ipcRenderer.invoke('db:getIncidentTriageAssessment', incidentId),
+  getDispatchRecommendation: (incidentId: string) =>
+    ipcRenderer.invoke('db:getDispatchRecommendation', incidentId),
+  approveDispatchRecommendation: (params: { recommendationId: string; incidentId: string; stationId: number; officerIds?: string[]; resourceIds?: number[]; approvedBy: string; overrideReason?: string }) =>
+    ipcRenderer.invoke('db:approveDispatchRecommendation', params),
+  recordDispatchReviewFeedback: (params: { incidentId: string; recommendationId?: string | null; reviewerId: string; verdict: 'accepted' | 'modified' | 'rejected' | 'not_applicable'; actualIncidentType?: string; actualSeverity?: number | null; actualAgencyCodes?: string[]; finalCapabilities?: string[]; reasonCodes?: string[]; notes?: string }) =>
+    ipcRenderer.invoke('db:recordDispatchReviewFeedback', params),
+  getAIWeeklyMetrics: () => ipcRenderer.invoke('db:getAIWeeklyMetrics'),
+
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; agencyType?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number; releaseAssignments?: boolean }) =>
     ipcRenderer.invoke('db:updateIncidentStatus', params),
 
   reopenIncident: (params: { id: string; updatedBy: string; updatedById?: string; notes?: string }) =>
@@ -52,6 +62,15 @@ contextBridge.exposeInMainWorld('api', {
 
   getAgencies: () =>
     ipcRenderer.invoke('users:getAgencies'),
+
+  createAgency: (data: { name: string; short_name: string }) =>
+    ipcRenderer.invoke('agencies:create', data),
+
+  updateAgency: (params: { id: number; updates: { name: string; short_name?: string } }) =>
+    ipcRenderer.invoke('agencies:update', params),
+
+  deleteAgency: (id: number) =>
+    ipcRenderer.invoke('agencies:delete', id),
 
   // Stations
   createStation: (data: any) =>
@@ -146,6 +165,8 @@ contextBridge.exposeInMainWorld('api', {
   // Notifications
   getNotificationsByUser: (userId: string) =>
     ipcRenderer.invoke('notifications:getByUser', userId),
+  getNotificationsPage: (params: { userId: string; offset: number; limit: number; search?: string }) =>
+    ipcRenderer.invoke('notifications:getPage', params),
   markNotificationAsRead: (notificationId: number) =>
     ipcRenderer.invoke('notifications:markAsRead', notificationId),
   markAllNotificationsAsRead: (userId: string) =>
@@ -307,10 +328,10 @@ contextBridge.exposeInMainWorld('api', {
 // Type definitions for renderer
 export interface ElectronAPI {
   // Incidents
-  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number }) => Promise<any[]>;
+  getIncidents: (filters?: { agency?: string; status?: string; municipality?: string; barangay?: string; incident_type?: string; limit?: number; stationId?: number; page?: number; pageSize?: number; search?: string; sortBy?: string; sortDirection?: 'asc' | 'desc'; from?: string; to?: string }) => Promise<any[]>;
   getIncident: (id: string) => Promise<any>;
   getIncidentAIReport: (id: string) => Promise<any>;
-  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number }) => Promise<{ success: boolean }>;
+  updateIncidentStatus: (params: { id: string; status: string; notes?: string; updatedBy: string; updatedById?: string; agencyType?: string; stationId?: number; officerIds?: string[]; primaryOfficerId?: string | null; resourceIds?: number[]; casualtiesCategory?: string; casualtiesCount?: number; releaseAssignments?: boolean }) => Promise<{ success: boolean }>;
   reopenIncident: (params: { id: string; updatedBy: string; updatedById?: string; notes?: string }) => Promise<{ success: boolean; restoredOfficerIds?: string[]; restoredResourceIds?: number[]; unavailableOfficerIds?: string[]; unavailableResourceIds?: number[] }>;
   getStats: (filters?: { from?: string; to?: string; skipCache?: boolean; stationId?: number; agency?: string }) => Promise<any>;
   getAuditLog: (incidentId: string) => Promise<any[]>;
@@ -327,6 +348,9 @@ export interface ElectronAPI {
   getUserById: (id: string) => Promise<any>;
   updateUser: (params: { id: string; updates: any }) => Promise<{ success: boolean }>;
   getAgencies: () => Promise<any[]>;
+  createAgency: (data: { name: string; short_name: string }) => Promise<any>;
+  updateAgency: (params: { id: number; updates: { name: string; short_name?: string } }) => Promise<{ success: boolean }>;
+  deleteAgency: (id: number) => Promise<{ success: boolean }>;
 
   // Stations
   createStation: (data: any) => Promise<any>;
@@ -357,6 +381,7 @@ export interface ElectronAPI {
 
   // Notifications
   getNotificationsByUser: (userId: string) => Promise<any[]>;
+  getNotificationsPage: (params: { userId: string; offset: number; limit: number; search?: string }) => Promise<{ data: any[]; hasMore: boolean }>;
   markNotificationAsRead: (notificationId: number) => Promise<{ success: boolean }>;
   markAllNotificationsAsRead: (userId: string) => Promise<{ success: boolean }>;
   getUnreadNotificationCount: (userId: string) => Promise<number>;
@@ -410,6 +435,11 @@ export interface ElectronAPI {
   getDebugMode: () => Promise<{ debugMode: boolean }>;
 
   // AI Worker
+  getIncidentTriageAssessment: (incidentId: string) => Promise<any | null>;
+  getDispatchRecommendation: (incidentId: string) => Promise<any | null>;
+  approveDispatchRecommendation: (params: { recommendationId: string; incidentId: string; stationId: number; officerIds?: string[]; resourceIds?: number[]; approvedBy: string; overrideReason?: string }) => Promise<any>;
+  recordDispatchReviewFeedback: (params: { incidentId: string; recommendationId?: string | null; reviewerId: string; verdict: 'accepted' | 'modified' | 'rejected' | 'not_applicable'; actualIncidentType?: string; actualSeverity?: number | null; actualAgencyCodes?: string[]; finalCapabilities?: string[]; reasonCodes?: string[]; notes?: string }) => Promise<string>;
+  getAIWeeklyMetrics: () => Promise<any[]>;
   getAIWorkerUrl: () => Promise<string>;
   setAIWorkerUrl: (url: string) => Promise<{ success: boolean }>;
   getAIFallbackWorkerUrl: () => Promise<string>;

@@ -1,5 +1,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
+import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
 
 interface PendingNotification {
   id: number;
@@ -16,10 +18,14 @@ interface PushToken {
   app_type: string | null;
 }
 
+type PushDeliveryOutcome = 'sent' | 'no-token' | 'retry';
+
 const EDGE_FUNCTION_URL = 'https://agghqjkyzpkxvlvurjpj.functions.supabase.co/send-fcm';
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const CHECK_INTERVAL = 5000; // Check every 5 seconds
-const PROCESSED_NOTIFICATIONS = new Set<number>();
+const CHECK_INTERVAL = 15000;
+const LOOKBACK_WINDOW = 24 * 60 * 60 * 1000;
+const PROCESSED_RETENTION = 7 * 24 * 60 * 60 * 1000;
+const PROCESSED_STATE_FILE = 'push-notification-state.json';
 
 export class PushNotificationService {
   private supabase: SupabaseClient;
@@ -27,6 +33,8 @@ export class PushNotificationService {
   private intervalId: NodeJS.Timeout | null = null;
   private isProcessing = false;
   private mainWindow: BrowserWindow | null = null;
+  private processedNotifications = new Map<number, number>();
+  private stateReady = false;
 
   constructor(supabase: SupabaseClient, supabaseAnonKey: string) {
     this.supabase = supabase;
@@ -46,8 +54,7 @@ export class PushNotificationService {
     console.log('[PushService] Starting background push notification service');
     this.intervalId = setInterval(() => this.checkAndSendNotifications(), CHECK_INTERVAL);
 
-    // Run immediately on start
-    this.checkAndSendNotifications();
+    void this.loadState().then(() => this.checkAndSendNotifications());
   }
 
   stop() {
@@ -59,19 +66,20 @@ export class PushNotificationService {
   }
 
   private async checkAndSendNotifications() {
-    if (this.isProcessing) {
+    if (this.isProcessing || !this.stateReady) {
       return; // Skip if already processing
     }
 
     this.isProcessing = true;
 
     try {
-      // Fetch notifications created in the last 30 seconds that haven't been processed
+      // Use a durable lookback window so app restarts do not lose notifications.
       const { data: notifications, error } = await this.supabase
         .from('notifications')
         .select('id, recipient_id, incident_id, title, body, created_at')
-        .gte('created_at', new Date(Date.now() - 30000).toISOString())
-        .order('created_at', { ascending: false });
+        .gte('created_at', new Date(Date.now() - LOOKBACK_WINDOW).toISOString())
+        .order('created_at', { ascending: true })
+        .limit(100);
 
       if (error) {
         console.error('[PushService] Error fetching notifications:', error);
@@ -84,7 +92,7 @@ export class PushNotificationService {
 
       // Filter out already processed notifications
       const pendingNotifications = notifications.filter(
-        (n: PendingNotification) => !PROCESSED_NOTIFICATIONS.has(n.id)
+        (n: PendingNotification) => !this.processedNotifications.has(n.id)
       );
 
       if (pendingNotifications.length === 0) {
@@ -94,14 +102,11 @@ export class PushNotificationService {
       console.log(`[PushService] Found ${pendingNotifications.length} pending notifications`);
 
       for (const notif of pendingNotifications) {
-        await this.sendPushForNotification(notif);
-        this.notifyRenderer(notif);
-        PROCESSED_NOTIFICATIONS.add(notif.id);
-
-        // Clean up old entries to prevent memory leak
-        if (PROCESSED_NOTIFICATIONS.size > 1000) {
-          const toDelete = Array.from(PROCESSED_NOTIFICATIONS).slice(0, 500);
-          toDelete.forEach(id => PROCESSED_NOTIFICATIONS.delete(id));
+        const outcome = await this.sendPushForNotification(notif);
+        if (outcome !== 'retry') {
+          if (outcome === 'sent') this.notifyRenderer(notif);
+          this.processedNotifications.set(notif.id, Date.now());
+          await this.persistState();
         }
       }
     } catch (error) {
@@ -111,7 +116,7 @@ export class PushNotificationService {
     }
   }
 
-  private async sendPushForNotification(notif: PendingNotification) {
+  private async sendPushForNotification(notif: PendingNotification): Promise<PushDeliveryOutcome> {
     try {
       console.log(`[PushService] Processing notification ${notif.id} for recipient ${notif.recipient_id}`);
 
@@ -123,19 +128,25 @@ export class PushNotificationService {
 
       if (error) {
         console.error('[PushService] Error fetching tokens:', error);
-        return;
+        return 'retry';
       }
 
       if (!tokens || tokens.length === 0) {
-        console.warn(`[PushService] No push tokens found for recipient ${notif.recipient_id}`);
-        return;
+        console.log(`[PushService] Skipping notification ${notif.id}; recipient has no push token`);
+        return 'no-token';
       }
 
       console.log(`[PushService] Found ${tokens.length} token(s) for recipient ${notif.recipient_id}`);
 
+      let allSent = true;
       for (const tokenData of tokens as PushToken[]) {
         const platform = tokenData.platform || '';
         const appType = tokenData.app_type || 'responder'; // Default to responder for backward compatibility
+
+        const claimed = await this.claimDelivery(notif, tokenData.token, appType);
+        if (!claimed) {
+          continue;
+        }
 
         // Determine if this is an Expo token or FCM token
         const isExpo = tokenData.token.startsWith('ExponentPushToken');
@@ -145,14 +156,56 @@ export class PushNotificationService {
         // Smart detection: if platform is missing, detect from token format
         if (isExpo || platform === 'ios') {
           // Send via Expo
-          await this.sendExpoNotification(tokenData.token, notif);
+          const sent = await this.sendExpoNotification(tokenData.token, notif);
+          await this.completeDelivery(notif, tokenData.token, appType, sent);
+          allSent = sent && allSent;
         } else {
           // Send via FCM Edge Function (for Android/FCM tokens)
-          await this.sendFCMNotification(tokenData.token, appType, notif);
+          const sent = await this.sendFCMNotification(tokenData.token, appType, notif);
+          await this.completeDelivery(notif, tokenData.token, appType, sent);
+          allSent = sent && allSent;
         }
       }
+      return allSent ? 'sent' : 'retry';
     } catch (error) {
       console.error('[PushService] Error sending push for notification:', notif.id, error);
+      return 'retry';
+    }
+  }
+
+  private async claimDelivery(
+    notif: PendingNotification,
+    token: string,
+    appType: string
+  ): Promise<boolean> {
+    const { data, error } = await this.supabase.rpc('claim_notification_push_delivery', {
+      p_notification_id: notif.id,
+      p_token: token,
+      p_app_type: appType,
+    });
+    if (error) {
+      console.error('[PushService] Failed to claim delivery:', error);
+      return false;
+    }
+    return data === true;
+  }
+
+  private async completeDelivery(
+    notif: PendingNotification,
+    token: string,
+    appType: string,
+    success: boolean
+  ): Promise<void> {
+    const { error } = await this.supabase.rpc('complete_notification_push_delivery', {
+      p_notification_id: notif.id,
+      p_token: token,
+      p_app_type: appType,
+      p_success: success,
+      p_error: success ? null : 'Push provider rejected or failed the request',
+      p_retry_delay_seconds: 60,
+    });
+    if (error) {
+      console.error('[PushService] Failed to complete delivery:', error);
     }
   }
 
@@ -172,6 +225,7 @@ export class PushNotificationService {
           data: {
             incident_id: notif.incident_id || '',
             notification_id: notif.id.toString(),
+            app_type: appType,
             title: notif.title,
             body: notif.body,
           },
@@ -191,11 +245,14 @@ export class PushNotificationService {
             .eq('token', token);
           console.warn('[PushService] Removed stale FCM token');
         }
+        return false;
       } else {
         console.log('[PushService] FCM push sent for notification:', notif.id);
+        return true;
       }
     } catch (error) {
       console.error('[PushService] FCM push error:', error);
+      return false;
     }
   }
 
@@ -222,12 +279,42 @@ export class PushNotificationService {
 
       if (!response.ok || responseData.data?.[0]?.status === 'error') {
         console.error('[PushService] Expo push failed:', responseData);
+        return false;
       } else {
         console.log('[PushService] Expo push sent for notification:', notif.id);
+        return true;
       }
     } catch (error) {
       console.error('[PushService] Expo push error:', error);
+      return false;
     }
+  }
+
+  private async loadState(): Promise<void> {
+    try {
+      const statePath = join(app.getPath('userData'), PROCESSED_STATE_FILE);
+      const raw = await fs.readFile(statePath, 'utf8');
+      const state = JSON.parse(raw) as { processed?: Record<string, number> };
+      const cutoff = Date.now() - PROCESSED_RETENTION;
+      Object.entries(state.processed || {}).forEach(([id, timestamp]) => {
+        if (timestamp >= cutoff) this.processedNotifications.set(Number(id), timestamp);
+      });
+    } catch {
+      // First run or corrupt state: the server lookback window remains recoverable.
+    } finally {
+      this.stateReady = true;
+    }
+  }
+
+  private async persistState(): Promise<void> {
+    const statePath = join(app.getPath('userData'), PROCESSED_STATE_FILE);
+    const tempPath = `${statePath}.tmp`;
+    await fs.writeFile(
+      tempPath,
+      JSON.stringify({ processed: Object.fromEntries(this.processedNotifications.entries()) }),
+      'utf8'
+    );
+    await fs.rename(tempPath, statePath);
   }
 
   /**

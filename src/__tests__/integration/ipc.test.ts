@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock Supabase client
-const mockSupabase = {
+const mockSupabase: any = {
   from: vi.fn(() => mockSupabase),
   select: vi.fn(() => mockSupabase),
   insert: vi.fn(() => mockSupabase),

@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Notifications } from './Notifications';
 import CallRinger from './CallRinger';
+import TopBar from './TopBar';
 import { getSessionScope } from '../utils/sessionScope';
 
 interface SyncStatus {
@@ -65,6 +66,15 @@ function Layout({ onLogout }: LayoutProps) {
   }, []);
 
   useEffect(() => {
+    if (!showLogoutConfirm) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowLogoutConfirm(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showLogoutConfirm]);
+
+  useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -75,9 +85,6 @@ function Layout({ onLogout }: LayoutProps) {
       console.error('window.api not available');
       return;
     }
-
-    // Get initial sync status
-    window.api.getSyncStatus().then(setSyncStatus).catch(console.error);
 
     // Get initial sync status
     window.api.getSyncStatus().then(setSyncStatus).catch(console.error);
@@ -225,39 +232,46 @@ function Layout({ onLogout }: LayoutProps) {
     return `${diffDays}d ago`;
   };
 
-  const getAgencyTheme = (shortName?: string) => {
-    switch (shortName?.toUpperCase()) {
-      case 'PNP': return 'blue';
-      case 'BFP': return 'red';
-      case 'MDRRMO': return 'orange';
-      default: return 'blue';
-    }
+  // Static class lookup avoids Tailwind JIT purging dynamic `bg-${x}-600` strings.
+  const AGENCY_THEME_CLASSES: Record<string, { active: string; logo: string }> = {
+    PNP: { active: 'bg-blue-600 text-white', logo: 'bg-blue-600' },
+    BFP: { active: 'bg-red-600 text-white', logo: 'bg-red-600' },
+    MDRRMO: { active: 'bg-orange-600 text-white', logo: 'bg-orange-600' },
   };
 
-  const themeColor = getAgencyTheme(user?.agencyShortName || user?.agencies?.short_name);
-  const activeClass = `bg-${themeColor}-600 text-white`;
-  const logoBgClass = `bg-${themeColor}-600`;
+  const agencyTheme = AGENCY_THEME_CLASSES[(user?.agencyShortName || user?.agencies?.short_name || '').toUpperCase()] || AGENCY_THEME_CLASSES.PNP;
+  const activeClass = agencyTheme.active;
+  const logoBgClass = agencyTheme.logo;
 
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-950 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden">
       {showLogoutConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-sm mx-4 border border-gray-100 dark:border-gray-700">
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]"
+          role="presentation"
+          onMouseDown={(event) => event.target === event.currentTarget && setShowLogoutConfirm(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-sm mx-4 border border-slate-100 dark:border-slate-700"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="logout-confirm-title"
+          >
             <div className="p-6">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
                   <LogOut className="w-5 h-5 text-red-600 dark:text-red-300" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Logout?</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">You will need to sign in again to continue.</p>
+                  <h2 id="logout-confirm-title" className="text-lg font-semibold text-slate-900 dark:text-white">Logout?</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">You will need to sign in again to continue.</p>
                 </div>
               </div>
               <div className="flex gap-3 mt-6">
                 <button
                   type="button"
                   onClick={() => setShowLogoutConfirm(false)}
-                  className="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  className="flex-1 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
                 >
                   Cancel
                 </button>
@@ -277,37 +291,37 @@ function Layout({ onLogout }: LayoutProps) {
         </div>
       )}
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-900 dark:bg-gray-900 text-white flex flex-col">
+      <aside className="w-64 shrink-0 min-h-0 bg-slate-900 dark:bg-slate-900 text-white flex flex-col">
         {/* Logo */}
-        <div className="p-4 border-b border-gray-700">
+        <div className="p-4 border-b border-slate-700">
           <div className="flex items-center gap-3 mb-1">
             <div className={`w-8 h-8 ${logoBgClass} rounded-lg flex items-center justify-center transition-colors duration-300`}>
               <Shield size={18} className="text-white" />
             </div>
             <h1 className="text-lg font-bold">{user?.role === 'Admin' ? 'iReport Control Center' : 'iReport Stations'}</h1>
           </div>
-          <p className="text-xs text-gray-400">Camarines Norte LGU</p>
+          <p className="text-xs text-slate-400">Camarines Norte LGU</p>
         </div>
 
         {/* User Profile Summary (Sidebar) */}
         {user && user.role !== 'Admin' && (
-          <div className="px-4 py-3 bg-gray-800/50 border-b border-gray-700">
+          <div className="px-4 py-3 bg-slate-800/50 border-b border-slate-700">
             <div className="flex items-center gap-3 mb-2">
-              <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center">
-                <UserCircle size={20} className="text-gray-400" />
+              <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
+                <UserCircle size={20} className="text-slate-400" />
               </div>
               <div className="overflow-hidden">
                 <p className="text-sm font-medium truncate">{user.display_name || user.email}</p>
-                <p className="text-xs text-gray-400 truncate">{user.role}</p>
+                <p className="text-xs text-slate-400 truncate">{user.role}</p>
               </div>
             </div>
             {(user.agencyShortName || user.agencies?.short_name) && (
-              <div className="flex items-center gap-2 text-xs text-gray-400 mt-1">
+              <div className="flex items-center gap-2 text-xs text-slate-400 mt-1">
                 <Shield size={10} />
                 <span>{user.agencyShortName || user.agencies?.short_name}</span>
                 {user.stationName && (
                   <>
-                    <span className="text-gray-600">•</span>
+                    <span className="text-slate-600">•</span>
                     <span className="truncate">{user.stationName}</span>
                   </>
                 )}
@@ -317,7 +331,7 @@ function Layout({ onLogout }: LayoutProps) {
         )}
 
         {/* Navigation */}
-        <nav className="flex-1 p-4">
+        <nav className="flex-1 min-h-0 overflow-y-auto p-4">
           <ul className="space-y-2">
             <li>
               <NavLink
@@ -325,7 +339,7 @@ function Layout({ onLogout }: LayoutProps) {
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
                     ? activeClass
-                    : 'text-gray-300 hover:bg-gray-800'
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
@@ -338,8 +352,8 @@ function Layout({ onLogout }: LayoutProps) {
                 to="/notifications"
                 className={({ isActive }) =>
                   `flex items-center justify-between px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                    ? activeClass
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
@@ -359,8 +373,8 @@ function Layout({ onLogout }: LayoutProps) {
                 to="/incidents"
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                    ? activeClass
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
@@ -373,8 +387,8 @@ function Layout({ onLogout }: LayoutProps) {
                 to="/agencies"
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                    ? activeClass
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
@@ -387,8 +401,8 @@ function Layout({ onLogout }: LayoutProps) {
                 to="/reports"
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                    ? activeClass
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
@@ -400,14 +414,14 @@ function Layout({ onLogout }: LayoutProps) {
               <NavLink
                 to="/calls"
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                  `flex items-center justify-between gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
+                    ? activeClass
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
-                <PhoneCall size={20} />
-                Calls
+                <span className="flex items-center gap-3"><PhoneCall size={20} />Calls</span>
+                {hasIncomingCalls && <span className="rounded-full bg-red-500 px-2 py-0.5 text-[10px] font-bold text-white">LIVE</span>}
               </NavLink>
             </li>
             {user?.role === 'Admin' && (
@@ -416,8 +430,8 @@ function Layout({ onLogout }: LayoutProps) {
                   to="/ai-analysis"
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-800'
+                      ? activeClass
+                      : 'text-slate-300 hover:bg-slate-800'
                     }`
                   }
                 >
@@ -431,8 +445,8 @@ function Layout({ onLogout }: LayoutProps) {
                 to="/users"
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                    ? activeClass
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
@@ -445,8 +459,8 @@ function Layout({ onLogout }: LayoutProps) {
                 to="/settings"
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800'
+                    ? activeClass
+                    : 'text-slate-300 hover:bg-slate-800'
                   }`
                 }
               >
@@ -460,8 +474,8 @@ function Layout({ onLogout }: LayoutProps) {
                   to="/logs"
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-800'
+                      ? activeClass
+                      : 'text-slate-300 hover:bg-slate-800'
                     }`
                   }
                 >
@@ -477,7 +491,7 @@ function Layout({ onLogout }: LayoutProps) {
         <div className="px-4 pb-2">
           <button
             onClick={handleLogout}
-            className="flex items-center gap-3 px-4 py-3 rounded-lg text-red-400 hover:bg-gray-800 hover:text-red-300 transition-colors w-full"
+            className="flex items-center gap-3 px-4 py-3 rounded-lg text-red-400 hover:bg-slate-800 hover:text-red-300 transition-colors w-full"
           >
             <LogOut size={20} />
             <span>Logout</span>
@@ -485,7 +499,7 @@ function Layout({ onLogout }: LayoutProps) {
         </div>
 
         {/* Sync Status */}
-        <div className="p-4 border-t border-gray-700">
+        <div className="p-4 border-t border-slate-700">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               {syncStatus.connected ? (
@@ -493,23 +507,23 @@ function Layout({ onLogout }: LayoutProps) {
               ) : (
                 <WifiOff size={16} className="text-red-400" />
               )}
-              <span className="text-sm text-gray-400">
+              <span className="text-sm text-slate-400">
                 {syncStatus.connected ? 'Connected' : 'Offline'}
               </span>
             </div>
             <button
               onClick={handleManualSync}
               disabled={syncStatus.syncing}
-              className="p-2 rounded hover:bg-gray-800 disabled:opacity-50"
+              className="p-2 rounded hover:bg-slate-800 disabled:opacity-50"
               title="Sync now"
             >
               <RefreshCw
                 size={16}
-                className={`text-gray-400 ${syncStatus.syncing ? 'animate-spin' : ''}`}
+                className={`text-slate-400 ${syncStatus.syncing ? 'animate-spin' : ''}`}
               />
             </button>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-500">
+          <div className="flex items-center gap-2 text-xs text-slate-500">
             <Clock size={12} />
             <span>Last sync: {formatLastSync(syncStatus.lastSync)}</span>
           </div>
@@ -522,9 +536,10 @@ function Layout({ onLogout }: LayoutProps) {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto flex flex-col">
+      <main className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
+        <TopBar user={user} onLogoutClick={handleLogout} />
         {/* Page Content */}
-        <div className="flex-1 overflow-auto relative">
+        <div id="main-content" tabIndex={-1} className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto relative">
           <CallRinger
             active={hasIncomingCalls}
             muted={ringMuted}

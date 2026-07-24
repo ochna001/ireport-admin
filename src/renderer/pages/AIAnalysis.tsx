@@ -84,6 +84,7 @@ function AIAnalysis() {
   const [records, setRecords] = useState<AIReportRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [recordsError, setRecordsError] = useState('');
+  const [weeklyMetrics, setWeeklyMetrics] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -150,6 +151,10 @@ function AIAnalysis() {
       fetchRecords(true);
     }
   }, [activeTab, statusFilter]);
+
+  useEffect(() => {
+    window.api.getAIWeeklyMetrics().then(setWeeklyMetrics).catch(() => setWeeklyMetrics([]));
+  }, []);
 
   // Re-run failed analysis
   const rerunAnalysis = async (incidentId: string) => {
@@ -326,12 +331,12 @@ function AIAnalysis() {
       case 'processing':
         return <span className="flex items-center gap-1 text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded-full"><Loader2 size={12} className="animate-spin" /> Processing</span>;
       default:
-        return <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded-full">{status}</span>;
+        return <span className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded-full">{status}</span>;
     }
   };
 
   const getSeverityBadge = (severity: number) => {
-    const colors = ['bg-gray-400', 'bg-green-500', 'bg-yellow-500', 'bg-orange-500', 'bg-red-600'];
+    const colors = ['bg-slate-400', 'bg-green-500', 'bg-yellow-500', 'bg-orange-500', 'bg-red-600'];
     return (
       <span className={`text-xs px-2 py-1 rounded-full text-white font-bold ${colors[severity - 1] || colors[0]}`}>
         L{severity}
@@ -361,13 +366,13 @@ function AIAnalysis() {
       <div className="flex items-center gap-3 mb-6">
         <BrainCircuit size={28} className="text-blue-600 dark:text-blue-400" />
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">AI Analysis</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Review AI triage reports and run manual analysis. Model configuration lives in the Service Manager tool.</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">AI Analysis</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Review AI triage reports and run manual analysis. Model configuration lives in the Service Manager tool.</p>
         </div>
       </div>
 
       {/* Sub-tabs */}
-      <div className="flex gap-1 mb-6 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex gap-1 mb-6 border-b border-slate-200 dark:border-slate-700">
         {[
           { key: 'records' as TabType, label: 'Records', icon: FileText },
           { key: 'manual' as TabType, label: 'Manual Analysis', icon: Play },
@@ -379,7 +384,7 @@ function AIAnalysis() {
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.key
                 ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
             <tab.icon size={16} />
@@ -391,22 +396,34 @@ function AIAnalysis() {
       {/* Records Tab */}
       {activeTab === 'records' && (
         <div className="space-y-4">
+          <section className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40" aria-label="AI weekly monitoring">
+            <div className="flex items-center justify-between gap-3">
+              <div><h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Weekly monitoring</h2><p className="text-xs text-slate-500 dark:text-slate-400">Reviewer feedback, not model confidence, drives these measures.</p></div>
+              <span className="text-xs text-slate-500">{weeklyMetrics[0]?.reviewed_count || 0} reviews this week</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+              <div><span className="block text-slate-500">Accepted</span><strong>{weeklyMetrics[0]?.accepted_count || 0}</strong></div>
+              <div><span className="block text-slate-500">Modified</span><strong>{weeklyMetrics[0]?.modified_count || 0}</strong></div>
+              <div><span className="block text-slate-500">Rejected</span><strong>{weeklyMetrics[0]?.rejected_count || 0}</strong></div>
+              <div><span className="block text-slate-500">Severity match</span><strong>{weeklyMetrics[0]?.severity_exact_match_rate == null ? '—' : `${Math.round(Number(weeklyMetrics[0].severity_exact_match_rate) * 100)}%`}</strong></div>
+            </div>
+          </section>
           <div className="flex gap-3 flex-wrap items-center">
             <div className="relative flex-1 min-w-[250px]">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
                 placeholder="Search by incident ID or summary..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && fetchRecords(true)}
-                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
               />
             </div>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+              className="px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
             >
               <option value="all">All Statuses</option>
               <option value="completed">Completed</option>
@@ -417,7 +434,7 @@ function AIAnalysis() {
             <button
               onClick={() => fetchRecords(true)}
               disabled={recordsLoading}
-              className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+              className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50"
             >
               <RefreshCw size={14} className={recordsLoading ? 'animate-spin' : ''} />
               Refresh
@@ -430,47 +447,47 @@ function AIAnalysis() {
             </div>
           )}
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-700/50">
+              <thead className="bg-slate-50 dark:bg-slate-700/50">
                 <tr>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Incident</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Status</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Severity</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Summary</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Model</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Time</th>
-                  <th className="px-4 py-3 text-right font-medium text-gray-600 dark:text-gray-300">Actions</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Incident</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Status</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Severity</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Summary</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Model</th>
+                  <th className="px-4 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Time</th>
+                  <th className="px-4 py-3 text-right font-medium text-slate-600 dark:text-slate-300">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                 {records.map((record) => (
-                  <tr key={record.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                  <tr key={record.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-gray-900 dark:text-white truncate max-w-[200px]">
+                      <div className="font-medium text-slate-900 dark:text-white truncate max-w-[200px]">
                         {record.incident_id.substring(0, 8)}...
                       </div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]">
+                      <div className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[200px]">
                         {record.incidents?.location_address || 'Unknown location'}
                       </div>
                     </td>
                     <td className="px-4 py-3">{getStatusBadge(record.status)}</td>
                     <td className="px-4 py-3">{getSeverityBadge(record.severity)}</td>
                     <td className="px-4 py-3">
-                      <div className="text-gray-700 dark:text-gray-300 truncate max-w-[300px]">
+                      <div className="text-slate-700 dark:text-slate-300 truncate max-w-[300px]">
                         {record.summary || 'No summary'}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400">
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400">
                       {record.model_metadata?.vlm_model || 'unknown'}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                    <td className="px-4 py-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                       {record.processing_time_ms ? `${record.processing_time_ms}ms` : '-'}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button
                         onClick={() => openPipelineLog(record.incident_id)}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded hover:bg-slate-200 dark:hover:bg-slate-600"
                       >
                         <ImageIcon size={12} />
                         View Log
@@ -489,7 +506,7 @@ function AIAnalysis() {
                 ))}
                 {records.length === 0 && !recordsLoading && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                    <td colSpan={7} className="px-4 py-8 text-center text-slate-500 dark:text-slate-400">
                       No AI reports found.
                     </td>
                   </tr>
@@ -502,7 +519,7 @@ function AIAnalysis() {
               </div>
             )}
             {hasMore && records.length > 0 && (
-              <div className="p-3 text-center border-t border-gray-200 dark:border-gray-700">
+              <div className="p-3 text-center border-t border-slate-200 dark:border-slate-700">
                 <button
                   onClick={() => fetchRecords(false)}
                   disabled={recordsLoading}
@@ -514,10 +531,10 @@ function AIAnalysis() {
             )}
           </div>
 
-          <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700 space-y-4">
+          <div className="mt-4 bg-white dark:bg-slate-800 rounded-lg p-6 border border-slate-200 dark:border-slate-700 space-y-4">
             <div>
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white">Call Transcript Draft</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white">Call Transcript Draft</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                 Paste transcript, generate an AI draft, then create a dispatcher-confirmed incident.
               </p>
             </div>
@@ -527,7 +544,7 @@ function AIAnalysis() {
               onChange={(e) => setCallTranscript(e.target.value)}
               placeholder="caller: ...\ndispatcher: ..."
               rows={8}
-              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
             />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -536,70 +553,70 @@ function AIAnalysis() {
                 value={callReporterName}
                 onChange={(e) => setCallReporterName(e.target.value)}
                 placeholder="Reporter name"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callReporterPhone}
                 onChange={(e) => setCallReporterPhone(e.target.value)}
                 placeholder="Reporter phone"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callIncidentLocation}
                 onChange={(e) => setCallIncidentLocation(e.target.value)}
                 placeholder="Incident location address"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callReporterLocation}
                 onChange={(e) => setCallReporterLocation(e.target.value)}
                 placeholder="Reporter location (optional)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callReporterAge}
                 onChange={(e) => setCallReporterAge(e.target.value)}
                 placeholder="Reporter age (optional)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callDispatcherNotes}
                 onChange={(e) => setCallDispatcherNotes(e.target.value)}
                 placeholder="Dispatcher notes (optional)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callIncidentLat}
                 onChange={(e) => setCallIncidentLat(e.target.value)}
                 placeholder="Incident latitude (optional)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callIncidentLon}
                 onChange={(e) => setCallIncidentLon(e.target.value)}
                 placeholder="Incident longitude (optional)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callReporterLat}
                 onChange={(e) => setCallReporterLat(e.target.value)}
                 placeholder="Reporter latitude (optional)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
               <input
                 type="text"
                 value={callReporterLon}
                 onChange={(e) => setCallReporterLon(e.target.value)}
                 placeholder="Reporter longitude (optional)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
               />
             </div>
 
@@ -623,7 +640,7 @@ function AIAnalysis() {
               {createdCallIncidentId && (
                 <button
                   onClick={() => navigate(`/incidents/${createdCallIncidentId}`)}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600"
                 >
                   Open Incident
                 </button>
@@ -631,7 +648,7 @@ function AIAnalysis() {
             </div>
 
             {callSummaryDraft && (
-              <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/30 p-3 text-sm space-y-2">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 p-3 text-sm space-y-2">
                 <div><span className="font-medium">Agency:</span> {(callSummaryDraft.recommended_agency || 'mdrrmo').toUpperCase()}</div>
                 <div><span className="font-medium">Severity:</span> {callSummaryDraft.severity ?? '-'}</div>
                 <div><span className="font-medium">Confidence:</span> {callSummaryDraft.confidence ?? '-'}</div>
@@ -654,26 +671,26 @@ function AIAnalysis() {
       {/* Manual Analysis Tab */}
       {activeTab === 'manual' && (
         <div className="max-w-3xl">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700 space-y-4">
+          <div className="bg-white dark:bg-slate-800 rounded-lg p-6 border border-slate-200 dark:border-slate-700 space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Search Incident
               </label>
               <div className="relative">
-                <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
+                <Search size={16} className="absolute left-3 top-2.5 text-slate-400" />
                 <input
                   type="text"
                   value={manualSearch}
                   onChange={(e) => setManualSearch(e.target.value)}
                   placeholder="Search by incident ID, description, or location"
-                  className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="w-full pl-9 pr-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
             </div>
 
-            <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-gray-50 dark:bg-gray-700/50 flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+            <div className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+              <div className="px-3 py-2 bg-slate-50 dark:bg-slate-700/50 flex items-center justify-between">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   Select an incident to analyze
                 </span>
                 <button
@@ -693,19 +710,19 @@ function AIAnalysis() {
               )}
 
               {!manualIncidentsError && manualIncidentsLoading && manualIncidents.length === 0 && (
-                <div className="p-4 text-center text-sm text-gray-500 dark:text-gray-400">
+                <div className="p-4 text-center text-sm text-slate-500 dark:text-slate-400">
                   <Loader2 size={18} className="animate-spin mx-auto mb-2" />
                   Loading incidents...
                 </div>
               )}
 
               {!manualIncidentsError && !manualIncidentsLoading && manualIncidents.length === 0 && (
-                <div className="p-4 text-center text-sm text-gray-500 dark:text-gray-400">
+                <div className="p-4 text-center text-sm text-slate-500 dark:text-slate-400">
                   No incidents found.
                 </div>
               )}
 
-              <div className="max-h-80 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-700">
+              <div className="max-h-80 overflow-y-auto divide-y divide-slate-200 dark:divide-slate-700">
                 {manualIncidents.map((incident) => (
                   <button
                     key={incident.id}
@@ -717,21 +734,21 @@ function AIAnalysis() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="font-mono text-xs text-gray-900 dark:text-white truncate">
+                        <p className="font-mono text-xs text-slate-900 dark:text-white truncate">
                           {incident.id}
                         </p>
-                        <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-1 mt-1">
+                        <p className="text-sm text-slate-700 dark:text-slate-300 line-clamp-1 mt-1">
                           {incident.description || 'No description'}
                         </p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-1 mt-1">
+                        <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-1 mt-1">
                           {incident.location_address || 'Unknown location'}
                         </p>
                       </div>
                       <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 uppercase">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 uppercase">
                           {incident.status || 'unknown'}
                         </span>
-                        <span className="text-[11px] text-gray-400">
+                        <span className="text-[11px] text-slate-400">
                           {incident.agency_type || 'unknown'}
                         </span>
                         {incident.is_fast_report && (
@@ -747,7 +764,7 @@ function AIAnalysis() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Selected Incident ID
               </label>
               <input
@@ -755,7 +772,7 @@ function AIAnalysis() {
                 value={manualIncidentId}
                 onChange={(e) => setManualIncidentId(e.target.value)}
                 placeholder="Select from the list or paste an incident UUID"
-                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
               />
             </div>
             <button
@@ -778,10 +795,10 @@ function AIAnalysis() {
       {/* Pipeline Log Tab */}
       {activeTab === 'pipeline-log' && (
         <div className="space-y-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+          <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
             <div className="flex flex-col lg:flex-row gap-3 lg:items-end">
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Incident ID
                 </label>
                 <input
@@ -789,7 +806,7 @@ function AIAnalysis() {
                   value={selectedLogIncidentId}
                   onChange={(e) => setSelectedLogIncidentId(e.target.value)}
                   placeholder="Paste or select an incident ID"
-                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
                 />
               </div>
               <button
@@ -890,31 +907,31 @@ function AIAnalysis() {
                 </div>
 
                 <div className="space-y-4">
-                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Triage Summary</h3>
+                  <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
+                    <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Triage Summary</h3>
                     <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
-                        <p className="text-gray-500 dark:text-gray-400">Severity</p>
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50">
+                        <p className="text-slate-500 dark:text-slate-400">Severity</p>
                         <div className="mt-1">{getSeverityBadge(mainReport.severity || selectedLogReport.severity || 1)}</div>
                       </div>
-                      <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
-                        <p className="text-gray-500 dark:text-gray-400">Agency</p>
-                        <p className="mt-1 font-semibold text-gray-900 dark:text-white uppercase">{mainReport.recommended_agency || 'unknown'}</p>
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50">
+                        <p className="text-slate-500 dark:text-slate-400">Agency</p>
+                        <p className="mt-1 font-semibold text-slate-900 dark:text-white uppercase">{mainReport.recommended_agency || 'unknown'}</p>
                       </div>
-                      <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
-                        <p className="text-gray-500 dark:text-gray-400">Incident Type</p>
-                        <p className="mt-1 font-semibold text-gray-900 dark:text-white">{mainReport.incident_type || 'unknown'}</p>
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50">
+                        <p className="text-slate-500 dark:text-slate-400">Incident Type</p>
+                        <p className="mt-1 font-semibold text-slate-900 dark:text-white">{mainReport.incident_type || 'unknown'}</p>
                       </div>
-                      <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
-                        <p className="text-gray-500 dark:text-gray-400">Runtime</p>
-                        <p className="mt-1 font-semibold text-gray-900 dark:text-white">{formatMs(selectedLogReport.processing_time_ms)}</p>
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50">
+                        <p className="text-slate-500 dark:text-slate-400">Runtime</p>
+                        <p className="mt-1 font-semibold text-slate-900 dark:text-white">{formatMs(selectedLogReport.processing_time_ms)}</p>
                       </div>
                     </div>
                   </div>
 
-                  <details className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-                    <summary className="cursor-pointer font-semibold text-gray-900 dark:text-white">Raw Saved Output</summary>
-                    <pre className="mt-3 max-h-[420px] overflow-auto text-xs bg-gray-950 text-gray-100 rounded-lg p-3">
+                  <details className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
+                    <summary className="cursor-pointer font-semibold text-slate-900 dark:text-white">Raw Saved Output</summary>
+                    <pre className="mt-3 max-h-[420px] overflow-auto text-xs bg-slate-950 text-slate-100 rounded-lg p-3">
                       {JSON.stringify(selectedLogReport.raw_vlm_output || selectedLogReport, null, 2)}
                     </pre>
                   </details>
@@ -924,7 +941,7 @@ function AIAnalysis() {
           })()}
 
           {!selectedLogReport && !logLoading && !logError && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-8 text-center text-gray-500 dark:text-gray-400">
+            <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400">
               <ImageIcon size={36} className="mx-auto mb-3 opacity-50" />
               <p className="text-sm">Select an incident from Records or Manual Analysis to view its saved AI pipeline log.</p>
             </div>

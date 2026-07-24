@@ -28,7 +28,17 @@ const mockApi = {
   deleteUser: vi.fn(),
   resetUserPassword: vi.fn(),
   getAgencies: vi.fn(),
+  createAgency: vi.fn(),
+  updateAgency: vi.fn(),
+  deleteAgency: vi.fn(),
   getAgencyStations: vi.fn(),
+  createStation: vi.fn(),
+  updateStation: vi.fn(),
+  getResources: vi.fn(),
+  createResource: vi.fn(),
+  updateResource: vi.fn(),
+  deleteStation: vi.fn(),
+  deleteResource: vi.fn(),
   logSecurityAction: vi.fn(),
   getSecurityLogs: vi.fn(),
   login: vi.fn(),
@@ -38,6 +48,8 @@ const mockApi = {
   getAuditLog: vi.fn(),
   getNearbyServices: vi.fn(),
   getSyncStatus: vi.fn(),
+  getAIWeeklyMetrics: vi.fn().mockResolvedValue([]),
+  onIncidentUpdated: vi.fn(() => () => undefined),
 };
 
 // Attach the mock api to the EXISTING jsdom window rather than replacing it.
