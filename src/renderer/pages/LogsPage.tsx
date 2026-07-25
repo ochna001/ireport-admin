@@ -11,9 +11,12 @@ import {
   RefreshCw,
   Search,
   Shield,
-  Users
+  Users,
+  X,
+  ExternalLink
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 interface ActivityLog {
   id: number;
@@ -84,6 +87,39 @@ const ACTION_TYPES = [
   { value: 'settings_updated', label: 'Settings Updated' },
 ];
 
+function getActionLabel(action: string): string {
+  const map: Record<string, string> = {
+    login: 'Login',
+    incident_status_changed: 'Status Changed',
+    incident_officers_assigned: 'Officers Assigned',
+    incident_status_and_officers_changed: 'Status & Officers Changed',
+    incident_resources_assigned: 'Resources Assigned',
+    incident_updated: 'Incident Updated',
+    user_created: 'User Created',
+    user_updated: 'User Updated',
+    user_disabled: 'User Disabled',
+    password_reset: 'Password Reset',
+    station_created: 'Station Created',
+    station_updated: 'Station Updated',
+    station_deleted: 'Station Deleted',
+    resource_created: 'Resource Created',
+    resource_updated: 'Resource Updated',
+    resource_deleted: 'Resource Deleted',
+    final_report_created: 'Final Report Created',
+    media_uploaded: 'Media Uploaded',
+    media_deleted: 'Media Deleted',
+    incidents_exported: 'Incidents Exported',
+    pdf_export_saved: 'PDF Saved',
+    incident_agency_added: 'Agency Added',
+    incident_agency_role_updated: 'Agency Role Updated',
+    incident_agency_acknowledged: 'Agency Acknowledged',
+    incident_agency_removed: 'Agency Removed',
+    backup_request_status_updated: 'Backup Request Updated',
+    settings_updated: 'Settings Updated',
+  };
+  return map[action] || action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
 function getActionBadgeColor(action: string): string {
   if (action.includes('created')) return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
   if (action.includes('updated') || action.includes('changed')) return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
@@ -127,6 +163,8 @@ export default function LogsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const navigate = useNavigate();
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
 
   const [filters, setFilters] = useState<ActivityLogFilters>({
     limit: 50,
@@ -150,6 +188,7 @@ export default function LogsPage() {
         total: result.total,
       });
       setError(null);
+      setLastRefreshTime(new Date());
     } catch (err) {
       console.error('Failed to fetch logs:', err);
       setError('Failed to load activity logs');
@@ -493,6 +532,15 @@ export default function LogsPage() {
               />
               Auto-refresh (30s)
             </label>
+            {(filters.fromDate || filters.toDate || filters.entityType || filters.action || filters.search) && (
+              <button
+                onClick={() => setFilters({ limit: 50, offset: 0 })}
+                className="flex items-center gap-1 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Clear filters
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -528,7 +576,7 @@ export default function LogsPage() {
             <Users className="w-4 h-4 text-green-500" />
             <span className="text-sm text-slate-500 dark:text-slate-400">Showing</span>
           </div>
-          <p className="text-2xl font-bold text-slate-900 dark:text-white">{logs.length}</p>
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">{logs.length} <span className="text-sm font-normal text-slate-500">of {pagination.total}</span></p>
         </div>
         <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
           <div className="flex items-center gap-2 mb-1">
@@ -545,7 +593,7 @@ export default function LogsPage() {
             <span className="text-sm text-slate-500 dark:text-slate-400">Last Update</span>
           </div>
           <p className="text-lg font-medium text-slate-900 dark:text-white">
-            {new Date().toLocaleTimeString()}
+            {lastRefreshTime ? lastRefreshTime.toLocaleTimeString() : "\u2014"}
           </p>
         </div>
       </div>
@@ -573,12 +621,16 @@ export default function LogsPage() {
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
               {loading && logs.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
-                    <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
-                    Loading activity logs...
-                  </td>
-                </tr>
+                Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={`skeleton-${i}`} className="animate-pulse">
+                    <td className="px-4 py-3"><div className="w-4 h-4 bg-slate-200 dark:bg-slate-600 rounded" /></td>
+                    <td className="px-4 py-3"><div className="h-4 bg-slate-200 dark:bg-slate-600 rounded w-20" /><div className="h-3 bg-slate-100 dark:bg-slate-700 rounded w-16 mt-1" /></td>
+                    <td className="px-4 py-3"><div className="h-4 bg-slate-200 dark:bg-slate-600 rounded w-24" /></td>
+                    <td className="px-4 py-3"><div className="h-5 bg-slate-200 dark:bg-slate-600 rounded-full w-28" /></td>
+                    <td className="px-4 py-3"><div className="h-4 bg-slate-200 dark:bg-slate-600 rounded w-16" /></td>
+                    <td className="px-4 py-3"><div className="h-4 bg-slate-200 dark:bg-slate-600 rounded w-24" /></td>
+                  </tr>
+                ))
               ) : logs.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
@@ -588,11 +640,14 @@ export default function LogsPage() {
                 </tr>
               ) : (
                 logs.map((log) => (
-                  <>
+                  <Fragment key={log.id}>
                     <tr
-                      key={log.id}
                       className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer"
                       onClick={() => toggleRowExpansion(log.id)}
+                      tabIndex={0}
+                      role="button"
+                      aria-expanded={expandedRows.has(log.id)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleRowExpansion(log.id); } }}
                     >
                       <td className="px-4 py-3">
                         {expandedRows.has(log.id) ? (
@@ -621,7 +676,7 @@ export default function LogsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getActionBadgeColor(log.action)}`}>
-                          {log.action}
+                          {getActionLabel(log.action)}
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -630,9 +685,22 @@ export default function LogsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm font-mono text-slate-600 dark:text-slate-400">
-                          {log.entity_id ? `${log.entity_id.slice(0, 12)}...` : '-'}
-                        </span>
+                        {log.entity_id ? (
+                          log.entity_type === 'incident' ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); navigate(`/incidents/${log.entity_id}`); }}
+                              className="text-sm font-mono text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+                              title={log.entity_id}
+                            >
+                              {log.entity_id.slice(0, 12)}...
+                              <ExternalLink className="w-3 h-3" />
+                            </button>
+                          ) : (
+                            <span className="text-sm font-mono text-slate-600 dark:text-slate-400" title={log.entity_id}>
+                              {log.entity_id.slice(0, 12)}...
+                            </span>
+                          )
+                        ) : '-'}
                       </td>
                     </tr>
                     {expandedRows.has(log.id) && (
@@ -673,7 +741,7 @@ export default function LogsPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))
               )}
             </tbody>

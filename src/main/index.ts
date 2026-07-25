@@ -3979,7 +3979,7 @@ ipcMain.handle('security:getActivityLogs', async (_event, filters: ActivityLogFi
   try {
     let query = supabase
       .from('security_logs')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false });
 
     if (filters.fromDate) {
